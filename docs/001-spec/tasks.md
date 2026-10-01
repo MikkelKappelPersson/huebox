@@ -70,25 +70,61 @@ replaced by the staged model (writes only on Ctrl+S).
 
 ## P3 — theme library storage + CLI (§13.1–13.5, plan phase 3)
 
-- [ ] `themes.py`: home/themes_dir/state_path, name validation, `create`,
+- [x] `themes.py`: home/themes_dir/state_path, name validation, `create`,
       `load` (gap-tolerant → MISSING + warnings), `list_themes`, `current`,
       `set_current`; lazy mkdir
-- [ ] `themes.py`: canonical theme writer ([theme]/[colors], created preserved,
+- [x] `themes.py`: canonical theme writer ([theme]/[colors], created preserved,
       modified bumped, source recorded) + atomic tmp/replace write
-- [ ] `themes.py`: hand-rolled reader for our TOML subset (§3.2), unknown-key
+- [x] `themes.py`: hand-rolled reader for our TOML subset (§3.2), unknown-key
       counting
-- [ ] `themes.py`: `RAMP` fallback palette (plan 3.3, tune before merge)
-- [ ] `cli.py`: actions new/list/use/import + `name` positional; `--force`,
+- [x] `themes.py`: `RAMP` fallback palette (plan 3.3, tune before merge)
+- [x] `cli.py`: actions new/list/use/import + `name` positional; `--force`,
       `--from`; `edit`/`show`/`--dump` accept a theme name; legacy fallback
       rules (§13.4)
-- [ ] `editor.py`: theme-mode write callback (truth file) vs legacy writer
-- [ ] AGENTS.md: themes.py row + dependency rule update
-- [ ] tests: names, round-trip, gaps/warnings, unknown keys, timestamps,
+- [x] `editor.py`: theme-mode write callback (truth file) vs legacy writer
+- [x] AGENTS.md: themes.py row + dependency rule update
+- [x] tests: names, round-trip, gaps/warnings, unknown keys, timestamps,
       create-refusal, list marking, state robustness, new/import seeding,
       dump-from-theme
-- [ ] spec: close open questions 3 (ramp values) and 5 (rm/mv enough for now)
+- [x] spec: close open questions 3 (ramp values) and 5 (rm/mv enough for now)
+
+Notes: the library is `huebox/themes.py`; the truth file is written by
+`save()` from a single `name`/`created`/`modified`/`source` header plus all
+22 slots palette-then-named, through `<path>.tmp` + `os.replace`. `created`
+survives a re-save, `source` survives unless a new origin arrives, and a
+`#rrggbb` that is not inside quotes is read as a value, not a comment
+(hand-written themes look like terminal configs). `use` sets current and
+prints that the terminal is not updated yet — **the push is P4**; nothing in
+P3 writes a terminal config except a plain `huebox edit` in direct mode.
+
+Two things the phase needed beyond the plan's list, both spec-mandated:
+`resolve()` now infers the format from a `--config` path (§7.1 — v1
+returned a `None` format there and the CLI raised `KeyError` on
+`--config` without `--format`), and the `action` positional dropped
+argparse `choices` so `huebox --dump ember` can bind the name (one
+positional that is not a command is a theme name). Editor sessions with no
+TTY on stdin/stdout say so instead of raising `termios.error`; `new` in a
+pipe is now usable. The editor's closing lines for a theme session name the
+theme and promise no reload — the status bar's `theme ● fmt` form is P5.
+
+Two judgement calls for the reviewer: bare `huebox` (no action, no name)
+resolves the current theme like `edit` does and falls back to the config —
+otherwise a TTY run and a piped run of the same command would show
+different subjects. `edit` with themes present but no current theme also
+falls back to direct mode with a one-line hint; the picker (P5) is the
+proper answer there. `--from` also seeds `new` when given, since "seed from
+this terminal" and "import from this terminal" are the same request.
 
 ## P4 — push on save + use (§13.6, plan phase 4)
+
+Keep the P3 review guard in mind: a future command name must not collide with
+the theme-name grammar (`valid_name` decides whether an unknown positional
+token is a name or an error).
+
+P3 left the seams in place: `cli._run_editor`'s theme writer returns the
+status string (`saved ember` today, `saved ember → ghostty` after the push),
+and `huebox use <name>` already sets current and prints that the terminal is
+untouched. Everything below replaces truth-only with truth-then-push.
 
 - [ ] `themes.py`: `push(fmt, slots, to=None, no_push)` — resolve targets,
       refuse colourless configs, line-level write, missing-key report,

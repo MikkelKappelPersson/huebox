@@ -40,7 +40,9 @@ naming.
 ## 4. User-visible surface
 
 > Planned: this surface grows theme commands (§13) and save semantics change
-> (§14). Until then, everything below is current behaviour.
+> (§14). The theme commands of §13.5 are live — `new`, `list`, `use`,
+> `import`, and `[name]` on `edit` / `show` / `--dump` — but they write
+> truth only; pushing to a terminal is still ahead (§13.6).
 
 ### 4.1 Commands
 
@@ -166,7 +168,10 @@ refreshed, and whether it is ever overwritten.
 ## 7. Detection and resolution
 
 1. If `--format` is given, use it. If `--config` is given without `--format`,
-   infer the format from the path.
+   infer the format from the path: a known config file name first
+   (`kitty.conf`, `alacritty.toml`, `config.ghostty`), then whichever
+   reader finds colours in the file. A path that says neither is not
+   guessable and is an error, not a coin toss.
 2. Otherwise probe: environment variables, then candidate paths, in the order
    above, XDG-aware (`XDG_CONFIG_HOME` wins over `~/.config`).
 3. **Only offer a terminal whose config actually contains colours.** A stale
@@ -256,6 +261,8 @@ Append-only. Newest last. One line per decision, with the reason.
 | 13 | `huebox.py` becomes package `huebox/`, one module per spec area (§17) | The theme library needs somewhere maintainable to live; split first, behaviour-neutral |
 | 14 | AGENTS.md owns architecture + guidelines; the spec owns behaviour | Keeps “what” and “how” in the doc each reader reaches for |
 | 15 | No autosave: the buffer is written only when the user presses Ctrl+S | Staging exists so edits are deliberate; a timer would write on every idle and make the save key meaningless |
+| 16 | The fallback ramp is a neutral dark base, a readable foreground, an inverting cursor, and muted hues with bright siblings — the plan's values, unchanged | It has to be legible the moment `new` opens the editor on an empty machine, and one dict with a comment is easier to argue about than a tuning session |
+| 17 | No `huebox rm` / `mv`: the filesystem manages the library and the state file tolerates a dangling pointer | huebox would be offering to delete a user's dotfile; a deleted theme already warns and falls back to direct mode (§13.4) |
 
 ---
 
@@ -291,22 +298,27 @@ modified = "2026-10-01T12:34:56"
 source = "ghostty:/home/you/.config/ghostty/config"  # import origin, informational
 
 [colors]
+palette-0 = "#15161e"
+# ... palette-1 through palette-15, then the six named slots: all 22, in
+# that order
 background = "#1a1b26"
 foreground = "#c0caf5"
 cursor-color = "#c0caf5"
 cursor-text = "#1a1b26"
 selection-background = "#33467c"
 selection-foreground = "#c0caf5"
-palette-0 = "#15161e"
-# ... palette-1 through palette-15, all 22 slots present
 ```
 
-- huebox always writes all 22 slots, palette-then-named.
+- huebox always writes all 22 slots, palette-then-named (§5 order).
+- Writing is atomic — a sibling `.tmp` renamed over the file — so a save is
+  all-or-nothing. Terminal configs keep the in-place line-level writer
+  instead (§6.2); a rename over one would break that contract.
 - Reading tolerates gaps: a missing slot loads as `MISSING` grey with a
   status-bar warning, and is filled in on the next save.
 - Hand edits to *values* are respected. Unknown keys or sections are dropped
   on save, with a load-time status warning (once per session).
-- Timestamps are local ISO-8601, no timezone.
+- Timestamps are local ISO-8601, no timezone. `created` is preserved across
+  saves; `modified` is the time of the last write.
 
 ### 13.3 Names
 
@@ -334,10 +346,22 @@ and `mv` on theme files keep working because the state tolerates them.
 | `huebox import <name>` | Snapshot the detected terminal into a theme file. Refuses to overwrite without `--force` |
 
 Flags: `--to <fmt,…>` chooses push targets; `--no-push` writes truth only;
-`--from <fmt>` chooses the import source (combines with `--config`).
+`--from <fmt>` chooses the import source (combines with `--config`, and
+also seeds `new`).
 
 `use` sets the current theme first and pushes second: a failed push is stderr
 plus exit 1, never a rolled-back truth.
+
+> Landed so far: every row above except the push. `new`, `import`, `list`,
+> `use` (current only) and `[name]` on `edit` / `show` / `--dump` work, and a
+> save writes the truth file alone. The push half — `--to`, `--no-push`,
+> `use` as "make it live", `saved ember → ghostty` in the status bar — is
+> the next phase (§13.6). `edit` with no name opens the current theme, and
+> falls back to the v1 direct mode when there is nothing to open (no
+> current theme, or one whose file has been deleted). Bare `huebox` resolves
+> the same way — the current theme, edited on a TTY and previewed off one —
+> because that is the subject; an explicit `show` without a name stays the
+> terminal config.
 
 ### 13.6 Push (truth → terminal)
 
@@ -375,9 +399,17 @@ plus exit 1, never a rolled-back truth.
 
 1. Should push insert keys the target config lacks, or stay report-only?
 2. Ghostty native theme-file export: default or opt-in?
-3. Exact values of the built-in fallback ramp for `new` with no colours found.
+3. Exact values of the built-in fallback ramp for `new` with no colours
+   found — **decided** (decision 16): the `RAMP` dict in `huebox/themes.py`,
+   plan 3.3's values unchanged — background `#101014`, foreground `#e6e6ea`,
+   cursor `#e6e6ea` on `#101014`, selection `#2a2a34` / `#e6e6ea`, palette
+   0-7 `#101014 #a83232 #3f7a3f #a88a3f #3f6a8a #8a3f6a #3f8a8a #b0b0b8`,
+   8-15 `#d0d0d8 #e06c6c #6cc06c #e0c06c #6c9ce0 #e06c9c #6cc0c0 #f0f0f8`.
 4. Machine-readable `list --porcelain` for scripting — now or later?
 5. Delete / rename commands, or is `rm` / `mv` enough for v1 of the library?
+   — **decided: `rm` / `mv` for v1** (decision 17). The state file is only a
+   pointer: a deleted or renamed theme warns once and drops `edit` back to
+   direct mode (§13.4), which is exactly the degradation `rm` should have.
 6. kitty `include` / Alacritty `import` indirection as push alternatives?
 
 ## 14. Staged editing + live examples — the plan

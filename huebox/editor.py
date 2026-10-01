@@ -282,12 +282,14 @@ def apply_key(key, st):
         _prompt(st)
 
 
-def edit(fmt, path, slots, write, backup=True):
+def edit(fmt, path, slots, write, backup=True, theme=None):
     """Run one editor session: staged buffer, save on Ctrl+S (§14.2).
 
     `backup` is False for files huebox owns (theme files, §13.2 — no .bak
     there); the terminal-config session snapshots `<path>.huebox.bak` on its
-    first save.
+    first save. `theme` names the theme being edited: same loop, same keys,
+    a truth-file writer instead of the terminal one, and closing lines that
+    do not claim a terminal reloaded itself — the push is §13.6.
     """
     fd = saved = None
     previous_winch = None
@@ -334,10 +336,14 @@ def edit(fmt, path, slots, write, backup=True):
                 pass
 
     if st.written:
-        print(f"  saved {path}")
-        if st.backup_made:
-            print(f"  backup of the pre-save state: {st.backup_path}.huebox.bak")
-        print("  reload your terminal to see the change\n")
+        if theme is not None:
+            print(f"  saved theme {theme}  {path}")
+            print("  the terminal is unchanged - pushing is not wired up yet\n")
+        else:
+            print(f"  saved {path}")
+            if st.backup_made:
+                print(f"  backup of the pre-save state: {st.backup_path}.huebox.bak")
+            print("  reload your terminal to see the change\n")
     elif st.dirty():
         print("  nothing saved - the buffer was discarded\n")
     else:

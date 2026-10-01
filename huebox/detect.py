@@ -132,6 +132,27 @@ def _ghostty_theme_file(config_path: str):
     return None
 
 
+def infer_format(path: str):
+    """Which format a `--config` path belongs to (§7.1).
+
+    A known file name wins — `kitty.conf`, `alacritty.toml`,
+    `config.ghostty` are unambiguous. For a bare `config` or anything we
+    have no name for, the file decides: whichever reader finds colours in
+    it. A tie (or an empty file) is not inferable, and the caller says so.
+    """
+    name = os.path.basename(path).lower()
+    for fmt in FORMAT_NAMES:
+        for candidate in FORMATS[fmt]["defaults"]:
+            if os.path.basename(candidate).lower() == name:
+                return fmt
+    counts = [(len(FORMATS[fmt]["read"](path)), fmt) for fmt in FORMAT_NAMES]
+    best = max(count for count, _ in counts)
+    if best == 0:
+        return None
+    winners = [fmt for count, fmt in counts if count == best]
+    return winners[0] if len(winners) == 1 else None
+
+
 def _resolve_for(fmt: str):
     """First config for `fmt` that actually defines colours."""
     read = FORMATS[fmt]["read"]
@@ -156,7 +177,7 @@ def resolve(fmt: str | None = None, path: str | None = None):
         expanded = os.path.expanduser(path)
         if not os.path.isfile(expanded):
             return fmt, None, f"no such file: {expanded}"
-        return fmt, expanded, None
+        return fmt or infer_format(expanded), expanded, None
 
     order = [fmt] if fmt else detect_order()
     for name in order:
