@@ -352,3 +352,39 @@ There is no ghostty on this machine, so the interactive smoke ran through a
 and pushed (`palette-0` went `#0a0a13` → `#0d0d18` in both the theme file and
 the config, the dot cleared), `Esc` quit with status 0, and a second session
 that saved without changing anything left the config's mtime untouched.
+
+## P8 — the live diff widget (spec §14.4, decision 26)
+
+- [x] `render.py`: `diff_lines(slots, cols)` — a git hunk over the zig
+      sample, four slots and no lexer (`palette-1` removed, `palette-2`
+      added, `palette-6` `@@`, `palette-8` the hunk's tail)
+- [x] `editor.py`: the block's own label, `DIFF_ROWS` / `DIFF_FLOOR`, drawn
+      above the sample out of the rows the sample did not need (§15)
+- [x] a cut hunk loses a whole pair, never half of one
+- [x] `__init__.py` re-export; tests: `Diff` in `tests/test_render.py` and
+      the ladder in `tests/test_editor.py` (whole at 120x40, floor at 110x36,
+      absent — with the v1 strip and sample numbers — everywhere below)
+- [x] spec §8 / §14.4 / §15 / §10 / §16 / decision 26, README, AGENTS.md
+
+Notes: the question was where a diff belongs — inside the code sample or
+beside it. Inside would have cost the sample half its vocabulary: a zig lexer
+emits no `+` and `-`, so the two languages would have shared one mapping
+table and one block, and neither reads. Beside it, the diff spends the two
+slots §8 says nothing else can (`palette-1`, `palette-2`) without the sample
+giving up a single line.
+
+Where the hunk sits in the ladder was the open question, and the answer the
+user picked is the one that costs nothing: the hunk fills rows the sample did
+not need and never takes one from it, so the ladder is unchanged at every size
+huebox shipped at — 100x30 keeps its seven sample lines, 80x24 its four — and
+the hunk appears only in frames with room to spare (whole at 120x40, at its
+floor at 110x36). Verified by rendering both trees at nineteen sizes and
+diffing: apart from the added hunk rows, every frame is byte-identical to the
+one before this phase. `WIDGET_BUDGET` is deliberately left at the v1
+number: promising the hunk's rows there would spend the palette legend on a
+widget the frame cannot show.
+
+An earlier cut of this phase put the hunk *above* the sample in the spending
+order, which cost the sample four lines at 100x30 and three at 80x24. Same
+widget, same slots, one line of allocation apart — which is why the ladder is
+a decision (26) and not an implementation detail.

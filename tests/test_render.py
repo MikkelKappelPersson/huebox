@@ -10,10 +10,12 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 import huebox  # noqa: E402
-from huebox.render import (CALL_SLOT, CURSOR_CHAR, EXAMPLE_PHRASE,  # noqa: E402
-                           LABEL_WIDTH, PAIR_MIN_COLS, PAIR_WIDTH,
-                           SELECTED_TEXT, TOKEN_SLOTS, _sample, bg, fg,
-                           pair_label)
+from huebox.render import (CALL_SLOT, CURSOR_CHAR, DIFF_ADDED,  # noqa: E402
+                           DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
+                           DIFF_REMOVED, EXAMPLE_PHRASE, LABEL_WIDTH,
+                           PAIR_MIN_COLS, PAIR_WIDTH, SELECTED_TEXT,
+                           TOKEN_SLOTS, _sample, bg, fg, pair_label)
+from huebox.render import RESET  # noqa: E402
 
 
 def _plain(text):
@@ -336,6 +338,87 @@ class Examples(unittest.TestCase):
         for row in self.rows(slots, 100):
             self.assertTrue(all(ord(ch) < 128 for ch in self.plain(row)),
                             f"non-ascii in examples row: {row!r}")
+
+
+class Diff(unittest.TestCase):
+    """The live diff hunk: removed red, added green (§14.4)."""
+
+    def plain(self, row):
+        return _plain(row)
+
+    def rows(self, slots, cols=None):
+        return huebox.diff_lines(slots, cols)
+
+    def test_the_hunk_is_a_git_hunk(self):
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        rows = [self.plain(row) for row in self.rows(slots, 100)]
+        self.assertEqual(len(rows), len(DIFF_BODY) + 1)
+        self.assertEqual(rows[0], "    " + " ".join(DIFF_HUNK))
+        self.assertTrue(rows[1].strip().startswith("-"))
+        self.assertTrue(rows[2].strip().startswith("+"))
+
+    def test_the_signs_wear_the_base_red_and_green(self):
+        # the two loudest slots in a diff are the ones a lexer has no use
+        # for (§8): the sample spends neither
+        self.assertEqual((DIFF_REMOVED, DIFF_ADDED), ("palette-1", "palette-2"))
+        self.assertEqual(DIFF_MARKS, "palette-6")
+        self.assertEqual(DIFF_CONTEXT, "palette-8")
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        slots.update({DIFF_REMOVED: "#ff0000", DIFF_ADDED: "#00ff00",
+                      DIFF_MARKS: "#00ffff", DIFF_CONTEXT: "#808080"})
+        rows = self.rows(slots, 100)
+        self.assertEqual(rows[0], "    " + fg("#00ffff") + "@@" + RESET
+                         + fg("#808080")
+                         + " -6,2 +6,2 @@ pub fn main() !void {" + RESET)
+        self.assertEqual(rows[1],
+                         "    " + fg("#ff0000") + "-" + DIFF_BODY[0][1]
+                         + RESET)
+        self.assertEqual(rows[2],
+                         "    " + fg("#00ff00") + "+" + DIFF_BODY[1][1]
+                         + RESET)
+
+    def test_one_slot_change_moves_only_the_lines_that_wear_it(self):
+        # §14.1 — like every other live widget the diff reads the buffer on
+        # the call: red moves the removed line and nothing else
+        base = {name: "#3f7a3f" for name in huebox.SLOTS}
+        after = dict(base, **{DIFF_REMOVED: "#ff00ff"})
+        for index in (1, 3):           # the two removed lines
+            self.assertNotEqual(self.rows(base, 100)[index],
+                                self.rows(after, 100)[index])
+        for index in (0, 2, 4):        # header, added line, added line
+            self.assertEqual(self.rows(base, 100)[index],
+                             self.rows(after, 100)[index])
+
+    def test_a_changed_buffer_changes_every_row(self):
+        dark = {name: "#101014" for name in huebox.SLOTS}
+        bright = {name: "#f0f0f8" for name in huebox.SLOTS}
+        first = self.rows(dark, 100)
+        for index, row in enumerate(first):
+            self.assertNotEqual(row, self.rows(bright, 100)[index])
+        self.assertEqual(first, self.rows(dark, 100))
+
+    def test_the_rows_fit_the_default_terminal(self):
+        # the widest row is the print call; the editor clips at cols - 2
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        for row in self.rows(slots, 100):
+            self.assertLessEqual(len(self.plain(row)), 78)
+
+    def test_rows_never_exceed_the_width(self):
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        for cols in (120, 80, 60, 40, 38, 30, 24, 20, 10):
+            with self.subTest(cols=cols):
+                for row in self.rows(slots, cols):
+                    self.assertLessEqual(len(self.plain(row)), cols)
+
+    def test_missing_slots_render_as_grey(self):
+        rows = self.rows({}, 80)
+        self.assertTrue(all(fg(huebox.MISSING) in row for row in rows))
+
+    def test_rows_are_ascii(self):
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        for row in self.rows(slots, 100):
+            self.assertTrue(all(ord(ch) < 128 for ch in self.plain(row)),
+                            f"non-ascii in diff row: {row!r}")
 
 
 if __name__ == "__main__":

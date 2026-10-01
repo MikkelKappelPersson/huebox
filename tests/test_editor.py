@@ -15,6 +15,7 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
 from huebox.color import SLOTS  # noqa: E402
+from huebox.render import fg  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -63,6 +64,28 @@ def _code_rows(body):
 def code_lines(body):
     """How many rows of the code sample this frame drew."""
     return len(_code_rows(body))
+
+
+def _diff_rows(body):
+    start = next((i for i, line in enumerate(body) if "live diff" in line), None)
+    if start is None:
+        return []
+    out = []
+    for line in body[start + 1:]:
+        if not line.startswith("    "):        # the block is over
+            break
+        out.append(line)
+    return out
+
+
+def diff_lines(body):
+    """How many rows of the diff hunk this frame drew."""
+    return len(_diff_rows(body))
+
+
+def diff_block(body):
+    """The hunk's own lines, plain: no header row, no indent."""
+    return [ANSI.sub("", line).strip() for line in _diff_rows(body)]
 
 
 def code_block(body):
@@ -152,15 +175,80 @@ class NormalFrame(unittest.TestCase):
         self.assertLess(body.index(next(l for l in body if "examples" in l)),
                         body.index(next(l for l in body if "live code" in l)))
 
+    def test_the_diff_sits_between_the_strip_and_the_sample(self):
+        # §14.4 — the hunk is a block of its own, and it reads as the
+        # change to the sample drawn below it
+        body = lines(frame(120, 40))
+        at = [next(i for i, l in enumerate(body) if head in l)
+              for head in ("examples", "live diff", "live code")]
+        self.assertEqual(at, sorted(at))
+        self.assertTrue(diff_block(body))
+
+    def test_the_diff_spends_red_and_green_from_the_buffer(self):
+        # §14.1 — the hunk is live: one buffer edit repaints both sides on
+        # the same frame, and nothing about the frame is cached
+        def drawn(slots):
+            return frame(120, 40, slots=dict(FULL_SLOTS, **slots))
+        before = drawn({"palette-1": "#ff0000", "palette-2": "#00ff00"})
+        after = drawn({"palette-1": "#ff00ff", "palette-2": "#00ffff"})
+        self.assertNotEqual(before, after)
+        for line in lines(after):
+            plain = ANSI.sub("", line)
+            if plain.strip().startswith("-var"):
+                self.assertIn(fg("#ff00ff"), line)
+            if plain.strip().startswith("+var"):
+                self.assertIn(fg("#00ffff"), line)
+        # and back to the first buffer, the same pixels
+        self.assertEqual(before, drawn({"palette-1": "#ff0000",
+                                        "palette-2": "#00ff00"}))
+
+    def test_the_diff_never_shows_half_a_pair(self):
+        # a hunk is the `@@` line and whole removed/added pairs: the rows
+        # after the header always come in twos
+        for cols, rows in ((120, 44), (120, 40), (110, 36)):
+            with self.subTest(size=(cols, rows)):
+                hunk = diff_block(lines(frame(cols, rows)))
+                self.assertTrue(hunk[0].startswith("@@"))
+                self.assertEqual((len(hunk) - 1) % 2, 0)
+                signs = [line[0] for line in hunk[1:]]
+                self.assertEqual(signs, ["-", "+"] * (len(signs) // 2))
+
+    def test_the_diff_grows_out_of_the_rows_the_sample_did_not_need(self):
+        # §15 — the hunk fills spare room and never takes a row from the
+        # sample: whole where the frame has a pair to spare, at its floor
+        # where it has one, and absent everywhere else
+        for cols, rows, code, hunk in ((120, 40, 10, 5), (120, 44, 10, 5),
+                                       (110, 36, 10, editor.DIFF_FLOOR - 1)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(frame(cols, rows))
+                self.assertEqual(code_lines(body), code)
+                self.assertEqual(diff_lines(body), hunk)
+                self.assertEqual(example_rows(body), 3)
+
+    def test_a_frame_too_short_for_the_diff_is_the_frame_without_it(self):
+        # §15 — where the sample needs every row the hunk is simply not
+        # drawn, and the other two widgets keep the rows the v1 ladder gave
+        # them: (cols, rows, strip rows, sample lines)
+        for cols, rows, strip, code in ((100, 30, 3, 7), (80, 30, 3, 7),
+                                        (80, 26, 3, 4), (80, 24, 3, 4),
+                                        (80, 22, 3, 4), (80, 20, 3, 3),
+                                        (80, 16, 0, 3), (60, 24, 3, 4)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(frame(cols, rows))
+                self.assertEqual(diff_lines(body), 0)
+                self.assertEqual(example_rows(body), strip)
+                self.assertEqual(code_lines(body), code)
+
     def test_examples_and_the_block_share_the_leftover_rows(self):
         # §15 — the strip gives up rows before the code block loses a line,
         # and both survive at every size spec §15.4 tests
-        for cols, rows, strip, code in ((100, 30, 3, 7), (80, 24, 3, 4),
-                                        (60, 24, 3, 4)):
+        for cols, rows, strip, code, hunk in (
+                (100, 30, 3, 7, 0), (80, 24, 3, 4, 0), (60, 24, 3, 4, 0)):
             with self.subTest(size=(cols, rows)):
                 body = lines(frame(cols, rows))
                 self.assertEqual(example_rows(body), strip)
                 self.assertEqual(code_lines(body), code)
+                self.assertEqual(diff_lines(body), hunk)
 
     def test_the_block_outlives_the_strip(self):
         # the sample is the widget the editor exists to show (§9), so where
@@ -173,6 +261,7 @@ class NormalFrame(unittest.TestCase):
                 body = lines(frame(cols, rows))
                 self.assertEqual(example_rows(body), strip)
                 self.assertEqual(code_lines(body), code)
+                self.assertEqual(diff_lines(body), 0)
 
     def test_a_truncated_block_drops_its_least_useful_lines(self):
         # a short frame spends rows on code: the leading comment, the
@@ -187,12 +276,19 @@ class NormalFrame(unittest.TestCase):
         # a tight frame spends it, and the blank separators after it, before
         # it spends a widget
         legend = ANSI.sub("", editor.PALETTE_LEGEND)
-        tall = [ANSI.sub("", line) for line in lines(frame(80, 30))]
+        tall = [ANSI.sub("", line) for line in lines(frame(80, 40))]
         self.assertIn(legend, tall)
         tight = [ANSI.sub("", line) for line in lines(frame(80, 24))]
         self.assertNotIn(legend, tight)
         for keep in ("palette", "interface", "AaBbCc", "examples", "live code"):
             self.assertTrue(any(keep in line for line in tight), keep)
+
+    def test_a_tall_frame_spends_its_spare_rows_on_the_diff(self):
+        # the other end of the same ladder: decoration stays, and what the
+        # sample did not need becomes the hunk
+        tall = [ANSI.sub("", line) for line in lines(frame(120, 40))]
+        self.assertIn(ANSI.sub("", editor.PALETTE_LEGEND), tall)
+        self.assertTrue(any("live diff" in line for line in tall))
 
     def test_no_size_overflows_its_rows(self):
         for cols, rows in ((120, 44), (100, 40), (100, 30), (80, 30), (80, 28),

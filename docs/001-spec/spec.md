@@ -307,6 +307,13 @@ a call alike, so a name followed by `(` and not by `fn` is a call. Tokens are
 lexed and mapped to slots once per session; only the hex behind a slot is read
 per frame (§14.1).
 
+**What spends the rest.** The two slots the sample cannot spend — red and
+green, a diff's whole vocabulary — are spent by the diff widget of §14.4,
+which is a separate block for the same reason the sample is: a zig lexer has
+no `+` and `-` tokens, so a diff *inside* the sample would either cost the
+sample half its vocabulary or put the two languages in one block where neither
+reads.
+
 **Minimum width.** Defined in §15.4 — `MIN_COLS`/`MIN_ROWS` in `tui.py`;
 below them the editor renders one centered `terminal too small — need WxH`
 line instead of a garbled frame. Settled in phase 5, when the picker landed.
@@ -336,6 +343,10 @@ line instead of a garbled frame. Settled in phase 5, when the picker landed.
 - editor frames at 100x30, 80x24, 60x16 and 40x12 — reflow, clipping, the
   too-small fallback below the minimum, and two identical draws producing a
   byte-identical frame (§15)
+- the diff block at the sizes where it is whole and where it is at its
+  floor, that a frame too short for it is byte-identical to the frame without
+  it, that a cut hunk never shows half a pair, and that one buffer edit moves
+  both sides of it (§14.4)
 - the theme picker frame at the same sizes, including a library larger than
   the screen (it scrolls), and the picker flows at the key level: open,
   move, open, blocked-while-dirty, new-from-buffer, save-as-new (§13.7)
@@ -406,6 +417,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 23 | Env probes follow upstream's documented spellings: `KITTY_CONFIG_DIRECTORY` (primary), `KITTY_CONFIG_DIR` kept second as deprecated for one release; alacritty's invented `ALACRITTY_CONFIG_DIR` / `ALACRITTY_CONFIG` removed | An override named after a variable the terminal does not read is a wrong answer, not a helpful one (plan appendix A). Dropping the alacritty pair outright would have been a silent regression for anyone who set it, so they are removed loudly instead; keeping the kitty one deprecated costs nothing and saves a real user |
 | 24 | A no-op write skips the write instead of writing identical bytes | §6.2 rule 4 is about the file, not the bytes: rewriting it bumps the mtime, which is exactly what a backup job, a config manager or an open editor watches. The writers now decide "did anything change?" before opening the file |
 | 25 | Several configs at once resolve to the first that resolves, in probe order; nothing prompts | A picker is not an editor: huebox's subject is the terminal you are in, and the user who wants a different one has `--format` and `--config`. An ambiguous `--config` was already an error (§7.1), so the coin toss was only ever on the no-flag path |
+| 26 | The git diff is its own live widget, not a second language inside the code sample, and it is drawn only out of rows the sample did not need | The sample's job is to spend the zig lexer's whole vocabulary (§8); a diff has no lexer, so folding one in would cost the sample half of what it demonstrates. Standing alone it spends the two slots nothing else could — the red and green — and it fills spare rows rather than taking them: the sample is the widget the editor exists to show, and a frame too short for both is exactly the frame that was there before the diff existed |
 
 ---
 
@@ -716,6 +728,47 @@ renders as `MISSING` grey *in place*, and nothing paints MISSING by accident.
    the config on every idle, which is exactly the churn the buffer removes.
 2. Theme file history / versions inside `~/.config/huebox` — later?
 
+### 14.4 The live diff
+
+A third live widget, under the examples strip and above the code sample: a
+git hunk over *that* sample, so the frame reads as one story — the program
+you are looking at, and the change you would commit.
+
+    live diff (git-style: + added, - removed)
+      @@ -6,2 +6,2 @@ pub fn main() !void {
+      -var count: u32 = 42;   // your palette
+      +var count: u32 = 0x2A;  // your palette
+      -std.debug.print("{d} colours\n", .{count});
+      +std.debug.print("{d} slots\n", .{count});
+
+A diff has no lexer behind it: `@@` and two signs are the whole vocabulary,
+so the mapping is four slots and no Pygments.
+
+| part | slot | |
+| --- | --- | --- |
+| `+` line | `palette-2` | added, green |
+| `-` line | `palette-1` | removed, red |
+| `@@` | `palette-6` | the marks that open a hunk |
+| the rest of the header, and any unchanged line | `palette-8` | muted, the way a comment is |
+
+The base red and green are the ones spent: §8 gives the bright half to what a
+lexer cannot say, and here the lexer says nothing at all. The block is live
+like every other (§14.1): it reads `slots` on the call, one keystroke repaints
+both sides of the hunk, and a missing slot paints `MISSING` in place.
+
+**The hunk is cut between pairs.** Its rows are the `@@` line plus whole
+removed/added pairs, so a short frame loses a pair and never shows half of one
+— a lone `-` with no `+` under it is noise, not a diff. `DIFF_ROWS` (whole:
+header + `@@` + two pairs) and `DIFF_FLOOR` (header + `@@` + one pair) live
+in `editor.py` beside the strip's and the sample's, and §15 decides when the
+frame spends them.
+
+**The diff is illustrative, not your buffer.** It shows what a green and a red
+slot look like next to each other; it is not a diff of your unsaved edits.
+Rendering the real thing would mean diffing the staged buffer against the file
+on disk through each format's dialect, which is a config editor wearing a
+diff's clothes (§3, non-goals).
+
 ## 15. Responsive layout — the plan
 
 What exists: `term_size()` already queries the live size every call and the
@@ -751,9 +804,9 @@ is no small-size story.
 6. Tests: layout cases at several sizes including below-minimum (§10 grows
    one line: `pack`/`clip`/overlay rendering at 100x30, 80x24, 60x16, 40x10).
 
-**What a short frame spends, in order.** `rows` is a budget and the two live
-widgets of §14.1 — the examples strip and the code sample — are what flex
-inside it. The order is the contract, not the sizes:
+**What a short frame spends, in order.** `rows` is a budget and the three live
+widgets of §§14.1/14.4 — the examples strip, the diff and the code sample —
+are what flex inside it. The order is the contract, not the sizes:
 
 1. **The frame sheds decoration before it sheds a widget.** The `0-7 base
    8-15 bright` legend goes first (the grid is numbered anyway), then the
@@ -761,23 +814,34 @@ inside it. The order is the contract, not the sizes:
    its air.
 2. **The strip gives up rows before the block gives up a line.** The strip is
    whole at `EXAMPLES_ROWS` (header + three rows), shrinks to `EXAMPLES_FLOOR`
-   (header + one row), and below that it goes; the block keeps `SAMPLE_FLOOR`
-   (header + three lines) because it is the widget the editor exists to show
-   (§9). Where the two cannot both fit, the strip is what goes.
-3. **A truncated block drops its least useful lines**: the leading comment
+   (header + one row), and below that it goes.
+3. **The block keeps `SAMPLE_FLOOR`** (header + three lines) because it is the
+   widget the editor exists to show (§9), and above that it grows to its whole
+   self as the frame allows.
+4. **The diff is drawn out of what the block did not need, and never takes a
+   row from it.** It is the last widget the frame fills and the first thing it
+   stops drawing: whole at `DIFF_ROWS` (header + `@@` + two pairs), at
+   `DIFF_FLOOR` (header + `@@` + one pair) once only a pair fits, and absent
+   below that. So a frame too short for both is *identical* to the frame
+   before the diff existed — no hunk half-drawn where it does not belong —
+   and the sample keeps every line it had. Where the hunk does appear it
+   grows above the sample, between the strip and the block.
+5. **A truncated block drops its least useful lines**: the leading comment
    (the label above already says what the block is), the blank inside it, and
    the closing brace. In a short frame a row that shows nothing is the most
    expensive row there is.
-4. **The blank after the block is the last row given up**, after the code
-   itself.
-5. **Below the floors the widgets go**, and the frame is the palette grid, the
+6. **The blank after a block is the last row given up**, after the widget it
+   follows.
+7. **Below the floors the widgets go**, and the frame is the palette grid, the
    interface rows, the selected readout and the hints. A tall frame is never
    padded out to `rows`.
 
 The constants live beside the editor's other layout constants
-(`EXAMPLES_ROWS`, `EXAMPLES_FLOOR`, `SAMPLE_FLOOR` in `editor.py`), the ladder
-is tested as exact numbers at 100x30, 80x24, 60x24 and the short end (80x20,
-80x18, 80x16, 60x20), and no size from 80x14 up overflows its rows.
+(`EXAMPLES_ROWS`, `EXAMPLES_FLOOR`, `DIFF_ROWS`, `DIFF_FLOOR`,
+`SAMPLE_FLOOR` in `editor.py`), the ladder is tested as exact numbers at
+100x30, 80x24, 60x24 and the short end (80x20, 80x18, 80x16, 60x20) — the
+diff absent at every one of them — and at the tall end (120x40 whole, 110x36
+at its floor). No size from 80x14 up overflows its rows.
 
 ## 16. Rollout order
 
@@ -788,6 +852,8 @@ is tested as exact numbers at 100x30, 80x24, 60x24 and the short end (80x20,
 4. Push-on-save + `--to` / `--no-push` / `--from`.
 5. TUI picker + save-as-new.
 6. Ghostty native theme-file export.
+7. Live diff widget (§14.4) — the last widget added, and the first the frame
+   spends when rows run short.
 
 Each phase keeps `python3 -m unittest` green and the v1 commands working.
 
