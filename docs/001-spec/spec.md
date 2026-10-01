@@ -277,10 +277,35 @@ config path is ambiguous between formats?
 - The static preview and the editor draw from the same slot data.
 - The code sample inside the editor is rendered in **truecolor from the values
   currently being edited**, so it updates before any terminal reload.
-- Pygments is optional; without it the sample is plain, and huebox must not
-  degrade or crash.
+- Pygments is a required dependency (§9) and the only one; the sample is the
+  reason, and huebox degrades to no code sample rather than crashing without
+  it.
 - Layout must hold in narrow terminals; `pack()` and `clip()` guarantee nothing
   overflows and nothing wraps badly.
+
+**How much of the palette the sample shows.** The sample is a sample, not a
+swatch grid: it paints what a zig lexer can actually tell apart, and the
+editor's palette grid is where all sixteen slots are read at once. The sample is
+written to spend that whole vocabulary, and the mapping splits the palette in
+half — the base half for syntax, the bright half for what syntax alone cannot
+say:
+
+| token | slot | | token | slot |
+| --- | --- | --- | --- | --- |
+| `Keyword` / `Operator` | `palette-5` | | `Comment` (bright black) | `palette-8` |
+| `Keyword.Type` | `palette-6` | | `String.Escape` | `palette-11` |
+| `String` | `palette-2` | | name in call position | `palette-12` |
+| `Number` | `palette-3` | | `Name.Builtin` (`@import`) | `palette-14` |
+
+Everything else — identifiers, punctuation, whitespace — is `foreground`. Eight
+palette slots and one named slot, which is the honest ceiling for one source
+file: the other eight have no token class to wear (`palette-0` is the
+background, and red, white and bright magenta carry no syntax meaning this
+lexer emits). A call position is recognised by huebox rather than by the lexer:
+the zig lexer emits a bare `Name` for a declaration, a field, a module path and
+a call alike, so a name followed by `(` and not by `fn` is a call. Tokens are
+lexed and mapped to slots once per session; only the hex behind a slot is read
+per frame (§14.1).
 
 **Minimum width.** Defined in §15.4 — `MIN_COLS`/`MIN_ROWS` in `tui.py`;
 below them the editor renders one centered `terminal too small — need WxH`

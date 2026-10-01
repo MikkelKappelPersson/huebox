@@ -10,9 +10,126 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 import huebox  # noqa: E402
-from huebox.render import (CURSOR_CHAR, EXAMPLE_PHRASE,  # noqa: E402
+from huebox.render import (CALL_SLOT, CURSOR_CHAR, EXAMPLE_PHRASE,  # noqa: E402
                            LABEL_WIDTH, PAIR_MIN_COLS, PAIR_WIDTH,
-                           SELECTED_TEXT, bg, fg, pair_label)
+                           SELECTED_TEXT, TOKEN_SLOTS, _sample, bg, fg,
+                           pair_label)
+
+
+def _plain(text):
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+
+
+class Sample(unittest.TestCase):
+    """The live code sample: which palette slots it spends, and why (§8)."""
+
+    # every slot the zig lexer can express, with the vocabulary that earns
+    # it — see TOKEN_SLOTS in render.py and the coverage note in spec §8
+    BASE = {"palette-2", "palette-3", "palette-5", "palette-6"}
+    BRIGHT = {"palette-8", "palette-11", "palette-12", "palette-14"}
+
+    def setUp(self):
+        self.runs = _sample()
+        self.slots_used = {slot for slot, _ in self.runs}
+
+    def slot_of(self, text):
+        """The slot the sample paints `text` in."""
+        for slot, run in self.runs:
+            if run == text:
+                return slot
+        self.fail(f"{text!r} is not in the sample")
+
+    def test_the_sample_spends_the_whole_lexer_vocabulary(self):
+        # the point of the mapping: a zig sample reaches eight palette
+        # slots, not four. The other eight have no token class to wear.
+        self.assertEqual(self.slots_used & set(huebox.PALETTE),
+                         self.BASE | self.BRIGHT)
+        self.assertIn("foreground", self.slots_used)
+
+    def test_syntax_is_the_base_half_and_semantics_the_bright_half(self):
+        # the split is the design, not a coincidence: keywords, operators,
+        # strings, numbers and types stay on the base half, and the bright
+        # half carries what the base half had no room for — the muted grey
+        # for comments (palette-8 is bright black) plus escapes, calls and
+        # builtins. Four and four, no slot borrowed across the line.
+        for slot in self.BASE:
+            with self.subTest(slot=slot):
+                self.assertLess(int(slot.split("-")[1]), 8)
+        for slot in self.BRIGHT:
+            with self.subTest(slot=slot):
+                self.assertGreaterEqual(int(slot.split("-")[1]), 8)
+
+    def test_no_row_in_the_table_is_dead(self):
+        # every row earns its place: a class the sample never emits is a
+        # promise the palette does not keep
+        table = {slot for _, slot in TOKEN_SLOTS}
+        self.assertTrue(table <= self.slots_used,
+                        f"unreachable rows: {sorted(table - self.slots_used)}")
+
+    def test_a_type_wears_cyan_and_a_builtin_the_bright_cyan(self):
+        self.assertEqual(self.slot_of("u32"), "palette-6")
+        self.assertEqual(self.slot_of("void"), "palette-6")
+        self.assertEqual(self.slot_of("@import"), "palette-14")
+
+    def test_an_escape_wears_the_bright_yellow_inside_its_string(self):
+        # the escape sits in the middle of the string it belongs to
+        self.assertEqual(self.slot_of("\\n"), "palette-11")
+        self.assertEqual(self.slot_of('{d} colours'), "palette-2")
+
+    def test_a_called_name_wears_the_bright_blue_and_a_declared_one_does_not(self):
+        # `print(...)` is a call; `fn main()` is a definition, and the zig
+        # lexer cannot tell them apart on its own
+        self.assertEqual(self.slot_of("print"), CALL_SLOT)
+        for name in ("main", "huebox", "std", "count"):
+            self.assertEqual(self.slot_of(name), "foreground")
+
+    def test_the_sample_fits_a_default_eighty_column_terminal(self):
+        # the editor indents the block by four; anything wider would be
+        # clipped in the terminal huebox ships into
+        for line, _ in huebox.sample_lines({name: "#ff8800"
+                                            for name in huebox.SLOTS}):
+            self.assertLessEqual(len(_plain(line)) + 4, 80, line)
+
+    def painted_runs(self, line):
+        """Split one painted line into [(colour escape, text)] runs."""
+        out = []
+        for part in re.split(r"(\x1b\[[0-9;?]*[A-Za-z])", line):
+            if not part:
+                continue
+            if part.startswith("\x1b"):
+                out.append([part, ""])
+            elif out:
+                out[-1][1] += part
+            else:
+                out.append(["", part])
+        return [tuple(run) for run in out]
+
+    def test_one_slot_change_repaints_its_runs_and_nothing_else(self):
+        # §14.1 — the mapping is resolved once, but the colours are read
+        # per frame: changing the bright blue moves `print` and nothing
+        # else in the block
+        base = {name: "#3f7a3f" for name in huebox.SLOTS}
+        before = [line for line, _ in huebox.sample_lines(base)]
+        after = [line for line, _ in
+                 huebox.sample_lines(dict(base, **{CALL_SLOT: "#ff00ff"}))]
+        self.assertEqual(len(before), len(after))
+        moved = []
+        for old, new in zip(before, after):
+            self.assertEqual(_plain(old), _plain(new))
+            for (_, text), (colour, _) in zip(self.painted_runs(old),
+                                              self.painted_runs(new)):
+                if text == "print":
+                    self.assertEqual(colour, fg("#ff00ff"))
+                moved.append(text)
+        self.assertEqual(moved.count("print"), 1)
+
+    def test_the_sample_is_unchanged_between_frames_apart_from_colour(self):
+        # same token stream, same text: only the escape prefixes differ
+        base = {name: "#3f7a3f" for name in huebox.SLOTS}
+        one = huebox.sample_lines(base)
+        two = huebox.sample_lines(dict(base, **{"palette-5": "#010203"}))
+        self.assertEqual([_plain(line) for line, _ in one],
+                         [_plain(line) for line, _ in two])
 
 
 class Geometry(unittest.TestCase):
@@ -44,7 +161,7 @@ class Examples(unittest.TestCase):
     """The live examples strip (§14.1) and the live-everything property."""
 
     def plain(self, row):
-        return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", row)
+        return _plain(row)
 
     def rows(self, slots, cols=None):
         return huebox.example_lines(slots, cols)

@@ -77,6 +77,7 @@ def pack(items, cols: int, sep: str = "   ") -> list[str]:
 SAMPLE_LINES = [
     ("// live preview - edits show here without reloading", None),
     ("const huebox = \"terminal theme editor\";", "zig"),
+    ("const std = @import(\"std\");", "zig"),
     ("", None),
     ("pub fn main() !void {", "zig"),
     ("    var count: u32 = 42;   // your palette", "zig"),
@@ -85,20 +86,37 @@ SAMPLE_LINES = [
     ("    }", "zig"),
 ]
 
+# The zig lexer emits a small vocabulary — comments, keywords (plain,
+# reserved and type), names, builtins, operators, punctuation, strings
+# with their escapes, and numbers — and the sample is written to spend all
+# of it. The base half of the palette paints syntax; the bright half paints
+# what syntax alone cannot say: a comment's muted grey, an escape, a call.
+# First match wins and `token in probe` is a subtree test, so a child row
+# (`Keyword.Type`) must sit above its parent (`Keyword`).
+CALL_SLOT = "palette-12"            # a name in call position
+TOKEN_SLOTS = [("Comment", "palette-8"),
+               ("Keyword.Type", "palette-6"),
+               ("Keyword", "palette-5"),
+               ("Name.Builtin", "palette-14"),
+               ("String.Escape", "palette-11"),
+               ("String", "palette-2"),
+               ("Number", "palette-3"),
+               ("Operator", "palette-5"),
+               ("Punctuation", "foreground")]
 
-def _slot_for_token(token, slots) -> str:
-    """Map a Pygments token class to the palette slot that colours it."""
+
+def _slot_for_token(token, called: bool = False) -> str:
+    """Map a Pygments token class to the palette slot that colours it.
+
+    `called` marks an identifier the sample calls — the one distinction
+    the token stream does not make (see `_call_position`). A class the
+    zig lexer never emits has no row and lands on `foreground`.
+    """
     if token is None:
         return "foreground"
-    mapping = [("Comment", "palette-8"), ("Keyword", "palette-5"),
-               ("Name.Decorator", "palette-11"), ("Name.Builtin", "palette-6"),
-               ("Name.Class", "palette-4"), ("Name.Function", "palette-4"),
-               ("Name.Namespace", "palette-6"), ("String", "palette-2"),
-               ("Char", "palette-2"), ("Number", "palette-3"),
-               ("Operator", "palette-5"), ("Name.Exception", "palette-1"),
-               ("Generic", "palette-11"), ("Punctuation", "foreground"),
-               ("Error", "palette-1")]
-    for name, slot in mapping:
+    if called and token in Token.Name:
+        return CALL_SLOT
+    for name, slot in TOKEN_SLOTS:
         probe = Token
         for part in name.split("."):
             probe = getattr(probe, part, None)
@@ -109,26 +127,57 @@ def _slot_for_token(token, slots) -> str:
     return "foreground"
 
 
-_sample_cache = None
+def _call_position(tokens, i: int) -> bool:
+    """True when the name at `i` is called rather than declared.
+
+    The zig lexer emits a bare `Name` for a declaration, a field, a
+    module path and a call alike, so the token stream alone cannot tell
+    them apart: a name is in call position when `(` follows it — the space
+    between them does not count — and no `fn` precedes it, so `print(...)`
+    is a call while `fn main()` is a definition. A builtin never is: it
+    wears the builtin slot either way.
+    """
+    token = tokens[i][0]
+    if token not in Token.Name or token in Token.Name.Builtin:
+        return False
+    before = i
+    while before and not tokens[before - 1][1].strip():
+        before -= 1
+    after = i + 1
+    while after < len(tokens) and not tokens[after][1].strip():
+        after += 1
+    return (after < len(tokens) and tokens[after][1] == "("
+            and not (before and tokens[before - 1][1] == "fn"))
 
 
-def sample_lines(slots):
-    """Tokenise the sample once, then colour it from the live slot values.
+_sample_cache = None                 # [(slot, text)]: lexed and mapped once
 
-    Pygments is a declared dependency (spec §9), so the fallback-free
-    import sits at module level; the cache keeps the lexing to one pass
-    per session — the COLOURS are still read per frame from `slots`, so
-    the sample stays live (§14.1).
+
+def _sample():
+    """The sample as `(slot, text)` runs — lexed and mapped once a session.
+
+    Neither the tokens nor the mapping change while the editor runs; only
+    the hex behind a slot does. Resolving both here leaves `sample_lines`
+    reading `slots` on every call, which is what keeps the sample live
+    (§14.1) without re-walking the mapping table for every token, every
+    frame.
     """
     global _sample_cache
     if _sample_cache is None:
-        _sample_cache = list(lex("\n".join(text for text, _ in SAMPLE_LINES),
-                                 get_lexer_by_name("zig")))
+        # Pygments is a declared dependency (§9), so the import above is
+        # unguarded; the cache is what makes the lex worth having.
+        tokens = list(lex("\n".join(text for text, _ in SAMPLE_LINES),
+                          get_lexer_by_name("zig")))
+        _sample_cache = [
+            (_slot_for_token(token, _call_position(tokens, i)), text)
+            for i, (token, text) in enumerate(tokens) if text]
+    return _sample_cache
+
+
+def sample_lines(slots):
+    """Paint the sample from the live slot values: one lookup per run."""
     out, current = [], None
-    for token, text in _sample_cache:
-        if not text:
-            continue
-        slot = _slot_for_token(token, slots)
+    for slot, text in _sample():
         if slot != current:
             current = slot
             out.append(fg(slots.get(slot, slots.get("foreground", "#ededfe"))))
