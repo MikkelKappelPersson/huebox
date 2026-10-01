@@ -1,4 +1,5 @@
 __pycache__/
+.shepherd/
 *.py[cod]
 *.egg-info/
 build/
