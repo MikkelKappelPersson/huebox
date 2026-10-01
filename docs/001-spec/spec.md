@@ -1,6 +1,6 @@
 # huebox — specification
 
-Status: **living draft** · Format version: **1** · Last updated: 2026-10-01
+Status: **living draft** · Format version: **1** · Last updated: 2026-10-02
 
 This is the working spec for huebox. It is a single living document: edit it in
 place as the tool changes, and move it to `docs/002-spec/spec.md` only when the
@@ -9,8 +9,10 @@ colour model or the file contract changes in a way that breaks existing configs.
 §§1–12 describe v1 as built. §§13–16 are the plan: the theme library, staged
 editing with live examples, and a responsive layout.
 
-Everything marked `TODO` is a decision we have not made yet. Everything else is
-either a rule the code already enforces or a promise we intend to keep.
+Everything marked `TODO` is a decision we have not made yet — unless a `>` note
+directly below it records the answer, which is how a closed one stays closed
+and still shows what was asked. Everything else is either a rule the code
+already enforces or a promise we intend to keep.
 
 ---
 
@@ -63,6 +65,7 @@ naming.
 | `-f`, `--format` | Force a format instead of detecting one. One of the `--formats` values |
 | `-c`, `--config` | Use an explicit config path instead of the detected one |
 | `--to` | Push targets for a theme save or `use`: a comma list of formats (§13.6). Default: the terminal you are in |
+| `--ghostty-native` | Push to Ghostty as a native theme file and point its config at it (§13.6 phase 2). Ghostty targets only, never with `--no-push` |
 | `--no-push` | Write the theme file only; the terminal config is not touched (§13.6) |
 | `--version` | Print `huebox <semver>` and exit |
 | `--help` | argparse default |
@@ -150,9 +153,20 @@ into and out of.
 **TODO — is 140 right?** Recalibrate if the sample text or grid ever looks
 washed out on mid-tones. Record the reason when it changes.
 
+> Re-checked at 2.0: kept. `#808080` MISSING and every ramp slot render
+> legibly at it, and `pack`/`clip` guarantee the swatch grid never has to
+> rely on a threshold to fit.
+
 **TODO — rounding.** `rgb_to_hsv` then back introduces drift. Confirm whether
 repeated hue nudges on the same slot are acceptable, or whether edits should
 accumulate in a higher-precision space.
+
+> Answered at 2.0, and it is the reason this stays a note rather than a
+> queue: the buffer's storage form is hex (§5), so every nudge is
+> hex → hsv → hex through the slot value and nothing accumulates between
+> keystrokes. The visible cost is quantisation — a ×1 nudge on a value that
+> is already at the step's floor is a no-op — not runaway drift. Accumulating
+> in float is the change to make if that ever becomes a complaint.
 
 ## 6. Format support
 
@@ -161,9 +175,20 @@ paths, in priority order) and `env` (env vars that redirect those paths).
 
 | Format | Dialect | Candidate paths |
 | --- | --- | --- |
-| `ghostty` | flat `key = value` | `~/.config/ghostty/config.ghostty`, `~/.config/ghostty/config` |
-| `kitty` | flat `key value` | `~/.config/kitty/kitty.conf`, `~/.kitty.conf` |
-| `alacritty` | TOML | `~/.config/alacritty/alacritty.toml`, `…/alacritty.yml`, `~/.alacritty.toml` |
+| `ghostty` | flat `key = value` | `$XDG_CONFIG_HOME/ghostty/config.ghostty`, `~/.config/ghostty/config.ghostty`, `~/.config/ghostty/config` |
+| `kitty` | flat `key value` | `$XDG_CONFIG_HOME/kitty/kitty.conf`, `~/.config/kitty/kitty.conf`, `~/.kitty.conf` |
+| `alacritty` | TOML | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `~/.config/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.config/alacritty.toml`, `~/.config/alacritty/alacritty.yml`, `~/.alacritty.toml` |
+
+The candidate list is upstream's own search order (plan appendix A), in each
+terminal's terms, with two huebox extras kept for files that are still out
+there: alacritty's pre-TOML `alacritty.yml`, and Ghostty's extensionless
+`config`. `~/.config/...` entries are rewritten to `$XDG_CONFIG_HOME` at load
+time, which is why both spellings appear above.
+
+**Env overrides.** Only what upstream documents is honoured (§7.2, decision
+23): `KITTY_CONFIG_DIRECTORY` for kitty. Alacritty documents no env var for
+its config path, so there is none to honour and `--config` is the only
+override.
 
 ### 6.1 Parsing rules
 
@@ -184,11 +209,19 @@ This is the safety promise, and it is the strictest thing in this document.
    key survive byte-for-byte.
 3. A write that changes nothing is **byte-identical** to the input — no
    reformatting, no trailing-newline repair, no whitespace tidying.
-4. A **no-op write must not rewrite the file at all** (mtime untouched).
+4. A **no-op write must not rewrite the file at all** (mtime untouched). The
+   writers decide this before opening the file for writing, so an unchanged
+   save does not bump the mtime a backup job, an editor or a config manager
+   watches.
 
 **TODO — the first-run backup.** The README promises a `<config>.huebox.bak`
 holding pre-huebox state. Specify precisely when it is written, when it is
 refreshed, and whether it is ever overwritten.
+
+> Decided in §14.2 (landed in phase 2): the backup is taken before the
+> session's *first* save, only if no backup file is already there, and is
+> never refreshed or overwritten for the rest of that session. Theme files —
+> files huebox owns — get none.
 
 > Since §13–§14: a save is two writes — the truth theme file, then a
 > push to the terminal config. The backup moves to first-save-of-session,
@@ -204,11 +237,19 @@ refreshed, and whether it is ever overwritten.
    reader finds colours in the file. A path that says neither is not
    guessable and is an error, not a coin toss.
 2. Otherwise probe: environment variables, then candidate paths, in the order
-   above, XDG-aware (`XDG_CONFIG_HOME` wins over `~/.config`).
+   above, XDG-aware (`XDG_CONFIG_HOME` wins over `~/.config`). The env vars
+   are the ones upstream documents (plan appendix A): kitty's
+   `KITTY_CONFIG_DIRECTORY`, and nothing at all for alacritty. `KITTY_CONFIG_DIR`
+   was a huebox invention and is probed second as a **deprecated** spelling for
+   one release after 2.0 (decision 23); it is removed with the next minor bump.
 3. **Only offer a terminal whose config actually contains colours.** A stale
    `ALACRITTY_SOCKET` must never hijack a working Ghostty config.
 4. Ghostty `config-file` includes and `theme = Name` are followed to the file
-   that actually holds the colours; that file is what gets written.
+   that actually holds the colours; that file is what gets written. Both are
+   read the way Ghostty reads them: the value may be quoted or bare, a bare
+   one stops at the first `#`, and `?path` resolves against the config's own
+   directory. A trailing comment on either line is a comment, not part of the
+   path.
 
 **The other direction.** Reading a config follows `theme =`; a
 `--ghostty-native` push *writes* it. `ghostty_main_config()` is the file
@@ -223,6 +264,13 @@ pointer is still a terminal, while one that points at nothing is not (§7.3).
 **TODO — multi-format UX.** When two or more formats resolve, what does
 `huebox` do with no `--format`? Pick one silently, or prompt? What if the
 config path is ambiguous between formats?
+
+> Decided at 2.0 (decision 25): the first format that *resolves* wins, in
+> probe order — per-window env vars first, then `TERM_PROGRAM`, then the
+> format table — and nothing prompts. A terminal you are inside is the
+> subject; a machine with several configs is a machine whose user passes
+> `--format` or `--config`. The ambiguity case is already an error rather
+> than a coin toss (§7.1).
 
 ## 8. Preview and editor rendering
 
@@ -270,6 +318,14 @@ line instead of a garbled frame. Settled in phase 5, when the picker landed.
 indirection, inline Alacritty tables, malformed hex input, and a read-only or
 unwritable config.
 
+> Closed at 2.0: includes (§7.4, quoted / bare / commented / `?`-relative and
+> the missing-file case), `theme =` indirection (§13.6 phase 2), inline
+> Alacritty tables, a malformed theme file (binary garbage loads as
+> MISSING with a warning) and an unwritable config (a write that raises is
+> reported and fails the push; truth is never rolled back). Still thin:
+> malformed *hex* inside a terminal config is covered only by "the rule does
+> not match, the line is left alone".
+
 ## 11. Open questions
 
 Collected, unsorted. Theme-library, staged-save and resize questions live with
@@ -278,12 +334,20 @@ their sections (§§13–15); this list is v1-only:
 1. Raw-mode restoration and signal handling (§4.3) — **decided**: the
    guarantee in §4.3 (one enter/exit pair per session, prompts close and
    reopen it, the resize handler is restored in the same `finally`).
-2. Accumulated drift from HSV round-trips (§5.1).
-3. The 140 luminance threshold (§5.1).
-4. When the `.huebox.bak` is written and refreshed (§6.2).
-5. Behaviour when several formats resolve at once (§7).
-6. Minimum supported terminal width (§8).
-7. Test coverage for includes, indirection and unwritable configs (§10).
+2. Accumulated drift from HSV round-trips (§5.1) — **answered at 2.0**: the
+   buffer stores hex, so nothing accumulates between keystrokes; the residue
+   is quantisation, not drift.
+3. The 140 luminance threshold (§5.1) — **kept at 2.0**, re-checked against
+   MISSING and the fallback ramp.
+4. When the `.huebox.bak` is written and refreshed (§6.2) — **decided**:
+   first save of a session, once, never overwritten (§14.2).
+5. Behaviour when several formats resolve at once (§7) — **decided**: the
+   first to resolve in probe order wins; `--format` / `--config` say
+   otherwise (decision 25).
+6. Minimum supported terminal width (§8) — **decided**: 40x12 (§15.4).
+7. Test coverage for includes, indirection and unwritable configs (§10) —
+   **closed at 2.0** for all three; malformed hex inside a terminal config
+   is the one thin spot left.
 
 ## 12. Decisions
 
@@ -313,6 +377,9 @@ Append-only. Newest last. One line per decision, with the reason.
 | 20 | `n` / `N` adopt the new theme as the session's subject, and `N` then runs the ordinary save | One writer, one save pipeline: a theme made in the editor is pushed like any other (§13.6), and the status bar names the theme the next `Ctrl+S` will write |
 | 21 | An already-taken name is confirmed in text (`y` overwrites, another name is used), never with a modal | Same reasoning as decision 10: no modal inside raw mode, and the answer is a word rather than a keystroke that could land on the wrong widget |
 | 22 | Ghostty native export is opt-in (`--ghostty-native`), not the default push | Phase 1 only edits the file that already holds the colours; phase 2 adds a `theme =` line to the user's *main* config — a layout choice about somebody else's file, which nobody asked for by asking to push a theme. The flag says it out loud, and phase 1 stays the promise for everyone who never passes it |
+| 23 | Env probes follow upstream's documented spellings: `KITTY_CONFIG_DIRECTORY` (primary), `KITTY_CONFIG_DIR` kept second as deprecated for one release; alacritty's invented `ALACRITTY_CONFIG_DIR` / `ALACRITTY_CONFIG` removed | An override named after a variable the terminal does not read is a wrong answer, not a helpful one (plan appendix A). Dropping the alacritty pair outright would have been a silent regression for anyone who set it, so they are removed loudly instead; keeping the kitty one deprecated costs nothing and saves a real user |
+| 24 | A no-op write skips the write instead of writing identical bytes | §6.2 rule 4 is about the file, not the bytes: rewriting it bumps the mtime, which is exactly what a backup job, a config manager or an open editor watches. The writers now decide "did anything change?" before opening the file |
+| 25 | Several configs at once resolve to the first that resolves, in probe order; nothing prompts | A picker is not an editor: huebox's subject is the terminal you are in, and the user who wants a different one has `--format` and `--config`. An ambiguous `--config` was already an error (§7.1), so the coin toss was only ever on the no-flag path |
 
 ---
 
@@ -387,7 +454,7 @@ and `mv` on theme files keep working because the state tolerates them.
 
 | Command | Behaviour |
 | --- | --- |
-| `huebox new <name>` | Seed from the detected terminal's colours if it has any, else a built-in fallback ramp (TODO: define the ramp). Sets current, opens the editor |
+| `huebox new <name>` | Seed from the detected terminal's colours if it has any, else a built-in fallback ramp (the `RAMP` dict in `themes.py`, decision 16). Sets current, opens the editor |
 | `huebox edit [name]` | Edit a theme (default: current). Every save writes truth + pushes (§13.6) |
 | `huebox show [name]` | Static preview of a theme file instead of a terminal config |
 | `huebox --dump [name]` | Dump a theme file instead of a terminal config |

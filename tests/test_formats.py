@@ -92,6 +92,10 @@ class RoundTrip(unittest.TestCase):
         handle.close()
         return handle.name
 
+    def _read(self, path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
     def test_reads_every_expected_slot(self):
         for fmt, text, expected in CASES:
             with self.subTest(format=fmt):
@@ -117,9 +121,16 @@ class RoundTrip(unittest.TestCase):
             with self.subTest(format=fmt):
                 path = self._write(text)
                 slots = huebox.FORMATS[fmt]["read"](path)
+                # an old stamp makes a rewrite impossible to miss: §6.2
+                # rule 4 says a no-op must not touch the file *at all*,
+                # which is a promise about mtime, not about bytes
+                stamp = os.path.getmtime(path) - 60
+                os.utime(path, (stamp, stamp))
                 huebox.FORMATS[fmt]["write"](path, slots)
-                self.assertEqual(open(path).read(), text,
+                self.assertEqual(self._read(path), text,
                                  f"{fmt} no-op write changed the file")
+                self.assertEqual(os.path.getmtime(path), stamp,
+                                 f"{fmt} no-op write rewrote the file")
                 os.unlink(path)
 
     def test_write_changes_only_colour_lines(self):
@@ -130,7 +141,7 @@ class RoundTrip(unittest.TestCase):
                 slots["background"] = "#010203"
                 slots["palette-0"] = "#040506"
                 huebox.FORMATS[fmt]["write"](path, slots)
-                after = open(path).read()
+                after = self._read(path)
                 os.unlink(path)
                 self.assertIn("#010203", after)
                 self.assertIn("#040506", after)
@@ -150,7 +161,7 @@ class RoundTrip(unittest.TestCase):
                 slots = huebox.FORMATS[fmt]["read"](path)
                 slots["foreground"] = "#ffffff"
                 huebox.FORMATS[fmt]["write"](path, slots)
-                after = open(path).read()
+                after = self._read(path)
                 os.unlink(path)
                 self.assertIn("# a comment that must survive"
                               if fmt == "ghostty"

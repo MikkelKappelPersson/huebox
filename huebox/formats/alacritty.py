@@ -37,7 +37,8 @@ def toml_entries(path: str):
     """
     section = ""
     try:
-        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
     except OSError:
         return
     for index, line in enumerate(lines):
@@ -74,8 +75,15 @@ def read_toml(path: str) -> dict:
 
 
 def write_toml(path: str, slots: dict) -> None:
-    """Replace each colour's value token, keeping quotes and spacing intact."""
-    lines = open(path, encoding="utf-8").read().splitlines()
+    """Replace each colour's value token, keeping quotes and spacing intact.
+
+    Same rule 4 as `write_flat` (§6.2): nothing changed means the file is
+    not opened for writing, so a push of an unchanged theme leaves the
+    config's mtime alone.
+    """
+    with open(path, encoding="utf-8") as handle:
+        lines_before = handle.read().splitlines()
+    lines = list(lines_before)
     for index, slot, token, start, end in list(toml_entries(path)):
         if slot not in slots:
             continue
@@ -83,5 +91,7 @@ def write_toml(path: str, slots: dict) -> None:
                        if token[:1] in ('"', "'") else slots[slot])
         line = lines[index]
         lines[index] = line[:start] + replacement + line[end:]
+    if lines == lines_before:
+        return
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")

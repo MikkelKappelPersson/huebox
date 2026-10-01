@@ -82,24 +82,45 @@ def _candidate_paths(fmt: str):
             yield expanded
 
 
+#: `config-file = ?path`, read with the same discipline as THEME_LINE
+#: below: the value is quoted or bare, a bare one runs to the first `#`,
+#: and trailing spacing is not part of it. v1 took the rest of the line,
+#: so `config-file = ~/x.conf  # mine` pointed at a file called
+#: `~/x.conf  # mine` and the include went unfound (§7.4).
+CONFIG_FILE_LINE = re.compile(
+    r"^\s*config-file\s*=\s*"
+    r"(?:(?P<q>[\"'])(?P<path>[^\"']*)(?P=q)|(?P<path_bare>[^#]*?\S|))"
+    r"\s*(?:#.*)?$")
+
+
+def _include_value(match) -> str:
+    """The value a CONFIG_FILE_LINE match points at, quotes stripped."""
+    return match.group("path") or match.group("path_bare") or ""
+
+
 def _ghostty_includes(config_path: str) -> list[str]:
-    """Config files pulled in via `config-file = ?path`."""
+    """Config files pulled in via `config-file = ?path`.
+
+    Read with the rule `THEME_LINE` below states for `theme =` (§7.4): a
+    trailing comment is a comment, `?path` is relative to this config, and
+    an include that is not on disk is skipped rather than reported.
+    """
     out = []
     directory = os.path.dirname(os.path.abspath(config_path))
     try:
-        lines = open(config_path, encoding="utf-8",
-                     errors="replace").read().splitlines()
+        with open(config_path, encoding="utf-8",
+                  errors="replace") as handle:
+            lines = handle.read().splitlines()
     except OSError:
         return out
     for line in lines:
         if line.lstrip().startswith("#"):
             continue
-        match = re.match(r"\s*config-file\s*=\s*(.+?)\s*$", line)
+        match = CONFIG_FILE_LINE.match(line)
         if not match:
             continue
-        target = match.group(1).strip().strip("\"'")
-        target = (target.replace("?", directory + os.sep)
-                        .replace("~", os.path.expanduser("~")))
+        target = _include_value(match).replace("?", directory + os.sep)
+        target = target.replace("~", os.path.expanduser("~"))
         if os.path.isfile(target):
             out.append(target)
     return out
@@ -162,8 +183,9 @@ def _ghostty_theme_file(config_path: str):
     """
     name = None
     try:
-        lines = open(config_path, encoding="utf-8",
-                     errors="replace").read().splitlines()
+        with open(config_path, encoding="utf-8",
+                  errors="replace") as handle:
+            lines = handle.read().splitlines()
     except OSError:
         return None
     for line in lines:

@@ -431,6 +431,34 @@ class Push(LibraryHome):
         self.assertEqual(len(changed), 2, [before[i] for i in changed])
         self.assertIn(f"ghostty: pushed to {self.config}", result.lines)
 
+    def test_a_no_op_push_does_not_touch_the_config_at_all(self):
+        # §6.2 rule 4 as the user meets it: pushing a theme that already
+        # matches the config leaves the bytes *and* the mtime alone, for
+        # every dialect the writer covers
+        for fmt, path in (("ghostty", self.config), ("kitty", self.kitty)):
+            with self.subTest(format=fmt):
+                slots = themes.read_terminal(fmt, path)
+                stamp = os.path.getmtime(path) - 60
+                os.utime(path, (stamp, stamp))
+                result = themes.push(slots, to=fmt, path=path)
+                self.assertFalse(result.failed)
+                self.assertEqual(os.path.getmtime(path), stamp,
+                                 f"{fmt} no-op push rewrote the config")
+
+    def test_a_write_failure_is_reported_and_never_rolls_truth_back(self):
+        # §10 asks for a read-only / unwritable config case; the honest
+        # one does not depend on being a non-root user, so the writer
+        # raises what the kernel would
+        with mock.patch.dict(
+                themes.FORMATS["ghostty"],
+                {"write": mock.Mock(side_effect=OSError(13, "Denied"))}):
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty", path=self.config)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("Denied", "\n".join(result.lines))
+        self.assertEqual(self.read(self.config), ghostty_text())
+
     def test_push_keeps_the_kitty_dialect(self):
         edited = dict(FULL, background="#010203",
                       **{"palette-0": "#040506", "palette-15": "#0a0b0c"})

@@ -55,9 +55,11 @@ HEX = r"#?[0-9a-fA-F]{6}\b"
 # --- dispatch ---------------------------------------------------------------
 
 def read_flat(path: str, rules) -> dict:
+    """Every slot `rules` can find in `path`; empty when it cannot be read."""
     slots: dict[str, str] = {}
     try:
-        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
     except OSError:
         return slots
     for line in lines:
@@ -70,14 +72,27 @@ def read_flat(path: str, rules) -> dict:
 
 
 def write_flat(path: str, slots: dict, rules) -> None:
-    lines = open(path, encoding="utf-8").read().splitlines()
+    """Splice `slots` into `path` line by line - or not at all (§6.2).
+
+    Rule 4 is stronger than "the bytes came out the same": a write that
+    changes nothing never opens the file for writing, so a save that
+    saved nothing does not bump the mtime a backup job or a config
+    manager watches.
+    """
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    changed = False
     for index, line in enumerate(lines):
         for pattern, resolver, rewriter in rules:
             match = pattern.match(line)
             if match:
                 slot = resolver(match)
                 if slot in slots:
-                    lines[index] = rewriter(line, match, slots[slot])
+                    replacement = rewriter(line, match, slots[slot])
+                    changed = changed or replacement != line
+                    lines[index] = replacement
                 break
+    if not changed:
+        return
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")

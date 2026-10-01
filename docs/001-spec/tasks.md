@@ -1,6 +1,6 @@
 # huebox — tasks
 
-Status: **in execution — P5 implemented, pending review** · Plan: `plan.md` ·
+Status: **all phases implemented, P7 landed** · Plan: `plan.md` ·
 Spec: `spec.md` · Rules: `AGENTS.md`
 
 Execution order is top to bottom; phases are checkboxes, tasks are `- [ ]`.
@@ -289,16 +289,66 @@ cover `formats/base.py`, not only the files this phase touched.
 
 ## P7 — hygiene + release (plan phase 7)
 
-- [ ] `detect.py`: `KITTY_CONFIG_DIRECTORY` (old spelling secondary);
+- [x] `detect.py`: `KITTY_CONFIG_DIRECTORY` (old spelling secondary);
       verify/drop `ALACRITTY_CONFIG_DIR`/`ALACRITTY_CONFIG`
-- [ ] Alacritty search order gains `$XDG_CONFIG_HOME/alacritty.toml`
-- [ ] no-op push must not rewrite the config at all — byte-identical AND
+- [x] Alacritty search order gains `$XDG_CONFIG_HOME/alacritty.toml`
+- [x] no-op push must not rewrite the config at all — byte-identical AND
       mtime-stable (§6.2 rule 4; pre-existing `write_flat` behaviour, logged
       by the P4 review)
-- [ ] `_ghostty_includes` still parses `config-file = path  # comment` the
+- [x] `_ghostty_includes` still parses `config-file = path  # comment` the
       old sloppy way — same class of bug the P6 `THEME_LINE` fix removed
       for `theme =` (logged by the P6 review)
-- [ ] `with open(...)` sweep — silence ResourceWarnings (zero-behaviour)
-- [ ] README/AGENTS/spec full sync; version → 2.0.0; changelog blurb
-- [ ] final: full suite + `pipx install .` smoke + one manual editor session
-      in ghostty (resize, save, picker, push)
+- [x] `with open(...)` sweep — silence ResourceWarnings (zero-behaviour)
+- [x] README/AGENTS/spec full sync; version → 2.0.0; changelog blurb
+- [x] final: full suite + `uv build` + CLI round-trip in a clean env + one
+      real editor session driven through a pty (edit, save+push, quit)
+
+Notes: the two code fixes are both in the place the P4/P6 reviews said the
+problem lived — the writers, not the push path. `write_flat` and `write_toml`
+now compare the line list they just built and return before opening the file
+for writing, so §6.2 rule 4 is a property every caller inherits (the native
+export's tmp splice included). The existing byte-identity test grew an mtime
+assertion and `Push` gained a no-op push case plus a write-failure case
+(§10's "unwritable config"), and both fail against the v1 writers — verified
+by stashing the two writer files and watching them go red.
+
+`_ghostty_includes` reads the value the way the P6 fix taught `theme =` to be
+read: quoted or bare, bare stops at the first `#`, `?path` still relative to
+the config. `CONFIG_FILE_LINE` sits next to `THEME_LINE` in `detect.py` for
+exactly that reason. Five cases: commented include, quoted path with spaces,
+`?`-relative, commented-out line, missing file.
+
+The fd sweep was six `open()` calls in the package (two in `formats/base.py`,
+two in `formats/alacritty.py`, two in `detect.py`) plus three in
+`tests/test_formats.py`. Suite ResourceWarnings: **119 → 0**, verified with
+`python3 -W always -m unittest discover -s tests`, zero behaviour change.
+
+Env vars follow upstream's spelling and nothing else (decision 23):
+`KITTY_CONFIG_DIRECTORY` first, `KITTY_CONFIG_DIR` second and marked
+deprecated for one release, alacritty's two invented vars dropped because
+Alacritty documents no config-path variable at all. The drop is user-visible,
+so it is stated in the spec (§6, §7.2, decision 23), the README's 2.0 blurb
+and plan Appendix A rather than done quietly.
+
+Docs: spec TODOs now carry their answers as `>` notes (§5.1 rounding and the
+140 threshold, §6.2 backup, §7 multi-format, §10 gaps), §11's list is marked
+item by item — open questions 1 (push-insert-keys) and §13.8 question 4
+(`list --porcelain`) stay open on purpose — decisions 23-25 are logged, README
+carries the 2.0 blurb plus the new alacritty path and the full flag list,
+AGENTS.md's `detect` row names the P5/P6 seams and two new guidelines cover
+the no-op rule and `with open`. plan.md has the as-built notes.
+
+Suite: 253 tests, green twice, no warnings. `uv build` produces
+`huebox-2.0.0.tar.gz` + wheel with every module and the console script.
+Clean-env round-trip: `--help`, `--version` (`huebox 2.0.0`), `import` →
+`list` → `use --no-push` → `list` (current marked) → `--dump smoke`, plus a
+real push whose second run left the config's mtime untouched, and
+`resolve()` finding alacritty at `$XDG_CONFIG_HOME/alacritty.toml`, kitty via
+both env spellings, and ignoring `ALACRITTY_CONFIG`.
+
+There is no ghostty on this machine, so the interactive smoke ran through a
+`pty` (stdlib) instead of a hand-driven session: `huebox edit smoke` at
+100x30, `x` nudged the buffer (the header picked up the `●`), `Ctrl+S` saved
+and pushed (`palette-0` went `#0a0a13` → `#0d0d18` in both the theme file and
+the config, the dot cleared), `Esc` quit with status 0, and a second session
+that saved without changing anything left the config's mtime untouched.

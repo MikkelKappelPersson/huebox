@@ -8,14 +8,19 @@ no restarting.
 
 ```
   huebox              TUI when stdout is a terminal, static preview otherwise
-  huebox edit         force the interactive editor
-  huebox show         force the static preview
-  huebox --dump       print the resolved colours and exit
+  huebox edit [name]  force the interactive editor (a theme if named)
+  huebox show [name]  force the static preview (of a theme if named)
+  huebox --dump [name]  print the resolved colours and exit
   huebox --formats    list supported formats
   huebox new <name>   create a theme from your terminal (or a built-in ramp)
   huebox list         list your themes, current one marked
   huebox use <name>   make a theme current and push it to your terminal
   huebox import <name>  snapshot the detected terminal into a theme
+
+Flags on top of the v1 set: `--to ghostty,kitty` chooses push targets,
+`--no-push` writes the theme file only, `--ghostty-native` pushes to Ghostty's
+own theme file, `--force` replaces a theme `new` / `import` would not overwrite,
+`--from <fmt>` names the terminal to read from.
 ```
 
 ## Install
@@ -32,6 +37,32 @@ only improves the code sample in the editor:
 ```sh
 pipx install '.[highlight]'
 ```
+
+## What's new in 2.0
+
+**Your themes live in one place, not in three configs.** `~/.config/huebox` is
+the truth: `huebox import dusk` snapshots a terminal into a theme,
+`huebox edit dusk` works on it, and every save or `huebox use dusk` pushes it
+back to the terminal you are in. `t` inside the editor switches themes, `N`
+turns a direct-config session into a library one, and `--ghostty-native` joins
+Ghostty's own theme-file layout. Editing is staged too: keystrokes live in a
+buffer, `Ctrl+S` is the only write.
+
+Three changes you might notice on upgrade:
+
+- kitty's config-path override is `KITTY_CONFIG_DIRECTORY`, which is what
+  kitty itself reads. The old `KITTY_CONFIG_DIR` spelling still works for one
+  more release, and is probed second.
+- `ALACRITTY_CONFIG_DIR` and `ALACRITTY_CONFIG` are gone — Alacritty documents
+  no such variable, so they never pointed at anything Alacritty read. Use
+  `--config`.
+- Alacritty configs are now also looked for at
+  `$XDG_CONFIG_HOME/alacritty.toml`, which is the second path Alacritty's own
+  search order checks. The legacy `alacritty.yml` still counts.
+
+Nothing above changes what huebox writes to a config: colours only, line by
+line — and a save that changes nothing no longer even touches the file, so its
+mtime survives too.
 
 ## Themes
 
@@ -137,9 +168,16 @@ pointer and updates that theme file in place.
 
 | Format | Config |
 | --- | --- |
-| Ghostty | `~/.config/ghostty/config.ghostty`, including `config-file` includes and `theme = Name` indirection |
-| kitty | `~/.config/kitty/kitty.conf`, `~/.kitty.conf` |
-| Alacritty | `~/.config/alacritty/alacritty.toml`, dotted keys, `[section]` tables and inline tables |
+| Ghostty | `$XDG_CONFIG_HOME/ghostty/config.ghostty`, including `config-file` includes and `theme = Name` indirection |
+| kitty | `$XDG_CONFIG_HOME/kitty/kitty.conf`, `~/.kitty.conf`, or `KITTY_CONFIG_DIRECTORY` |
+| Alacritty | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.alacritty.toml` (and the legacy `alacritty.yml`), dotted keys, `[section]` tables and inline tables |
+
+The search order is each terminal's own (upstream docs, checked October
+2026). `~/.config/...` paths follow `XDG_CONFIG_HOME` when you set it. Alacritty
+documents no environment variable for its config path, so `--config` is the
+only override there; for kitty, `KITTY_CONFIG_DIRECTORY` is upstream's
+spelling (the old `KITTY_CONFIG_DIR` still works, deprecated, for one
+release).
 
 huebox only offers a terminal whose config actually contains colours, so a
 leftover `ALACRITTY_SOCKET` from a session last week will not hijack your
@@ -158,11 +196,12 @@ with several `--to` targets it is refused (ambiguity, not a guess).
 ## Safety
 
 Writes are line-level: only the colour tokens are replaced, so comments,
-ordering, alignment and every unrelated setting survive untouched. A no-op
-write is byte-identical to the input, which the test suite asserts for every
-format. Pushing a theme uses that same writer, so a push is no more invasive
-than the v1 in-place edit. The only file huebox writes outside your terminal
-config is its own `~/.config/huebox` library.
+ordering, alignment and every unrelated setting survive untouched. A save that
+changes nothing is not just byte-identical, it does not write the file at all —
+its mtime is untouched too, so a backup job or a config manager never notices a
+save that saved nothing. Pushing a theme uses that same writer, so a push is no
+more invasive than the v1 in-place edit. The only file huebox writes outside
+your terminal config is its own `~/.config/huebox` library.
 
 ## Development
 
@@ -171,8 +210,9 @@ python3 -m unittest discover -s tests
 ```
 
 The tests cover reading every slot, round-tripping without drift, changing
-only the intended lines, pushing without inventing keys, and keeping the
-layout inside narrow terminals.
+only the intended lines, leaving a config untouched (bytes *and* mtime) when
+nothing changed, following Ghostty includes and `theme =` pointers, pushing
+without inventing keys, and keeping the layout inside narrow terminals.
 
 ## License
 

@@ -1,6 +1,6 @@
 # huebox — implementation plan
 
-Status: **ready for review** · Plans spec: `spec.md` §§1–17 · Conventions: `AGENTS.md` · Next: `tasks.md`
+Status: **all seven phases landed** · Plans spec: `spec.md` §§1–17 · Conventions: `AGENTS.md` · Next: `tasks.md`
 
 This turns the spec into build order. The spec says *what*; this says *how*,
 module by module, phase by phase. Terminal facts in Appendix A were verified
@@ -16,7 +16,7 @@ behind `python3 -m unittest discover -s tests` staying green.
 | 4 | Push on save + use | §13.6 | `themes.py`, `cli.py`, `editor.py` |
 | 5 | TUI picker + save-as-new | §13.7 | `editor.py` |
 | 6 | Ghostty native theme export | §13.6 (phase 2) | `themes.py`, `detect.py` |
-| 7 | Hygiene: env vars, fd leaks, docs sync | §7, §10 | `detect.py`, `formats/` |
+| 7 | Hygiene: env vars, fd leaks, no-op writes, docs sync | §7, §10 | `detect.py`, `formats/`, docs |
 
 ---
 
@@ -371,6 +371,43 @@ As built (decision 22: **opt-in**, phase 1 unchanged as the default):
 5. Version: theme library + staged saving is the 2.0.0 line (save semantics
    change; `edit` without themes keeps working, so not a hard break).
 
+As built (P7):
+
+- **Env probes** are the format table's `env` dict, probed in insertion order,
+  so the right spelling goes first and nothing else had to move:
+  `KITTY_CONFIG_DIRECTORY`, then `KITTY_CONFIG_DIR` marked deprecated in a
+  comment (dropped with the next minor bump); alacritty's two invented vars
+  are gone, because upstream documents none (Appendix A) and an override named
+  after a variable the terminal does not read is a wrong answer (decision 23).
+  The removal is user-visible, so it is stated in the spec, the README and the
+  2.0 blurb rather than done quietly.
+- **Alacritty's list** is upstream's search order with the legacy stops kept:
+  `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `~/.config/alacritty/alacritty.toml`,
+  `$XDG_CONFIG_HOME/alacritty.toml`, `~/.config/alacritty.toml`, then huebox's
+  own `alacritty.yml` and upstream's `~/.alacritty.toml`. The `~/.config/`
+  spellings are already rewritten to `$XDG_CONFIG_HOME` at import, so one more
+  entry was the whole change.
+- **The fd sweep** was six `open()` calls, not two: both flat readers and
+  writers in `formats/base.py`, `formats/alacritty.py` (`toml_entries` is both
+  a public generator and the writer's own position source) and `detect.py`'s
+  two Ghostty readers — plus three in `tests/test_formats.py`, which had been
+  emitting warnings of their own. 119 ResourceWarnings in the suite before, 0
+  after, no behaviour change.
+- **No-op writes** no longer open the file (decision 24): both writers build
+  the new line list, compare, and return before a write handle exists, so
+  §6.2 rule 4 is a property of the writer rather than of the push path above
+  it. The byte-identity test grew an mtime assertion and a push of a config's
+  own colours gained one too; both fail against the v1 writers.
+- **`_ghostty_includes`** reads `config-file = path  # comment` the way the P6
+  fix taught `theme =` to be read — quoted or bare value, bare stops at the
+  first `#`, spacing preserved, `?path` still relative to the config. Same bug
+  class, same shape of fix, one rule per key instead of a lenient regex.
+- **Docs**: spec TODOs carry their answers as `>` notes (§5.1 rounding and the
+  140 threshold, §6.2 backup, §7 multi-format, §10 gaps), §11's list is
+  marked item by item, decisions 23-25 are logged, the README carries a "What's
+  new in 2.0" blurb and the new alacritty path, AGENTS.md's rows name the
+  detect seams P5/P6 added and the no-op rule the writers now keep.
+
 ---
 
 ## Appendix A — verified terminal facts (sources checked 2026-10)
@@ -398,11 +435,13 @@ search order `$XDG_CONFIG_HOME/alacritty/alacritty.toml`,
 paths absolute, `~/`-prefixed or relative to the importing file; no env var
 for the config path is documented.
 
-Implications already folded into phases: kitty env fix (P7.1), Alacritty
-import as a possible push path is **not** needed for v2 — push targets
-whatever file currently holds colours, which `resolve()` already finds; the
-`import` directive only matters if we ever generate configs (out of scope,
-§3).
+Implications already folded into phases: the kitty env fix (P7.1, decision
+23 — `KITTY_CONFIG_DIRECTORY` primary, `KITTY_CONFIG_DIR` deprecated for
+one release, alacritty's two invented vars dropped) and the Alacritty search
+order, which is now upstream's own (P7.2). Alacritty `import` as a possible
+push path is **not** needed for v2 — push targets whatever file currently
+holds colours, which `resolve()` already finds; the `import` directive only
+matters if we ever generate configs (out of scope, §3).
 
 ## Appendix B — data formats
 
