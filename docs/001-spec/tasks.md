@@ -236,15 +236,56 @@ the enter whose state it restores.
 
 ## P6 — Ghostty native export (§13.6 phase 2, plan phase 6)
 
-- [ ] `themes.py`: `export_ghostty_native(name, slots)` →
-      `~/.config/ghostty/themes/<name>` via write_flat + GHOSTTY_RULES template
-- [ ] `detect.py`: `ensure_theme_pointer(config_path, name)` — rewrite or
-      append `theme = name`, line-level
-- [ ] `cli.py`: `--ghostty-native` opt-in flag wiring (default decided here:
-      plan proposes opt-in)
-- [ ] tests: exported round-trip, pointer rewrite byte-exact except theme
-      line, append case, kitty/alacritty unaffected
-- [ ] spec: close open question 2 with the decision; decision log entry
+- [x] `themes.py`: `export_ghostty_native(name, slots)` →
+      `$XDG_CONFIG_HOME/ghostty/themes/<name>` via write_flat + GHOSTTY_RULES
+      template (tmp → splice → replace; `valid_name` guard; gaps as MISSING)
+- [x] `detect.py`: `ensure_theme_pointer(config_path, name)` — rewrite or
+      append `theme = name`, line-level, `unchanged`/`rewritten`/`appended`
+- [x] `detect.py`: `ghostty_main_config()` (the file that *holds* the
+      pointer) + `config_holds_colours()` (§7.3 asked of a chain), because
+      the pointer target is deliberately not the file `resolve()` follows
+- [x] `cli.py`: `--ghostty-native` opt-in flag wiring (default decided here:
+      plan proposes opt-in) — `PushSpec.ghostty_native` with a `False`
+      default, `push(..., ghostty_native, name)`
+- [x] tests: exported round-trip, pointer rewrite byte-exact except theme
+      line, append case (with/without trailing newline), CRLF, kitty and
+      alacritty unaffected, illegal name, CLI `use`/`edit` end to end
+- [x] spec: close open question 2 with the decision; decision log entry
+
+Notes: the decision is **opt-in** (decision 22) — phase 2 adds a `theme =`
+line to the user's *main* config, which is a layout choice about somebody
+else's file and not something asking to push a theme should do silently.
+The flag is ghostty-scoped: `--to ghostty,kitty` exports for ghostty and
+pushes kitty the phase-1 way, `--no-push` with the flag is refused before
+any write, and a legacy direct session (no theme, so no name to export
+under) writes the config and says why in the post-session `notes` list.
+
+Two seams the plan's bullets did not name, both forced by §7.
+`ghostty_main_config()` exists because the pointer belongs in the file that
+*holds* the `theme =` line, which is not the file `resolve()` follows to the
+colours — with `--config` it is the named file, otherwise the first Ghostty
+candidate that exists. And `config_holds_colours()` exists because §7.3's
+"only offer a terminal whose config actually contains colours" has to be
+asked of the whole chain on this path: a main config holding nothing but
+`theme = ember` is a real terminal, and one pointing at a missing theme
+file is not. Both are tested directly.
+
+One pre-existing read bug had to be fixed to make the writer testable
+against the reader: `_ghostty_theme_file` took the rest of the line as the
+theme name, so `theme = ember   # mine` resolved to a file called
+`ember"   # mine`. Reader and writer now share one `THEME_LINE` regex, with
+its own `cr` group so a CRLF config keeps its line endings, and
+`ensure_theme_pointer` opens with `newline=""` both ways (universal newlines
+would rewrite a CRLF file; `surrogateescape` carries a non-UTF-8 one through
+byte for byte). No push behaviour changes for configs whose theme value is
+a single word — the 204 pre-existing tests pass untouched. The THEME_LINE
+reader also gained what v1 never had: space-named values, bare or quoted
+(`theme = Catppuccin Mocha`), now follow to their theme files instead of
+falling through to the shipped-theme copy.
+
+P7 note: the export goes through `write_flat`, so it still leaks the
+`ResourceWarning` the `with open` sweep is meant to kill — the sweep should
+cover `formats/base.py`, not only the files this phase touched.
 
 ## P7 — hygiene + release (plan phase 7)
 
@@ -254,6 +295,9 @@ the enter whose state it restores.
 - [ ] no-op push must not rewrite the config at all — byte-identical AND
       mtime-stable (§6.2 rule 4; pre-existing `write_flat` behaviour, logged
       by the P4 review)
+- [ ] `_ghostty_includes` still parses `config-file = path  # comment` the
+      old sloppy way — same class of bug the P6 `THEME_LINE` fix removed
+      for `theme =` (logged by the P6 review)
 - [ ] `with open(...)` sweep — silence ResourceWarnings (zero-behaviour)
 - [ ] README/AGENTS/spec full sync; version → 2.0.0; changelog blurb
 - [ ] final: full suite + `pipx install .` smoke + one manual editor session

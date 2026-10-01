@@ -7,6 +7,7 @@
                                        TOML subset — no tomllib (3.9)
     current() / set_current()          state.toml, two lines at most
     push()                             truth → terminal, the one write out
+    export_ghostty_native()            truth → a Ghostty theme file (§13.6)
     RAMP                               the built-in palette `new` seeds from
 
 Theme files belong to huebox: the writer emits one canonical layout and
@@ -28,13 +29,19 @@ from collections import namedtuple
 from datetime import datetime
 
 from .color import MISSING, SLOTS, is_hex, normalize_hex
-from .detect import resolve
+from .detect import config_holds_colours, ensure_theme_pointer, \
+    ghostty_main_config, ghostty_themes_dir, resolve
 from .formats import FORMAT_NAMES, FORMATS
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SUFFIX = ".toml"
 META_KEYS = ("name", "created", "modified", "source")
 HEADER = "# owned by huebox — values are yours, structure is ours"
+
+#: The first line of every exported Ghostty theme file. The file is one
+#: colour per line in Ghostty's own dialect, so the terminal reads it, our
+#: reader reads it back, and the comment says plainly who owns it.
+GHOSTTY_HEADER = "# a huebox theme file — rewritten on every push"
 
 #: The built-in fallback ramp for `huebox new` when no terminal has colours
 #: to seed from (§13.5, spec open question 3 — decided). A neutral dark
@@ -209,7 +216,7 @@ def _atomic_write(path: str, text: str) -> None:
     configs keep the in-place line-level writer instead — renaming over
     them would break the §6.2 contract.
     """
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{os.getpid()}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -376,6 +383,61 @@ def read_terminal(fmt: str, path: str) -> dict:
     return FORMATS[fmt]["read"](path)
 
 
+def ghostty_native_path(name: str) -> str:
+    """Where `export_ghostty_native` puts `name`: Ghostty's own theme dir."""
+    _check(name)
+    return os.path.join(ghostty_themes_dir(), name)
+
+
+def _ghostty_template() -> str:
+    """A theme file with every key Ghostty knows, in Ghostty's dialect.
+
+    The placeholders are real colours, not blanks: the file is written to
+    a sibling tmp, the values are spliced in by the *same* line-level
+    writer a push uses, and only then is it renamed over the target. So a
+    reader sees a finished file or the old one, and what it reads back is
+    exactly what went in.
+    """
+    lines = [GHOSTTY_HEADER]
+    lines += [f"palette = {index}=#000000" for index in range(16)]
+    lines += [f"{slot} = #000000" for slot in SLOTS[16:]]
+    return "\n".join(lines) + "\n"
+
+
+def export_ghostty_native(name: str, slots: dict) -> str:
+    """Write the theme as a Ghostty theme file; returns its path (§13.6).
+
+    Phase 2 of §13.6: a theme file of ours, in the terminal's own
+    directory, in the terminal's own flat dialect — all 22 slots, palette
+    then named, the same `palette = 0=#…` spelling the config uses. Ghostty
+    reads it like any other config (plan appendix A), and huebox reads it
+    back through `read_flat`, so round-tripping is true by construction
+    rather than by a test's goodwill.
+
+    The name is a theme name (§13.3) because it becomes a file name in a
+    directory huebox does not own; an illegal one raises before anything
+    is written. A slot the buffer has no value for is written as the same
+    `MISSING` grey a push sends, so the file and the terminal agree.
+    """
+    _check(name)
+    path = ghostty_native_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(_ghostty_template())
+        FORMATS["ghostty"]["write"](tmp, {slot: _value(slots, slot)
+                                          for slot in SLOTS})
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)          # never leave a half-written theme behind
+        except OSError:
+            pass
+        raise
+    return path
+
+
 #: What one `push` did. The caller routes `lines` (they are its report) and
 #: the verdict: `failed` is the exit code, `pushed` the `fmt: path` pairs a
 #: status line names. A plain list of strings could not say which target
@@ -408,8 +470,26 @@ def _target_names(to, fmt) -> list:
     return [fmt or None]
 
 
+def _push_native(name: str, slots: dict, main: str):
+    """Phase 2 of §13.6: a Ghostty theme file plus a pointer at it.
+
+    Returns `(path, lines, failed)`: the exported file the status line
+    names, the report, and whether the target failed. Neither write is
+    rolled back if the other one misses (decision 7) — a theme file
+    without a pointer is a harmless file, and the report says so.
+    """
+    try:
+        path = export_ghostty_native(name, slots)
+        action = ensure_theme_pointer(main, name)
+    except (ThemeError, OSError, ValueError) as problem:
+        return None, [f"ghostty: {main}: {problem}"], True
+    return path, [f"ghostty: exported {path}",
+                  f"ghostty: theme = {name} {action} in {main}"], False
+
+
 def push(slots: dict, to=None, fmt: str = None, path: str = None,
-         no_push: bool = False) -> PushResult:
+         no_push: bool = False, ghostty_native: bool = False,
+         name: str = None) -> PushResult:
     """Write a saved buffer into the terminal config(s) that hold colours.
 
     Phase 1 of §13.6: every target goes through today's `resolve()` — the
@@ -418,22 +498,34 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
     then through that format's own line-level writer, so the §6.2 contract
     holds for every byte that lands (decision 9). One writer, one promise.
 
+    `ghostty_native` switches the ghostty target to phase 2: write
+    `~/.config/ghostty/themes/<name>` and point the *main* config at it,
+    instead of editing whatever file the colours happen to sit in. It is
+    opt-in (decision 22) and scoped to ghostty — a `--to ghostty,kitty`
+    run with the flag exports for ghostty and pushes kitty the ordinary
+    way. `name` is the theme's name, which is what the exported file is
+    called; a native push without one is an error, not a guess.
+
     Three rules the terminal side does not get to negotiate:
 
     - A config with no colours is never a target, exactly as in detection
       (§7.3): a stale env var must not turn into a rewritten config.
     - Keys the target does not carry are reported, never inserted
       (`not carried by this config: …`). Adding a line would break the
-      line-level contract, and open question 1 is still open.
+      line-level contract, and open question 1 is still open. A native
+      export has no such report: its file carries all 22 by construction.
     - Every target is tried even when an earlier one failed; `failed` is
       the caller's exit code, and the truth file written before this call
       is never rolled back (decision 7).
 
     `path` is an explicit config (the `--config` seam) and only makes sense
     for a single target — several targets with one file is a CLI error.
+    With the flag set, `path` names the main config to point at.
     """
     if no_push:
         return PushResult((), (), False)
+    if ghostty_native and not name:
+        raise ThemeError("--ghostty-native needs a theme name to export")
 
     names = _target_names(to, fmt)
     if path is not None and len(names) != 1:
@@ -444,9 +536,9 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
     pushed: list = []
     failed = False
 
-    for name in names:
-        found, target, error = resolve(name, explicit)
-        label = name or "terminal"
+    for wanted in names:
+        found, target, error = resolve(wanted, explicit)
+        label = wanted or "terminal"
         if error or not target or not found:
             # `--config` with a path that says neither format gets here
             # too: §7.1 makes that an error, not a coin toss
@@ -454,6 +546,28 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
                                f"--format with one of {', '.join(FORMAT_NAMES)}")
             lines.append(f"{label}: {reason}")
             failed = True
+            continue
+        if ghostty_native and found == "ghostty":
+            # the target is the *main* config, which may hold no colours
+            # of its own because it points at a theme file — §7.4 says
+            # follow the indirection before calling it colourless (§7.3)
+            main = ghostty_main_config(explicit)
+            if main is None:
+                lines.append("ghostty: no ghostty config to point at "
+                             "(no config.ghostty or config found)")
+                failed = True
+                continue
+            if not config_holds_colours("ghostty", main):
+                lines.append(f"ghostty: no colours in {main} "
+                             "- not a push target")
+                failed = True
+                continue
+            path_, extra, bad = _push_native(name, slots, main)
+            lines.extend(extra)
+            if bad:
+                failed = True
+                continue
+            pushed.append((found, path_))
             continue
         existing = FORMATS[found]["read"](target)
         if not existing:

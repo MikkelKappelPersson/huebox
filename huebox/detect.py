@@ -1,4 +1,10 @@
-"""Finding the terminal you are in and the config holding its colours (§7)."""
+"""Finding the terminal you are in and the config holding its colours (§7).
+
+Finding a config is only half of it: `ensure_theme_pointer` writes the one
+line that decides *which* file a Ghostty config reads (§13.6 phase 2), and
+does so with the same line-level discipline every other write to somebody
+else's file follows (§6.2).
+"""
 
 from __future__ import annotations
 
@@ -99,11 +105,60 @@ def _ghostty_includes(config_path: str) -> list[str]:
     return out
 
 
+#: `theme = Name`, split so the value can be read (and written) without
+#: touching the spacing, the quoting or a trailing comment (§6.2). The
+#: value may be quoted (any characters but the quote) or bare — bare
+#: values run to the first `#` and cannot end in a space, which is how
+#: Ghostty itself reads them; this is what makes space-named built-ins
+#: (`theme = Catppuccin Mocha`) followable. The last match in a file
+#: wins, which is how Ghostty reads one too.
+THEME_LINE = re.compile(
+    r"^(?P<pre>\s*theme\s*=\s*)"
+    r"(?:(?P<q>[\"'])(?P<name>[^\"']*)(?P=q)|(?P<bare>[^#]*?\S|))"
+    r"(?P<post>[ \t]*(?:#.*)?)(?P<cr>\r?)$")
+
+
+def _theme_value(match) -> str:
+    """The value a THEME_LINE match points at, quotes stripped."""
+    if match.group("q"):
+        return match.group("name")
+    return match.group("bare") or ""
+
+
+def ghostty_themes_dir() -> str:
+    """`$XDG_CONFIG_HOME/ghostty/themes` — where `theme = Name` resolves.
+
+    Read at call time, not at import time, so a test's temporary home is
+    respected (the candidate-path tables are fixed when the module loads).
+    """
+    return os.path.join(_config_home(), "ghostty", "themes")
+
+
+def ghostty_main_config(path: str = None) -> str:
+    """The Ghostty config itself, with `theme =` and includes *not* followed.
+
+    `_resolve_for` answers "which file holds the colours", which is the
+    wrong question for phase 2: a native export writes its own theme file
+    and needs the config that decides which file is read. That is the first
+    candidate path that exists — or the explicit `--config` the user named,
+    which is the file they mean by definition.
+    """
+    if path:
+        expanded = os.path.expanduser(path)
+        return expanded if os.path.isfile(expanded) else None
+    for candidate in _candidate_paths("ghostty"):
+        return candidate              # the first one there is, colours or not
+    return None
+
+
 def _ghostty_theme_file(config_path: str):
     """Follow `theme = Name` to the file that actually holds the colours.
 
     Ghostty keeps colours in a separate theme file far more often than
     inline, so the main config on its own usually has nothing to edit.
+    The value is read with the same rule `ensure_theme_pointer` writes
+    with, so a trailing comment cannot make the two disagree about which
+    theme a config is on.
     """
     name = None
     try:
@@ -114,12 +169,12 @@ def _ghostty_theme_file(config_path: str):
     for line in lines:
         if line.lstrip().startswith("#"):
             continue
-        match = re.match(r"\s*theme\s*=\s*(.+?)\s*$", line)
+        match = THEME_LINE.match(line)
         if match:
-            name = match.group(1).strip().strip("\"'")
+            name = _theme_value(match)
     if not name:
         return None
-    user = os.path.join(_config_home(), "ghostty", "themes", name)
+    user = os.path.join(ghostty_themes_dir(), name)
     if os.path.isfile(user):
         return user
     resources = os.environ.get("GHOSTTY_RESOURCES_DIR", "/usr/share/ghostty")
@@ -130,6 +185,95 @@ def _ghostty_theme_file(config_path: str):
         shutil.copy2(shipped, user)
         return user
     return None
+
+
+def ensure_theme_pointer(config_path: str, name: str) -> str:
+    """Point `config_path` at the Ghostty theme file `name` (§13.6 phase 2).
+
+    A Ghostty theme file is a full config of its own (plan appendix A), so
+    the theme huebox exports is picked up by the `theme =` line in the main
+    config. This is that one line, and only that one line:
+
+    - an existing `theme =` keeps its spacing, its quotes and its trailing
+      comment, and only the value is swapped;
+    - a config with no theme line gets one appended, and nothing else in
+      the file moves;
+    - a config already pointing at `name` is not rewritten at all, so its
+      mtime survives a no-op save.
+
+    Returns `unchanged`, `rewritten` or `appended`, which is what the push
+    report says. `name` is the caller's to validate — `export_ghostty_native`
+    has already put a `valid_name` one on disk; the guard here is only
+    against a value that would break the file into two lines or two keys.
+    """
+    if not name or any(char in name for char in "\"'#\r\n"):
+        raise ValueError(f"not a usable theme name: {name!r}")
+    # newline="" on both ends: universal-newline translation would rewrite
+    # a CRLF config on the way in, and surrogateescape carries a config
+    # that is not valid UTF-8 through untouched. §6.2 promises byte
+    # equality for every line we do not touch, and that is this open mode.
+    with open(config_path, encoding="utf-8", errors="surrogateescape",
+              newline="") as handle:
+        text = handle.read()
+
+    # split on "\n" rather than splitlines: the trailing "" carries the
+    # final newline, so re-joining reproduces every byte we did not change
+    lines = text.split("\n")
+    index = None
+    for position, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            continue
+        if THEME_LINE.match(line):
+            index = position                 # a later key wins, as in §7.4
+    if index is not None:
+        match = THEME_LINE.match(lines[index])
+        if _theme_value(match) == name:
+            return "unchanged"
+        # keep the original quoting: a quoted pointer stays quoted, a bare
+        # one stays bare — only the value is swapped (§6.2)
+        quote = match.group("q") or ""
+        lines[index] = (f"{match.group('pre')}{quote}{name}{quote}"
+                        f"{match.group('post')}{match.group('cr')}")
+        action = "rewritten"
+    else:
+        # keep the file's own line ending: split("\n") leaves the "\r" on
+        # the line before the trailing ""
+        ending = "\r" if "\r\n" in text else ""
+        line = f"theme = {name}{ending}"
+        if lines[-1:] == [""]:
+            lines[-1:-1] = [line]       # the final "" is the newline: keep it
+        else:
+            lines.append(line)          # the file ended without one
+        action = "appended"
+
+    # the lines are joined back with the "\n" they were split on, so every
+    # byte we did not choose to change is written back as it came
+    with open(config_path, "w", encoding="utf-8", errors="surrogateescape",
+              newline="") as handle:
+        handle.write("\n".join(lines))
+    return action
+
+
+def config_holds_colours(fmt: str, path: str) -> bool:
+    """Does `path` define colours — directly or through what it pulls in?
+
+    §7.3 refuses to offer a terminal whose config has no colours, and
+    §7.4 says which file the colours really live in. This is both of those
+    questions for one *named* path: the main Ghostty config is allowed to
+    hold no colours of its own when it points at a theme file, and that
+    config is still a real terminal config.
+    """
+    read = FORMATS[fmt]["read"]
+    if read(path):
+        return True
+    if fmt == "ghostty":
+        for included in _ghostty_includes(path):
+            if read(included):
+                return True
+        themed = _ghostty_theme_file(path)
+        if themed and read(themed):
+            return True
+    return False
 
 
 def infer_format(path: str):

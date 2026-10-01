@@ -210,6 +210,16 @@ refreshed, and whether it is ever overwritten.
 4. Ghostty `config-file` includes and `theme = Name` are followed to the file
    that actually holds the colours; that file is what gets written.
 
+**The other direction.** Reading a config follows `theme =`; a
+`--ghostty-native` push *writes* it. `ghostty_main_config()` is the file
+that holds the pointer line (the first Ghostty candidate that exists, or the
+explicit `--config`), which is deliberately not the file `resolve()` returns,
+and `ensure_theme_pointer()` changes that one line and nothing else
+(§13.6 phase 2). Because of the split, "does this config have colours" is
+asked of the *chain* — `config_holds_colours()` follows the same includes and
+`theme =` a detection would — so a main config that holds nothing but a
+pointer is still a terminal, while one that points at nothing is not (§7.3).
+
 **TODO — multi-format UX.** When two or more formats resolve, what does
 `huebox` do with no `--format`? Pick one silently, or prompt? What if the
 config path is ambiguous between formats?
@@ -302,6 +312,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 19 | The picker takes over the frame while it is open, instead of insetting a box over the editor | One frame means one layout budget, and the picker's own footer folds through `pack` — a centred box would have needed a wider floor than §15.4 promises for no extra information |
 | 20 | `n` / `N` adopt the new theme as the session's subject, and `N` then runs the ordinary save | One writer, one save pipeline: a theme made in the editor is pushed like any other (§13.6), and the status bar names the theme the next `Ctrl+S` will write |
 | 21 | An already-taken name is confirmed in text (`y` overwrites, another name is used), never with a modal | Same reasoning as decision 10: no modal inside raw mode, and the answer is a word rather than a keystroke that could land on the wrong widget |
+| 22 | Ghostty native export is opt-in (`--ghostty-native`), not the default push | Phase 1 only edits the file that already holds the colours; phase 2 adds a `theme =` line to the user's *main* config — a layout choice about somebody else's file, which nobody asked for by asking to push a theme. The flag says it out loud, and phase 1 stays the promise for everyone who never passes it |
 
 ---
 
@@ -421,7 +432,10 @@ plus exit 1, never a rolled-back truth.
 - Phase 2, Ghostty only: emit a native `~/.config/ghostty/themes/<name>`
   (same flat syntax, same writer) and point the main config at it — replace
   the `theme =` value or append the line. Other theme files are left
-  untouched. Open whether this is the default or opt-in.
+  untouched. **Opt-in** (`--ghostty-native`, decision 22): phase 1 stays the
+  default because the pointer rewrites a line of the user's *main* config —
+  a layout choice, not a colour, and one nobody asked for by asking to push
+  a theme.
 
 As built: a push returns report lines, not an exit code, and the caller
 routes them. The editor prints them on stderr after the session (never
@@ -430,6 +444,46 @@ inside the raw-mode loop) and the status bar carries the one-line verdict,
 target failed. A push never rolls the truth file back, so a failed push
 leaves a saved theme and a failing exit code — fix the target and press
 `Ctrl+S` again.
+
+Phase 2 as built (`--ghostty-native`):
+
+- **`export_ghostty_native(name, slots)`** writes
+  `$XDG_CONFIG_HOME/ghostty/themes/<name>` — all 22 slots, palette-then-named,
+  in Ghostty's own `palette = 0=#…` spelling. The template is written to a
+  sibling tmp and the *same* line-level writer a push uses (`write_flat` +
+  `GHOSTTY_RULES`) splices the values in before the tmp is renamed over the
+  target, so the file is round-trip-safe by construction and never half
+  written. The name must pass `valid_name` (§13.3) — it becomes a file name
+  in a directory huebox does not own — and a slot with no value is written
+  as the same `MISSING` grey a push sends.
+- **`ensure_theme_pointer(config_path, name)`** is the only line that moves
+  in the user's config: an existing `theme =` keeps its spacing, its quotes
+  and its trailing comment and only the value is swapped; a config with none
+  gets the line appended; a config already pointing at `name` is not
+  rewritten at all, so its mtime survives. Line endings and every byte of
+  every other line survive (§6.2). It returns `unchanged` / `rewritten` /
+  `appended`, which is what the report says.
+- **Which file gets the pointer** is the *main* config — the one holding the
+  `theme =` line — not the file `resolve()` follows to the colours
+  (`ghostty_main_config()`). So §7.4 is read through that pointer and a main
+  config with no colours of its own is still a legitimate target; a config
+  with no colours *anywhere* in its chain is still refused (§7.3), and so is
+  a machine with no Ghostty config to point at.
+- **Scope**: the flag is ghostty-scoped. `--to ghostty,kitty` exports for
+  ghostty and pushes kitty the ordinary way; `--no-push` with the flag is
+  refused before anything is written; a native push with no theme name (a
+  legacy direct session) writes the config and says so in a post-session
+  note. The export is a whole file of ours, so there is no "not carried by
+  this config" report on that path — all 22 keys are there by construction.
+- Other theme files are untouched: the one the config pointed at before the
+  push stays exactly as it was. The themes directory itself is shared with
+  Ghostty's own themes, though — an export overwrites any same-name file
+  there (the report says `over an existing file` when it did), and a
+  same-named file is why `valid_name` guards the name before anything is
+  written.
+- **The two modes compose.** After a native push, `resolve()` follows the
+  pointer to the exported file, so an ordinary phase-1 push updates *that*
+  file in place — the two paths never fight over which one wins.
 
 ### 13.7 TUI theme switching
 
@@ -491,7 +545,11 @@ As built:
    — **report-only so far** (decision 18): the config tells huebox which
    keys it has, and huebox never invents a line. Still open whether a
    future phase should offer to add them.
-2. Ghostty native theme-file export: default or opt-in?
+2. Ghostty native theme-file export: default or opt-in? — **decided: opt-in**
+   (decision 22, `--ghostty-native`). Phase 1 keeps editing the file the
+   colours already live in; phase 2 writes a theme file and adds a `theme =`
+   line to the user's *main* config, which is a layout decision the user
+   should have to make out loud.
 3. Exact values of the built-in fallback ramp for `new` with no colours
    found — **decided** (decision 16): the `RAMP` dict in `huebox/themes.py`,
    plan 3.3's values unchanged — background `#101014`, foreground `#e6e6ea`,

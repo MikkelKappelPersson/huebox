@@ -20,7 +20,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/color.py` | 22-slot model, hex/rgb/hsv maths, luminance | §5 |
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty` (TOML); registry in `__init__` | §6 |
 | `huebox/detect.py` | probes, candidate paths, Ghostty includes / `theme =`, `resolve()` | §7 |
-| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, `RAMP` | §13, §13.6 |
+| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip | §8, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
@@ -29,9 +29,10 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 Dependency rule, no exceptions: `color` imports nothing intra-package;
 `formats` and `tui` import `color` only; `detect` imports `formats`;
 `themes` imports `color` + `formats` + `detect` (push resolves its target
-through the same `resolve()` the CLI does); `render` imports `color`;
-`editor` imports `render` + `tui` + `color`; `cli` imports everything.
-No cycles. Every module header cites its spec section.
+through the same `resolve()` the CLI does, and the native export asks
+`detect` for the config holding the `theme =` line); `render` imports
+`color`; `editor` imports `render` + `tui` + `color`; `cli` imports
+everything. No cycles. Every module header cites its spec section.
 
 **Injected seams keep those edges clean.** `editor.py` reaches the outside
 world through four callables `cli.py` builds: the save callback
@@ -49,7 +50,10 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   freely — canonical layout, written to a `.tmp` and renamed over the file,
   never partially written; anything under Ghostty/kitty/Alacritty config
   follows §6.2, which includes the push: it reuses `FORMATS[fmt]["write"]`,
-  never invents a key, and never re-serialises.
+  never invents a key, and never re-serialises. A `--ghostty-native` export
+  is the one deliberate exception, and it is a whole file *we* name inside
+  Ghostty's theme dir, opted into; the user's config still gets exactly one
+  line, the `theme =` pointer.
 - **Truth first, never rollback.** A save writes `themes.save()` and only
   then pushes; a push that fails is a report plus exit 1 and leaves the
   theme file exactly as written (spec decision 7).

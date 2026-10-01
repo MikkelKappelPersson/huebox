@@ -557,6 +557,168 @@ class Push(LibraryHome):
         self.assertEqual(self.read(odd), "background = #101014\n")
 
 
+class GhosttyNative(LibraryHome):
+    """§13.6 phase 2 — a Ghostty theme file of ours plus one `theme =` line.
+
+    The flag is opt-in (decision 22), so everything the phase-1 path
+    guarantees has to keep holding here too: a theme file only in
+    Ghostty's own themes dir, a config that moves exactly one line, and
+    not one word of the buffer's spelling invented.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.native = os.path.join(self.root, "ghostty", "themes", "ember")
+
+    def theme_file_on_disk(self):
+        with open(self.native, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_export_is_a_ghostty_theme_file_that_round_trips(self):
+        path = themes.export_ghostty_native("ember", FULL)
+        self.assertEqual(path, self.native)
+        self.assertEqual(themes.read_terminal("ghostty", path), FULL)
+        lines = self.theme_file_on_disk().splitlines()
+        self.assertEqual(lines[0], themes.GHOSTTY_HEADER)
+        self.assertEqual(lines[1:17], [f"palette = {i}={FULL[f'palette-{i}']}"
+                                      for i in range(16)])
+        self.assertEqual(lines[17:], [f"{slot} = {FULL[slot]}"
+                                      for slot in SLOTS[16:]])
+        self.assertEqual(len(lines), 23)
+        self.assertFalse(os.path.exists(path + ".tmp"))
+
+    def test_a_re_export_replaces_the_file_whole(self):
+        themes.export_ghostty_native("ember", FULL)
+        themes.export_ghostty_native("ember", dict(FULL, background="#010203"))
+        self.assertEqual(themes.read_terminal("ghostty", self.native),
+                         dict(FULL, background="#010203"))
+        self.assertEqual(len(self.theme_file_on_disk().splitlines()), 23)
+
+    def test_an_illegal_name_raises_before_anything_is_written(self):
+        for bad in ("bad name", "../escape", "a/b", ""):
+            with self.subTest(name=bad):
+                with self.assertRaises(themes.ThemeError):
+                    themes.export_ghostty_native(bad, FULL)
+        self.assertFalse(os.path.isdir(os.path.join(self.root, "ghostty")))
+
+    def test_a_gap_becomes_the_missing_grey_a_push_sends(self):
+        # §13.6: the truth file says all 22 slots have a value, so the
+        # terminal gets the same grey the editor showed
+        sparse = {slot: value for slot, value in FULL.items()
+                  if slot != "cursor-text"}
+        themes.export_ghostty_native("ember", sparse)
+        self.assertEqual(themes.read_terminal("ghostty", self.native)
+                         ["cursor-text"], MISSING)
+
+    def test_a_native_push_exports_and_points_the_main_config(self):
+        edited = dict(FULL, background="#010203")
+        result = themes.push(edited, to="ghostty", path=self.config,
+                             ghostty_native=True, name="ember")
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.native),))
+        report = "\n".join(result.lines)
+        self.assertIn(f"ghostty: exported {self.native}", report)
+        self.assertIn(f"theme = ember appended in {self.config}", report)
+        self.assertIn(f"background = #010203",
+                      self.theme_file_on_disk())
+        # the config itself gained the pointer line and nothing else
+        before = ghostty_text().splitlines()
+        after = self.read(self.config).splitlines()
+        self.assertEqual(after[:-1], before)
+        self.assertEqual(after[-1], "theme = ember")
+
+    def test_a_native_push_rewrites_the_pointer_it_finds(self):
+        config = self.write(os.path.join(self.root, "pointed.ghostty"),
+                            "# mine\ntheme   = \"ember\"   # keep\n"
+                            "font-size = 12\n")
+        # the main config holds no colours of its own; the theme file it
+        # points at does — which is exactly what §7.4 is for
+        old = os.path.join(self.root, "ghostty", "themes", "ember")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        self.write(old, "background = #101014\n")
+        result = themes.push(FULL, to="ghostty", path=config,
+                             ghostty_native=True, name="dusk")
+        self.assertFalse(result.failed)
+        lines = self.read(config).splitlines()
+        self.assertEqual(lines, ["# mine", 'theme   = "dusk"   # keep',
+                                 "font-size = 12"])
+        self.assertIn("ghostty: theme = dusk rewritten in",
+                      "\n".join(result.lines))
+        # the theme file the config pointed at is not ours and is untouched
+        self.assertEqual(self.read(old), "background = #101014\n")
+
+    def test_a_no_op_native_push_leaves_the_config_alone(self):
+        themes.push(FULL, to="ghostty", path=self.config,
+                    ghostty_native=True, name="ember")
+        stamp = os.path.getmtime(self.config) - 60
+        os.utime(self.config, (stamp, stamp))
+        result = themes.push(FULL, to="ghostty", path=self.config,
+                             ghostty_native=True, name="ember")
+        self.assertFalse(result.failed)
+        self.assertIn("theme = ember unchanged", "\n".join(result.lines))
+        self.assertEqual(os.path.getmtime(self.config), stamp)
+
+    def test_the_flag_leaves_kitty_and_alacritty_alone(self):
+        # a multi-target run with the flag exports for ghostty and pushes
+        # kitty the ordinary way — the flag is ghostty-scoped
+        kitty = self.write(os.path.join(self.root, "kitty.conf"), kitty_text())
+
+        def fake(name, path):
+            return {"ghostty": ("ghostty", self.config, None),
+                    "kitty": ("kitty", kitty, None)}[name]
+
+        with mock.patch.object(themes, "resolve", side_effect=fake), \
+                mock.patch.object(themes, "ghostty_main_config",
+                                  return_value=self.config):
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty,kitty", ghostty_native=True,
+                                 name="ember")
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.native),
+                                         ("kitty", kitty)))
+        self.assertIn("background = #010203", self.theme_file_on_disk())
+        self.assertIn("background            #010203", self.read(kitty))
+        self.assertIn("# kitty fixture", self.read(kitty))
+
+    def test_alacritty_is_pushed_the_ordinary_way(self):
+        alacritty = self.write(
+            os.path.join(self.root, "alacritty.toml"),
+            "[colors.primary]\nbackground = \"#101014\"\n"
+            "foreground = \"#eeeeee\"\n")
+        result = themes.push(dict(FULL, background="#010203"), to="alacritty",
+                             path=alacritty, ghostty_native=True, name="ember")
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("alacritty", alacritty),))
+        self.assertIn('background = "#010203"', self.read(alacritty))
+        self.assertFalse(os.path.exists(self.native))
+
+    def test_a_native_push_needs_a_theme_name(self):
+        with self.assertRaises(themes.ThemeError) as caught:
+            themes.push(FULL, to="ghostty", path=self.config,
+                        ghostty_native=True)
+        self.assertIn("needs a theme name", str(caught.exception))
+        self.assertEqual(self.read(self.config), ghostty_text())
+
+    def test_a_config_with_no_colours_is_still_not_a_target(self):
+        blank = self.write(os.path.join(self.root, "blank.ghostty"),
+                           "font-size = 12\n")
+        result = themes.push(FULL, to="ghostty", path=blank,
+                             ghostty_native=True, name="ember")
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("no colours in", "\n".join(result.lines))
+        self.assertEqual(self.read(blank), "font-size = 12\n")
+        self.assertFalse(os.path.exists(self.native))
+
+    def test_no_push_still_wins_over_the_flag(self):
+        before = self.read(self.config)
+        result = themes.push(FULL, to="ghostty", path=self.config,
+                             ghostty_native=True, name="ember", no_push=True)
+        self.assertEqual(result, themes.PushResult((), (), False))
+        self.assertEqual(self.read(self.config), before)
+        self.assertFalse(os.path.exists(self.native))
+
+
 class FakeTTY:
     """Just enough of a terminal for the editor's isatty check."""
 
@@ -613,8 +775,13 @@ class EditorWiring(LibraryHome):
         self.assertEqual(self.read(self.theme_file("ember")), original)
 
 
-class PushOnSave(LibraryHome):
-    """§13.6 - Ctrl+S in a theme session is truth first, terminal second."""
+class _PushSession(LibraryHome):
+    """Shared Ctrl+S harness for the push-on-save suites (§13.6).
+
+    The phase-1 tests live on `PushOnSave`, the native ones on
+    `GhosttyNativeOnSave` — the harness holds only the fixture and the
+    session runner so neither suite re-runs the other's cases.
+    """
 
     def setUp(self):
         super().setUp()
@@ -640,6 +807,10 @@ class PushOnSave(LibraryHome):
                 cli.Target("ember", "theme ember", self.theme_file("ember"),
                            themes.load("ember")), spec)
         return status, out.getvalue(), err.getvalue()
+
+
+class PushOnSave(_PushSession):
+    """§13.6 - Ctrl+S in a theme session is truth first, terminal second."""
 
     def test_ctrl_s_writes_truth_then_pushes(self):
         spec = cli.PushSpec(("kitty",), None, self.kitty, False)
@@ -709,6 +880,56 @@ class PushOnSave(LibraryHome):
         self.assertIn("saved ember (truth only)", out)
 
 
+class GhosttyNativeOnSave(_PushSession):
+    """The flag through the editor: Ctrl+S exports and points, in that order.
+
+    Same harness, native spec — the phase-1 guarantee lives on `PushOnSave`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.native = os.path.join(self.root, "ghostty", "themes", "ember")
+
+    def native_spec(self):
+        return cli.PushSpec(("ghostty",), None, self.config, False, True)
+
+    def test_ctrl_s_exports_a_theme_file_and_points_the_config(self):
+        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+                                        self.native_spec())
+        self.assertEqual(status, 0)
+        saved = themes.load("ember")             # truth first, always
+        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        self.assertEqual(themes.read_terminal("ghostty", self.native),
+                         saved)
+        # no inline colour was touched: the config grew one pointer line
+        before = ghostty_text().splitlines()
+        after = self.read(self.config).splitlines()
+        self.assertEqual(after[:-1], before)
+        self.assertEqual(after[-1], "theme = ember")
+        self.assertIn("saved ember → ghostty", out)
+        self.assertIn(f"huebox: ghostty: exported {self.native}", err)
+        self.assertIn(f"huebox: ghostty: theme = ember appended in "
+                      f"{self.config}", err)
+
+    def test_the_report_never_lands_inside_the_frame(self):
+        # §13.7: the report is printed after the session, never from the
+        # draw loop - so the frame cannot contain it
+        _status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+                                         self.native_spec())
+        self.assertNotIn("exported", out.replace("saved ember → ghostty", ""))
+        self.assertIn("exported", err)
+
+    def test_no_push_beats_the_flag_in_a_session_too(self):
+        spec = cli.PushSpec(("ghostty",), None, self.config, True, True)
+        before = self.read(self.config)
+        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.read(self.config), before)
+        self.assertFalse(os.path.exists(self.native))
+        self.assertIn("saved ember (truth only)", out)
+        self.assertIn("--no-push", err)
+
+
 class Picker(LibraryHome):
     """The picker and save-as-new against a real library (§13.7)."""
 
@@ -756,6 +977,18 @@ class Picker(LibraryHome):
             status = cli._run_editor(target or self.theme_target("ember"),
                                      spec if spec is not None else self.spec)
         return status, drawn, out.getvalue(), err.getvalue()
+
+    def test_a_direct_session_says_why_the_flag_cannot_apply(self):
+        # §13.4: a direct session has no theme, and a theme file needs a
+        # name - so the config is written and the note says so once
+        spec = cli.PushSpec(("ghostty",), None, self.config, False, True)
+        status, _drawn, _out, err = self.session(
+            ["x", editor.SAVE_KEY, "esc"], self.direct_target(), spec)
+        self.assertEqual(status, 0)
+        self.assertEqual(err.count("--ghostty-native needs a theme"), 1)
+        self.assertIn("background = ", self.read(self.config))
+        self.assertFalse(os.path.exists(os.path.join(
+            self.root, "ghostty", "themes", "ember")))
 
     def test_t_opens_the_picker_with_the_current_theme_marked(self):
         _, drawn, _, _ = self.session(["t", "esc", "esc"])
@@ -896,6 +1129,54 @@ class Cli(LibraryHome):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("huebox:", out.stderr)
         self.assertIn("background=#808080", out.stdout)
+
+    def test_use_with_ghostty_native_exports_and_points(self):
+        # §13.6 phase 2 end to end: a theme file in ghostty's own dir and
+        # one new line in the config, which keeps every colour it had
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        native = os.path.join(self.root, "ghostty", "themes", "ember")
+        themes.create("ember", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "ember", "--to", "ghostty",
+                           "--config", config, "--ghostty-native")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("current theme: ember", out.stdout)
+        self.assertIn(f"ghostty: exported {native}", out.stderr)
+        self.assertIn(f"ghostty: theme = ember appended in {config}",
+                      out.stderr)
+        self.assertEqual(themes.read_terminal("ghostty", native),
+                         dict(FULL, background="#010203"))
+        after = self.read(config)
+        self.assertEqual(after.splitlines()[:-1],
+                         ghostty_text().splitlines())   # not one colour moved
+        self.assertEqual(after.splitlines()[-1], "theme = ember")
+        # and the terminal finds its colours through the pointer now
+        found = self.run_cli("show")
+        self.assertIn("#010203", found.stdout)
+
+    def test_ghostty_native_without_a_push_is_refused_before_any_write(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        before, stamp = self.read(config), os.path.getmtime(config)
+        out = self.run_cli("use", "ember", "--to", "ghostty",
+                           "--config", config, "--ghostty-native", "--no-push")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("needs a push", out.stderr)
+        self.assertEqual(self.read(config), before)
+        self.assertEqual(os.path.getmtime(config), stamp)
+        self.assertFalse(os.path.exists(os.path.join(
+            self.root, "ghostty", "themes", "ember")))
+
+    def test_edit_accepts_the_flag_and_a_pipe_pushes_nothing(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        out = self.run_cli("edit", "ember", "--to", "ghostty",
+                           "--config", config, "--ghostty-native")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("not a terminal", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertEqual(self.read(config), ghostty_text())
+        self.assertFalse(os.path.exists(os.path.join(
+            self.root, "ghostty", "themes", "ember")))
 
     def test_import_snapshots_the_config_without_touching_current(self):
         out = self.run_cli("import", "ember", "--config", self.config)

@@ -13,6 +13,8 @@ A name argument means "a theme in ~/.config/huebox"; without one the v1
 terminal config is the subject. Saving or using a theme writes the truth
 file first and pushes it to the terminal second (§13.6, decision 7) - a push
 that fails is reported and exits 1, and the truth file stays written.
+`--ghostty-native` asks the ghostty target for the terminal's own theme
+file instead of an in-place config edit (§13.6 phase 2, decision 22).
 """
 
 from __future__ import annotations
@@ -37,8 +39,11 @@ ACTIONS = ("show", "edit", "new", "list", "use", "import")
 
 #: Where a save pushes, from `--to` / `--format` / `--config` / `--no-push`
 #: (§13.6). An empty `to` means "the terminal you are in", which only
-#: `resolve()` can answer.
-PushSpec = namedtuple("PushSpec", "to fmt path no_push")
+#: `resolve()` can answer. `ghostty_native` switches the ghostty target to
+#: the phase-2 path: a theme file in `~/.config/ghostty/themes` plus a
+#: `theme =` pointer, opt-in (decision 22).
+PushSpec = namedtuple("PushSpec", "to fmt path no_push ghostty_native",
+                      defaults=(False,))
 
 #: The two lines that are advice rather than report. Both are about the
 #: terminal, not the theme, so they belong to the caller that knows what it
@@ -74,6 +79,10 @@ def main(argv=None) -> int:
     parser.add_argument("--no-push", action="store_true",
                         help="write the theme file only, leave the terminal "
                              "config alone")
+    parser.add_argument("--ghostty-native", action="store_true",
+                        help="push to Ghostty as a theme file: write "
+                             "~/.config/ghostty/themes/<name> and point the "
+                             "config at it (ghostty targets only)")
     parser.add_argument("--dump", action="store_true",
                         help="print the resolved colours as key=value and exit")
     parser.add_argument("--formats", action="store_true",
@@ -179,7 +188,11 @@ def _push_spec(args) -> PushSpec:
     if to and args.config and len(to) > 1:
         raise themes.ThemeError("--config pushes one format; --to names "
                                 "several - drop --config or keep a single --to")
-    return PushSpec(tuple(to), args.format, args.config, args.no_push)
+    if args.ghostty_native and args.no_push:
+        raise themes.ThemeError("--ghostty-native needs a push; --no-push "
+                                "asks for none")
+    return PushSpec(tuple(to), args.format, args.config, args.no_push,
+                    args.ghostty_native)
 
 
 def _push_lines(result) -> list:
@@ -302,6 +315,7 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
     notes: list = []           # the picker's complaints, printed the same way
     failed: list = []          # non-empty when a push did not get through
     direct_warned = [False]    # --to-in-direct-mode note fires once
+    native_warned = [False]    # so does --ghostty-native with nothing to name
 
     def write(theme, path, values):
         if theme is None:      # legacy direct mode: the config is the truth
@@ -309,6 +323,11 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
                 direct_warned[0] = True
                 notes.append("--to has no push target in a direct session "
                              "- the config itself is written")
+            if spec.ghostty_native and not native_warned[0]:
+                native_warned[0] = True
+                notes.append("--ghostty-native needs a theme to name a file "
+                             "after - a direct session writes the config "
+                             "(N saves the buffer as a theme)")
             return FORMATS[direct_fmt]["write"](path, values)
         themes.save(theme, values)          # truth first, always
         del report[:]                      # one report: this save's
@@ -316,7 +335,8 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
         if spec.no_push:
             report.append(NO_PUSH_LINE)
             return f"saved {theme} (truth only)"
-        result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path)
+        result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path,
+                             ghostty_native=spec.ghostty_native, name=theme)
         report.extend(_push_lines(result))
         if result.failed:
             failed.append(result)
@@ -498,7 +518,8 @@ def _cmd_use(args, spec: PushSpec) -> int:
     slots = themes.load(name, warnings)     # a hand-edited theme still says
     for warning in warnings:                 # what it could not read (§13.2)
         _warn(warning)
-    result = themes.push(slots, to=spec.to, fmt=spec.fmt, path=spec.path)
+    result = themes.push(slots, to=spec.to, fmt=spec.fmt, path=spec.path,
+                         ghostty_native=spec.ghostty_native, name=name)
     for line in _push_lines(result):
         _warn(line)
     return 1 if result.failed else 0

@@ -102,7 +102,36 @@ editing, so it updates *before* you reload.
 
 A config is only ever edited line by line, so a colour the config does not
 define is reported (`not carried by this config: cursor-text, …`) and left
-alone — huebox will not invent a line in your terminal's config.
+alone — huebox will not invent a line in your terminal's config. A Ghostty
+theme file is the one file huebox writes whole, and only because the user
+asked for it with `--ghostty-native`.
+
+### Ghostty themes
+
+Ghostty keeps its colours in theme files, and a push can join it there
+instead of editing whatever file the colours sit in today. Opt in with
+`--ghostty-native`:
+
+```sh
+huebox use dusk --to ghostty --ghostty-native     # or edit dusk + Ctrl+S
+```
+
+That writes `~/.config/ghostty/themes/dusk` — 22 colours, in Ghostty's own
+`palette = 0=#…` spelling, read back by huebox without drift — and points
+your main config at it with a single `theme =` line: an existing one keeps
+its spacing, its quotes and its comment and only the value changes, a config
+without one gets the line appended, and every other byte of the file is left
+exactly as it was. Your previous theme file is not touched. The themes
+directory is shared with Ghostty's built-ins, so an export overwrites a
+same-name file there (the report tells you when it did).
+
+It is opt-in because that `theme =` line is a layout choice in *your* main
+config, not a colour: without the flag huebox keeps updating the file your
+colours already live in, which is the safer default. The flag applies to the
+ghostty target only — `--to ghostty,kitty` exports for Ghostty and pushes
+kitty the ordinary way — and it cannot be combined with `--no-push`. The
+two modes also compose: after a native push, a plain push follows the
+pointer and updates that theme file in place.
 
 ## Supported terminals
 

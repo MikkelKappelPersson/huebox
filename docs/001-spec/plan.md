@@ -311,19 +311,50 @@ the undo log and the selection (§13.7, P2 review).
 Behind an opt-in flag (open question 2 leans opt-in; default decided at
 review): `--ghostty-native`.
 
+As built (decision 22: **opt-in**, phase 1 unchanged as the default):
+
 - `themes.py`: `export_ghostty_native(name, slots) -> path` writes
-  `~/.config/ghostty/themes/<name>` using `write_flat` + `GHOSTTY_RULES`
+  `$XDG_CONFIG_HOME/ghostty/themes/<name>` via write_flat + GHOSTTY_RULES
   over a canonical template (all 22 lines, `palette = 0=#…` + named) — same
-  dialect, same writer, round-trip-safe by construction.
+  dialect, same writer, round-trip-safe by construction. The template goes
+  to a sibling tmp, `FORMATS["ghostty"]["write"]` splices the values in,
+  `os.replace` finishes it: one rename, never a half theme. The name goes
+  through `valid_name` (it is a file name in a directory we do not own) and
+  a gap slot is written as the same `MISSING` grey a push sends.
 - `detect.py`: `ensure_theme_pointer(config_path, name)` rewrites the
-  `theme =` line in the main Ghostty config (value swap, comments intact) or
-  appends `theme = name` if absent. Other theme files untouched.
+  `theme =` line in the main Ghostty config (value swap, spacing, quotes
+  and trailing comment intact) or appends `theme = name` if absent; a config
+  already pointing at `name` is not rewritten at all, so a no-op save keeps
+  its mtime. Other theme files untouched. Returns
+  `unchanged` / `rewritten` / `appended` for the report.
+- Two seams the plan did not name, both forced by §7: **`ghostty_main_config()`**
+  — the pointer goes in the file that *holds* `theme =`, not the one
+  `resolve()` follows to the colours — and **`config_holds_colours()`**, the
+  §7.3 "has colours" question asked of a *chain*, so a main config that
+  holds nothing but a pointer still counts as a terminal while a dangling
+  pointer still does not.
+- `_ghostty_theme_file` now reads the value with the same `THEME_LINE`
+  regex the writer uses. A trailing comment on `theme = ember  # mine` used
+  to make the reader look for a file called `ember"   # mine`, which is why
+  the reader and the writer had to be pinned by one test.
+- The writer opens with `newline=""` on both ends: universal newlines would
+  have rewritten a CRLF config, and `surrogateescape` carries a non-UTF-8 one
+  through byte for byte.
 - Push to Ghostty with the flag: export + pointer, instead of the inline
-  phase-1 path. kitty/Alacritty unaffected.
+  phase-1 path. kitty/Alacritty unaffected (a `--to ghostty,kitty` run
+  exports for ghostty and pushes kitty the ordinary way).
+- `push()` grew `ghostty_native` and `name`; `PushSpec` grew
+  `ghostty_native` (default `False`, so the existing four-argument
+  constructions in the suite still work). `--ghostty-native --no-push` is
+  refused before anything is written, and a legacy direct session has no
+  name to export under — it writes the config and says so in the
+  post-session `notes` list, never inside the frame.
 - Tests: exported file round-trips via `read_flat`; pointer rewrite
-  preserves the config byte-for-byte except the theme line; append case;
-  shipped-theme copies no longer needed for push (existing `_ghostty_theme_file`
-  copy path stays for legacy inline mode).
+  preserves the config byte-for-byte except the theme line; append case
+  (config without `theme =`, with and without a trailing newline);
+  kitty/Alacritty unaffected; illegal name; CLI `use`/`edit` end to end;
+  shipped-theme copies no longer needed for push (existing
+  `_ghostty_theme_file` copy path stays for legacy inline mode).
 
 ## Phase 7 — hygiene (continuous, batched last)
 
