@@ -101,20 +101,24 @@ Run `huebox edit` and drive it with the keyboard.
 Edits live in an in-memory buffer: nothing is written until you press
 `Ctrl+S`. The editor *renders* from that buffer, so everything on screen —
 palette, interface, code sample, and the background / selection / cursor
-examples — is live and truecolor before the file changes. Quit with unsaved
-changes and huebox asks for a second `Esc` first; `r` throws the buffer away
-and goes back to your last save.
+examples — is live and truecolor before the file changes (a frame with room to
+spare also shows a git diff of the sample). Quit with unsaved changes and
+huebox asks for a second `Esc` first; `r` throws the buffer away and goes
+back to your last save.
 
 The header names what you are editing: `ember ● ghostty` for a theme (the `●`
 marks unsaved buffer changes) or `direct:/path/to/config` in a legacy
 direct-config session. `t` opens the theme picker without leaving the editor:
-arrows and `Enter` to open a theme, `n` to make one from the buffer you are
-looking at, `Esc` to go back. Opening a theme while the buffer has unsaved
-edits is refused with `save (Ctrl+S) or revert (r) first` rather than losing
-them. `N` is the way out of a direct-config session: it asks for a name, makes
-the theme, makes it current, and saves it through the same pipeline. If a name
-is already taken, huebox says so and waits for `y` (overwrite) or another name
-— no modal, and nothing is written until you answer.
+arrows and `Enter` to use a theme, `n` to make one from the buffer you are
+looking at, `Esc` to go back. `Enter` is a save, not a peek — it writes the
+theme, pushes it and reloads your terminal, so the theme you pick is the one
+on screen; `Ctrl+S` stays for the buffer's own edits. Opening a theme while
+the buffer has unsaved edits is refused with
+`save (Ctrl+S) or revert (r) first` rather than losing them. `N` is the way
+out of a direct-config session: it asks for a name, makes the theme, makes it
+current, and saves it through the same pipeline. If a name is already taken,
+huebox says so and waits for `y` (overwrite) or another name — no modal, and
+nothing is written until you answer.
 
 `Ctrl+S` is two writes: the theme file first, then a push into the terminal
 config that holds your colours — the status bar says which
@@ -123,10 +127,17 @@ back: if a push fails, the save still stands, huebox says why on stderr, and
 the session ends with exit 1. Editing a terminal config directly (no themes
 yet) takes a `<config>.huebox.bak` on its first save; theme files get none.
 
-Reload your terminal — Ghostty `Ctrl+Shift+,`, kitty `Ctrl+Shift+F5`,
-alacritty picks changes up automatically — and the new colours are live. The
-code sample inside the editor is rendered in truecolor from the values you are
-editing, so it updates *before* you reload.
+A push that lands asks the terminal to re-read its config, so the new colours
+are live when the command finishes: ghostty is signalled the way `Ctrl+Shift+,`
+signals it and kitty is asked over its own remote control. A terminal that
+cannot be told keeps the advice line in the report — `Ctrl+Shift+,` for
+ghostty, `Ctrl+Shift+F5` for kitty, and alacritty picks changes up by itself.
+`--no-reload` turns the whole step off. The code sample inside the editor is
+rendered in truecolor from the values you are editing, so it updates *before*
+the reload. A tall enough frame also draws a
+git diff of that sample — `+` lines wear palette 2, `-` lines palette 1 — so a
+theme whose red and green are wrong says so before you reload; the hunk is
+drawn only out of rows the sample did not need, so it never costs it a line.
 
 A config is only ever edited line by line, so a colour the config does not
 define is reported (`not carried by this config: cursor-text, …`) and left

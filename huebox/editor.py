@@ -20,8 +20,8 @@ from typing import NamedTuple
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
-from .render import (BOLD, DIM, RESET, bg, clip, example_lines, fg, pack,
-                     sample_lines)
+from .render import (BOLD, DIM, RESET, bg, clip, diff_lines, example_lines,
+                     fg, pack, sample_lines)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
                   term_size)
 
@@ -48,15 +48,21 @@ THEME_HINTS = ["arrows move", "Enter open", "n new from buffer",
 
 # §15 — what a short terminal spends, in order. The frame sheds its
 # decoration (the palette legend, then the blank separators nearest the
-# widgets) before it sheds a widget, and the two live widgets share what is
-# left: the strip gives up rows before the code sample loses a line, because
-# the sample is the widget the editor exists to show (§9).
+# widgets) before it sheds a widget, and the three live widgets share what
+# is left: the strip gives up rows first, then the diff, and the sample's
+# tail goes before either, because the sample is the widget the editor
+# exists to show (§9).
 PALETTE_LEGEND = f"  {DIM}0-7 base   8-15 bright{RESET}"
 EXAMPLES_ROWS = 4                    # the strip whole: header + three rows
 EXAMPLES_FLOOR = 2                   # header + one row; below this it goes
+DIFF_ROWS = 6                        # the diff whole: header + hunk + two pairs
+DIFF_FLOOR = 4                       # header + hunk + one removed/added pair
 SAMPLE_FLOOR = 4                     # the code block: header + three lines
 # what the frame keeps free for the widgets before it touches a widget:
-# the strip whole, the sample at its floor, and a row of air under it
+# the strip whole, the sample at its floor, and a row of air under it.
+# The diff is not counted: it is drawn only out of rows the sample did not
+# need (§15), so promising its rows here would spend decoration on a widget
+# the frame cannot show.
 WIDGET_BUDGET = EXAMPLES_ROWS + SAMPLE_FLOOR + 1
 
 # a state starts at the width `term_size()` falls back to; the draw loop
@@ -360,6 +366,10 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         extra.append(f"  {BOLD}examples{RESET} "
                      f"{DIM}(live buffer: background / selection / cursor){RESET}")
         extra.extend(example_lines(slots, cols - 2)[:examples - 1])
+    # §15 — the diff is the last widget to get a row and the first to give
+    # one back: it grows out of what the sample did not need, so where the
+    # two compete the sample stays whole and the hunk does not appear
+    diff = []
     if room_left() >= 2:             # header plus at least one line
         code = [line for line, _ in sample_lines(slots)]
         if code and not code[-1].strip():
@@ -373,6 +383,18 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 else [line for line in code[1:-1] if line.strip()])
         take = min(len(code), max(1, room_left() - 1))   # -1 for the header
         if take:
+            spare_rows = room_left() - 1 - take
+            # the body is the `@@` line and whole removed/added pairs, so a
+            # cut frame loses pairs and never shows half of one
+            rows_left = min(DIFF_ROWS - 1, max(0, spare_rows - 1))
+            rows_left -= (rows_left - 1) % 2
+            if rows_left >= DIFF_FLOOR - 1:
+                diff = [f"  {BOLD}live diff{RESET} "
+                        f"{DIM}(git-style: + added, - removed){RESET}"]
+                diff.extend(diff_lines(slots, cols - 2)[:rows_left])
+                if spare_rows - rows_left - 1 >= 2:   # rows to spare
+                    diff.append("")   # the separator is a row of its own
+            extra.extend(diff)      # the hunk draws above the sample
             extra.append(f"  {BOLD}live code{RESET} "
                          f"{DIM}(truecolor, no reload needed){RESET}")
             extra.extend("    " + line.replace(RESET, RESET + "    ")

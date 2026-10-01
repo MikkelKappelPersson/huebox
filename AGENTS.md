@@ -22,7 +22,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty` (TOML); registry in `__init__` | §6 |
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads and the pointer writer, `config_holds_colours`, `resolve()` | §7 |
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, Ghostty native export, `RAMP` | §13, §13.6 |
-| `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip | §8, §14 |
+| `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip, live diff | §8, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |

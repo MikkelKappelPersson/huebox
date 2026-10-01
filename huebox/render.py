@@ -295,6 +295,49 @@ def example_lines(slots, cols=None):
 
 
 # --------------------------------------------------------------------------
+# live diff (§14.4)
+# --------------------------------------------------------------------------
+
+# A git hunk over the sample above it, so the block reads as one story: the
+# program you are looking at, and the change someone would commit. A diff has
+# no lexer behind it — `@@` and the two signs are the whole vocabulary — so
+# the mapping is four slots and no Pygments.
+DIFF_MARKS = "palette-6"            # the @@ that opens a hunk
+# the hunk header's tail and any unchanged line: muted, like a comment (§8)
+DIFF_CONTEXT = "palette-8"
+DIFF_ADDED = "palette-2"            # + in green
+DIFF_REMOVED = "palette-1"          # - in red
+DIFF_HUNK = ("@@", "-6,2 +6,2", "@@ pub fn main() !void {")
+DIFF_BODY = (("-", 'var count: u32 = 42;   // your palette'),
+             ("+", 'var count: u32 = 0x2A;  // your palette'),
+             ("-", 'std.debug.print("{d} colours\\n", .{count});'),
+             ("+", 'std.debug.print("{d} slots\\n", .{count});'))
+DIFF_SIGNS = {"+": DIFF_ADDED, "-": DIFF_REMOVED, " ": DIFF_CONTEXT}
+DIFF_INDENT = "    "                # the block's own indent, as the sample has
+
+
+def diff_lines(slots, cols=None):
+    """The live diff hunk: removed red, added green (§14.4).
+
+    Pure like `sample_lines` and `example_lines`: every colour is read out
+    of `slots` on the call, so one keystroke repaints both sides of the
+    hunk on the same frame. Only the two signs are loud — the `@@` and
+    everything after it wear the comment slot, which is the reading git
+    gives the same lines. The indent is painted here rather than by the
+    editor's reset-splice so that the hunk header's two halves line up.
+    """
+    def paint(text, slot):
+        return f"{fg(slots.get(slot, MISSING))}{text}{RESET}"
+
+    marks, counts, context = DIFF_HUNK
+    rows = [DIFF_INDENT + paint(marks, DIFF_MARKS)
+            + paint(f" {counts} {context}", DIFF_CONTEXT)]
+    for sign, text in DIFF_BODY:
+        rows.append(DIFF_INDENT + paint(sign + text, DIFF_SIGNS[sign]))
+    return [clip(row, cols) if cols is not None else row for row in rows]
+
+
+# --------------------------------------------------------------------------
 # static preview
 # --------------------------------------------------------------------------
 
