@@ -81,7 +81,7 @@ format.
 ## Development
 
 ```sh
-python3 -m unittest test_huebox -v
+python3 -m unittest discover -s tests
 ```
 
 The tests cover reading every slot, round-tripping without drift, changing

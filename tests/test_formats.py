@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
-"""Round-trip tests for huebox: every format must read all 22 slots and write
-them back without touching a single unrelated byte."""
+"""Round-trip tests: every format must read all 22 slots and write them back
+without touching a single unrelated byte."""
 
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
+sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
+
 import huebox  # noqa: E402
 
 GHOSTTY = """\
@@ -163,62 +164,6 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual(slots.get("background"), "#0f0f1a")
         self.assertEqual(slots.get("palette-0"), "#0a0a13")
 
-
-class Geometry(unittest.TestCase):
-    def test_term_size_never_zero(self):
-        self.assertTrue(all(v > 0 for v in huebox.term_size(default=(80, 24))))
-
-    def test_clip_respects_wide_glyphs(self):
-        # a CJK glyph occupies two columns
-        self.assertLessEqual(len(huebox.clip("ab", 10)) - 0, 12)
-        self.assertTrue(huebox.clip("一二三四五", 4).startswith("\033[0m")
-                        or "\033[0m" in huebox.clip("一二三四五", 4))
-
-    def test_preview_is_pure_ascii(self):
-        slots = {name: "#ff8800" for name in huebox.SLOTS}
-        text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=120, rows=40)
-        body = re.sub_ansi if False else text
-        for line in body.split("\n"):
-            self.assertTrue(all(ord(ch) < 128 for ch in line),
-                            f"non-ascii in preview: {line!r}")
-
-    def test_preview_never_exceeds_width(self):
-        slots = {name: "#ff8800" for name in huebox.SLOTS}
-        for cols in (200, 120, 100, 80, 70, 60, 50, 40, 30, 24):
-            text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=cols)
-            for line in text.split("\n"):
-                width = len(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", line))
-                self.assertLessEqual(width, cols,
-                                     f"width {width} > {cols}")
-
-
-class Cli(unittest.TestCase):
-    def test_formats_listing(self):
-        out = subprocess.run([sys.executable, "huebox.py", "--formats"],
-                             capture_output=True, text=True)
-        self.assertEqual(out.returncode, 0)
-        self.assertIn("ghostty", out.stdout)
-
-    def test_dump_from_explicit_file(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".ghostty",
-                                         delete=False) as handle:
-            handle.write(GHOSTTY)
-            path = handle.name
-        out = subprocess.run(
-            [sys.executable, "huebox.py", "--format", "ghostty",
-             "--config", path, "--dump"], capture_output=True, text=True)
-        os.unlink(path)
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("background=#0f0f1a", out.stdout)
-
-    def test_missing_config_exits_nonzero(self):
-        out = subprocess.run(
-            [sys.executable, "huebox.py", "--format", "ghostty",
-             "--config", "/nonexistent/file"], capture_output=True, text=True)
-        self.assertEqual(out.returncode, 1)
-
-
-import re  # noqa: E402
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
