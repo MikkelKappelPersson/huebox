@@ -31,12 +31,9 @@ cd huebox
 pipx install .          # or: pip install --user .
 ```
 
-No third-party dependencies. [Pygments](https://pygments.org) is optional and
-only improves the code sample in the editor:
-
-```sh
-pipx install '.[highlight]'
-```
+The one dependency beyond the stdlib is [Pygments](https://pygments.org),
+which powers the editor's live code sample — it installs automatically,
+and every colour in the sample comes from the theme's own palette.
 
 ## What's new in 2.0
 

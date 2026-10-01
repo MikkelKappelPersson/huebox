@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import unicodedata
 
+from pygments import lex
+from pygments.lexers import get_lexer_by_name
+from pygments.token import Token
+
 from .color import MISSING, NAMED, hex_to_rgb, readable_fg
 
 RESET = "\033[0m"
@@ -83,6 +87,7 @@ SAMPLE_LINES = [
 
 
 def _slot_for_token(token, slots) -> str:
+    """Map a Pygments token class to the palette slot that colours it."""
     if token is None:
         return "foreground"
     mapping = [("Comment", "palette-8"), ("Keyword", "palette-5"),
@@ -93,10 +98,6 @@ def _slot_for_token(token, slots) -> str:
                ("Operator", "palette-5"), ("Name.Exception", "palette-1"),
                ("Generic", "palette-11"), ("Punctuation", "foreground"),
                ("Error", "palette-1")]
-    try:
-        from pygments.token import Token
-    except Exception:
-        return "foreground"
     for name, slot in mapping:
         probe = Token
         for part in name.split("."):
@@ -112,19 +113,17 @@ _sample_cache = None
 
 
 def sample_lines(slots):
-    """Tokenise the sample once, then colour it from the live slot values."""
+    """Tokenise the sample once, then colour it from the live slot values.
+
+    Pygments is a declared dependency (spec §9), so the fallback-free
+    import sits at module level; the cache keeps the lexing to one pass
+    per session — the COLOURS are still read per frame from `slots`, so
+    the sample stays live (§14.1).
+    """
     global _sample_cache
     if _sample_cache is None:
-        try:
-            from pygments import lex
-            from pygments.lexers import get_lexer_by_name
-            source = "\n".join(text for text, _ in SAMPLE_LINES)
-            _sample_cache = list(lex(source, get_lexer_by_name("zig")))
-        except Exception:
-            _sample_cache = None
-    if not _sample_cache:
-        return [(fg(slots.get("foreground", "#ededfe")) + text + RESET, 0)
-                for text, _ in SAMPLE_LINES]
+        _sample_cache = list(lex("\n".join(text for text, _ in SAMPLE_LINES),
+                                 get_lexer_by_name("zig")))
     out, current = [], None
     for token, text in _sample_cache:
         if not text:

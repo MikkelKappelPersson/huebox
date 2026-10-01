@@ -292,9 +292,10 @@ line instead of a garbled frame. Settled in phase 5, when the picker landed.
 ## 9. Non-functional requirements
 
 - Python ≥ 3.9.
-- **Zero required third-party dependencies.** Pygments is optional and only
-  affects the sample.
-- Single module, stdlib only, installable via `pipx`.
+- **One third-party dependency: Pygments**, and only for the editor's live
+  code sample — it is a declared dependency, not an extra, because the
+  sample is half the show. Everything else is stdlib.
+- A small package (§17), installable via `pipx` or `uv tool`.
 - No network access at runtime, for any command.
 - No writes outside the resolved config and its backup.
 

@@ -18,11 +18,7 @@ classifiers = [
     "Topic :: Terminals",
     "Topic :: Utilities",
 ]
-dependencies = []
-
-[project.optional-dependencies]
-# only used for the syntax-highlighted sample in the editor
-highlight = ["Pygments>=2.0"]
+dependencies = ["Pygments>=2.0"]
 
 [project.scripts]
 huebox = "huebox.cli:main"

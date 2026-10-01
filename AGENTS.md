@@ -1,7 +1,8 @@
 # AGENTS.md — huebox
 
-Terminal theme editor with live preview. Stdlib only, Python ≥ 3.9, zero
-required third-party dependencies (Pygments optional, code sample only).
+Terminal theme editor with live preview. Python ≥ 3.9; Pygments is the one
+third-party dependency (the editor's live code sample), everything else is
+stdlib.
 
 **Spec-first:** `docs/001-spec/spec.md` is the source of truth for *what*
 huebox does. Change the spec alongside the code — a behaviour change with no
