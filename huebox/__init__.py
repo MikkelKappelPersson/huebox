@@ -11,7 +11,7 @@ __version__ = "1.0.0"
 from .cli import main
 from .color import MISSING, NAMED, PALETTE, SLOTS
 from .formats import FORMAT_NAMES, FORMATS
-from .render import clip, pack, render_preview, sample_lines
+from .render import (clip, example_lines, pack, render_preview, sample_lines)
 from .tui import term_size
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "FORMAT_NAMES",
     "clip",
     "pack",
+    "example_lines",
     "render_preview",
     "sample_lines",
     "term_size",

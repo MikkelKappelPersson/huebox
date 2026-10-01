@@ -75,13 +75,19 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `z` / `x` | lightness −/+ |
 | `f` | cycle step multiplier ×1 → ×5 → ×20 |
 | `i` | type a hex value directly |
-| `Ctrl+S` | save (changes are already written live) |
-| `u` / `r` | undo / revert everything |
-| `Esc` | quit |
+| `Ctrl+S` | save — the session's only write (§14.2) |
+| `u` / `r` | undo / revert to the last save |
+| `Esc` | quit — twice if the buffer is dirty |
 
-> Planned (§14): keystrokes stop writing the file. They mutate an in-memory
-> buffer that renders live; Ctrl+S becomes the real save point and Esc
-discards a dirty buffer only on a second press.
+Since §14, keystrokes do not write the file. They mutate an in-memory buffer
+that renders live; `Ctrl+S` is the save point, `r` reverts to the last save
+(not to session start), undo survives saves, and Esc on a dirty buffer arms
+`unsaved changes — Esc again to discard` instead of dropping the edits. `Q`
+and `Ctrl+C` take the same path as Esc; `Ctrl+C` inside a prompt cancels the
+prompt instead of quitting. Since §14 only the HSL keys and hex entry no-op
+while the selected slot has no value — save, undo, revert and navigation work
+regardless (v1 blocked every action on it). The `<config>.huebox.bak` is
+taken at the first save of a session, not at editor open (§14.2).
 
 **TODO — raw-mode cleanup.** On `Esc`, an interrupt or a crash while in raw mode,
 the terminal must be restored. Specify the exact restoration sequence and the
@@ -249,6 +255,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 12 | Switching themes is blocked while the buffer is dirty | Choosing a theme must never silently drop edits |
 | 13 | `huebox.py` becomes package `huebox/`, one module per spec area (§17) | The theme library needs somewhere maintainable to live; split first, behaviour-neutral |
 | 14 | AGENTS.md owns architecture + guidelines; the spec owns behaviour | Keeps “what” and “how” in the doc each reader reaches for |
+| 15 | No autosave: the buffer is written only when the user presses Ctrl+S | Staging exists so edits are deliberate; a timer would write on every idle and make the save key meaningless |
 
 ---
 
@@ -407,14 +414,18 @@ and hex, each updating per keystroke.
   get no `.bak` — huebox owns them (history/versioning is an open question).
 - Esc with a clean buffer quits. Esc with a dirty buffer arms
   `unsaved changes — Esc again to discard`; the second Esc discards. Ctrl+C
-  follows the Esc path (raw-mode restoration, §4.3 TODO, still required).
+  follows the Esc path; during a prompt it cancels the prompt (raw-mode
+  restoration, §4.3 TODO, still required). A write failure surfaces as
+  `write failed: …` in the status bar and leaves the buffer dirty — `saved`
+  is never snapshot on a failed write.
 - `--dump` and `show` read saved files only. The buffer lives and dies inside
   the editor process.
 
 ### 14.3 Open questions (§14)
 
-1. Autosave timer (save N seconds after the last keystroke) — yes or heresy?
-   Proposal: no. Explicit save is the point of staging.
+1. Autosave timer (save N seconds after the last keystroke) — **decided: no**
+   (decision 15). Explicit save is the point of staging; a timer would write
+   the config on every idle, which is exactly the churn the buffer removes.
 2. Theme file history / versions inside `~/.config/huebox` — later?
 
 ## 15. Responsive layout — the plan

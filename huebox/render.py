@@ -1,7 +1,9 @@
-"""ANSI output, layout primitives, samples and the static preview (§8).
+"""ANSI output, layout primitives, samples and the static preview (§8, §14.1).
 
 This module is pure: everything renders from the passed-in slots and size,
-never from the terminal itself. That keeps the §15 layout tests simple.
+never from the terminal itself. That keeps the §15 layout tests simple, and
+it is what makes the live-everything property (§14.1) hold by construction —
+no colour survives a frame.
 """
 
 from __future__ import annotations
@@ -135,6 +137,67 @@ def sample_lines(slots):
     out.append(RESET)
     body = "".join(out)
     return [(line, 0) for line in body.split("\n")]
+
+
+# --------------------------------------------------------------------------
+# live examples strip (§14.1)
+# --------------------------------------------------------------------------
+
+EXAMPLE_PHRASE = "The quick brown fox jumps over the lazy dog"
+CURSOR_BLOCK = "██"                 # a solid block, one column per glyph
+LABEL_WIDTH = 21                    # widest name (20) + one padding column
+
+
+def example_lines(slots, cols=None):
+    """The three live example rows: background, selection, cursor (§14.1).
+
+    Pure like `sample_lines`: every colour is read out of `slots` on each
+    call, so a single slot change moves the background, the highlight and
+    the cursor on the same frame. `cols` is the width the caller can spend
+    (optional): the sample text folds to fit through `pack`, the row is
+    finally `clip`ped, so the strip never overflows or wraps badly.
+    """
+    def value(name):
+        return slots.get(name, MISSING)
+
+    # (label, hex shown, fill colour, [(text, slot for bg, slot for fg)])
+    rows = [
+        ("background", value("background"), value("background"),
+         [(EXAMPLE_PHRASE, "background", "foreground")]),
+        ("selection-background", value("selection-background"),
+         value("selection-background"),
+         [("selected text", "selection-background", "selection-foreground")]),
+        ("cursor-color", value("cursor-color"), value("background"),
+         [(CURSOR_BLOCK, "cursor-color", "cursor-text"),
+          ("I", "background", "cursor-text")]),
+    ]
+    out = []
+    for label, label_hex, fill, segments in rows:
+        head = f"  {label:<{LABEL_WIDTH}} "
+        room = None if cols is None else cols - len(head)
+        if room is not None and room - 8 >= 12:
+            # wide enough to carry the hex too; drop it before the text
+            head += f"{label_hex} "
+            room -= len(label_hex) + 1
+        plain = "".join(chunk for chunk, _, _ in segments)
+        if room is not None:
+            # pack keeps whole words: fold instead of cutting mid-word
+            plain = (pack(plain.split(), max(4, room - 2), sep=" ")
+                     or [""])[0]
+        painted = ""
+        rest = plain
+        for chunk, chunk_bg, chunk_fg in segments:
+            # consume the folded text segment by segment: the tail of a long
+            # segment falls away with the fold, shorter ones drop out whole
+            take, rest = rest[:len(chunk)], rest[len(chunk):]
+            if take:
+                painted += (f"{bg(value(chunk_bg))}{fg(value(chunk_fg))}"
+                            f"{take}{RESET}")
+        if room is not None:
+            painted += f"{bg(value(fill))}{' ' * max(0, room - len(plain))}{RESET}"
+        row = head + painted
+        out.append(clip(row, cols) if cols is not None else row)
+    return out
 
 
 # --------------------------------------------------------------------------

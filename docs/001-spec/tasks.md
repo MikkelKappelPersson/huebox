@@ -46,19 +46,27 @@ static `show` path and every width primitive are unchanged.
 
 ## P2 — staged editing + live examples (§14, plan phase 2)
 
-- [ ] `editor.py`: `EditorState` (slots/saved/sel/undo/status/mult/armed/written)
+- [x] `editor.py`: `EditorState` (slots/saved/sel/undo/status/mult/armed/written)
       + `apply_key(key, st)` pure seam; `edit()` loop slims to draw/read/apply
-- [ ] save semantics: Ctrl+S → write → `saved` snapshot → first-save backup;
+- [x] save semantics: Ctrl+S → write → `saved` snapshot → first-save backup;
       `r` reverts to last save; undo survives saves
-- [ ] Esc: dirty → armed (`Esc again to discard`), armed → quit; other keys
+- [x] Esc: dirty → armed (`Esc again to discard`), armed → quit; other keys
       disarm; Ctrl+C same path; clean Esc quits
-- [ ] `render.py`: `example_lines(slots)` — background / selection / cursor
+- [x] `render.py`: `example_lines(slots)` — background / selection / cursor
       rows, all through clip/pack, rebuilt per frame (§14.1)
-- [ ] `editor.py`: examples strip joins the extra budget above the code sample
-- [ ] tests: apply_key matrix, dirty tracking, backup-once, live-everything
+- [x] `editor.py`: examples strip joins the extra budget above the code sample
+- [x] tests: apply_key matrix, dirty tracking, backup-once, live-everything
       (buffer change → all example rows change), frame reflects unsaved buffer
-- [ ] spec: §4.3 planned-note → actual semantics; open question on autosave
-      answered (no)
+- [x] spec: §4.3 planned-note → actual semantics; open question on autosave
+      answered (no, decision 15)
+
+Notes: the write callback is `write(slots) -> status | None`, so P4 can return
+`saved ember → ghostty` without touching the key switch. The backup is taken
+*before* the first write (pre-save snapshot) and never refreshed. `edit()`
+takes `backup=False` for files huebox owns (P3 theme files). Adjust/prompt
+still no-op on a slot the config does not carry, but save/undo/revert no
+longer depend on the selection. P1's "one write per key" loop assertion is
+replaced by the staged model (writes only on Ctrl+S).
 
 ## P3 — theme library storage + CLI (§13.1–13.5, plan phase 3)
 
@@ -96,6 +104,9 @@ static `show` path and every width primitive are unchanged.
 
 ## P5 — TUI picker + save-as-new (§13.7, plan phase 5)
 
+- [ ] reset `armed` when the overlay loads another theme (P2 review note:
+      the armed flag persists post-quit by design — harmless there, but a
+      fresh theme must not inherit a pending discard)
 - [ ] `editor.py`: `t` overlay (list/pack rows, arrows, Enter opens + sets
       current, `n` new-from-buffer via name prompt, Esc back)
 - [ ] dirty-switch block with `save (Ctrl+S) or revert (r) first`

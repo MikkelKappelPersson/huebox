@@ -41,13 +41,17 @@ Run `huebox edit` and drive it with the keyboard.
 | `z` / `x` | lightness −/+ |
 | `f` | cycle step size ×1 → ×5 → ×20 |
 | `i` | type a hex value |
-| `Ctrl+S` | save (changes are written live anyway) |
-| `u` / `r` | undo / revert everything |
-| `Esc` | quit |
+| `Ctrl+S` | save — the session's only write to the file |
+| `u` / `r` | undo / revert to the last save |
+| `Esc` | quit — twice if there are unsaved changes |
 
-Edits are written to your config as you make them, so the file on disk is
-always current. The first run drops a `<config>.huebox.bak` beside it holding
-the state you started from.
+Edits live in an in-memory buffer: nothing is written until you press
+`Ctrl+S`. The editor *renders* from that buffer, so everything on screen —
+palette, interface, code sample, and the background / selection / cursor
+examples — is live and truecolor before the file changes. Quit with unsaved
+changes and huebox asks for a second `Esc` first; `r` throws the buffer away
+and goes back to your last save. The first save of a session drops a
+`<config>.huebox.bak` beside the config holding its pre-save state.
 
 Reload your terminal — Ghostty `Ctrl+Shift+,`, kitty `Ctrl+Shift+F5`,
 alacritty picks changes up automatically — and the new colours are live. The
