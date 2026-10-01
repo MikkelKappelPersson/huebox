@@ -1,11 +1,16 @@
 # huebox — tasks
 
-Status: **awaiting review** · Plan: `plan.md` · Spec: `spec.md` · Rules: `AGENTS.md`
+Status: **in execution — P1 in review** · Plan: `plan.md` · Spec: `spec.md` · Rules: `AGENTS.md`
 
 Execution order is top to bottom; phases are checkboxes, tasks are `- [ ]`.
 Every phase ends with `python3 -m unittest discover -s tests` green and the
-relevant spec/AGENTS/README lines updated. Review point after each phase; the
-user reviews the docs first, then we execute phase by phase.
+relevant spec/AGENTS/README lines updated.
+
+Per-phase loop (orchestrator-run): implementer lands the phase → reviewer
+audits the diff → fixes → suite green → one phase-commit. Delegation briefs
+end with the completion ritual: agents finish their report with
+`ship and done` on its own line, then call `shepherd_done` with the summary;
+the orchestrator closes every agent as soon as its task is closed.
 
 ## P0 — package split (§17) — done, verify & close
 
@@ -19,15 +24,25 @@ user reviews the docs first, then we execute phase by phase.
 - [x] Remove stray root `__pycache__/`
 - [x] Delete `test_huebox.py`/`huebox.py` remnants from git tracking (already rm'd)
 
-## P1 — responsive layout (§15, plan phase 1)
+## P1 — responsive layout (§15, plan phase 1) — done, pending review
 
-- [ ] `tui.py`: `_resized` flag + `on_winch`; `read_key` wrapped in a 0.1 s
+- [x] `tui.py`: `_resized` flag + `_on_winch`; `read_key` wrapped in a 0.1 s
       `select` loop returning `"resize"` on wake (plan 1.1)
-- [ ] `editor.py`: install the SIGWINCH handler after `enter_raw`; treat
-      `"resize"` as redraw-no-op
-- [ ] `editor.py`: too-small screen (MIN 40x12 proposal) with the enlarge hint
-- [ ] tests: resize wake, too-small render, identical-frames guarantee
-- [ ] spec: record MIN sizes as proposal (still tunable post-P5)
+- [x] `editor.py`: install the SIGWINCH handler after `enter_raw` (restored
+      in `finally`); treat `"resize"` as redraw-no-op
+- [x] `editor.py`: too-small screen — `MIN_COLS = 40`, `MIN_ROWS = 12` in
+      `tui.py`, single centered hint via `too_small_frame()`/`clip()`
+- [x] tests: resize wake (`tests/test_tui.py`), too-small render, width hold
+      at 100x30/80x24/60x16/40x12/40x10, identical-frames guarantee and the
+      resize no-op in the `edit()` loop (`tests/test_editor.py`)
+- [x] spec: §15.4 records MIN 40x12 as a proposal (still tunable post-P5),
+      §15.1 documents the mid-sequence `esc`; §8 TODO resolved, §10 grows the
+      layout-sizes line
+
+Notes: `read_key(fd, tick=RESIZE_TICK)` takes the tick so tests do not sleep a
+production tenth of a second; input always wins over a pending flag, and the
+flag is consumed only by the `"resize"` return. `render.py` is untouched — the
+static `show` path and every width primitive are unchanged.
 
 ## P2 — staged editing + live examples (§14, plan phase 2)
 

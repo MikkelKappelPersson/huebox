@@ -22,7 +22,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/detect.py` | probes, candidate paths, Ghostty includes / `theme =`, `resolve()` | §7 |
 | `huebox/themes.py` | home, `state.toml`, theme files, `new` / `import` / `use` / `list` | §13 |
 | `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip | §8, §14 |
-| `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH | §15 |
+| `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, overlay, staged buffer + save | §4.3, §14 |
 | `huebox/cli.py` | argparse, dispatch, exit codes; `main()` | §4 |
 
@@ -46,7 +46,9 @@ Every module header cites its spec section.
 - **Errors to stderr, prefixed `huebox: `, exit 1.** No tracebacks for user
   errors: missing config, bad theme name, no colours found.
 - **Layout goes through `clip` / `pack`.** No widget measures width itself;
-  layout derives from `term_size()` every frame (§15).
+  layout derives from `term_size()` every frame (§15). Below
+  `MIN_COLS`×`MIN_ROWS` (in `tui.py`) the editor draws the too-small hint and
+  nothing else.
 - **Tests stay green:** `python3 -m unittest discover -s tests`. Mirror the
   module under test (`tests/test_<module>.py`); new behaviour needs a case,
   a new format needs round-trip plus byte-identical no-op cases.

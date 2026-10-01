@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import sys
 
 from .color import (MISSING, NAMED, SLOTS, hex_to_rgb, hsv_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
 from .render import (BOLD, DIM, RESET, bg, clip, fg, pack, sample_lines)
-from .tui import enter_raw, exit_raw, read_key, term_size
+from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
+                  term_size)
 
 ADJUST = {
     "q": ("h", -1), "w": ("h", +1),
@@ -26,9 +28,24 @@ ADJUST = {
 MULT_STEPS = [1, 5, 20]
 
 
+def too_small_frame(cols):
+    """The fallback frame (§15.4): one centred hint, clipped to the width.
+
+    The hint is 31 columns — it must stay shorter than MIN_COLS, or the
+    actionable size it names is clipped away exactly when it matters.
+    """
+    hint = f"terminal too small — need {MIN_COLS}x{MIN_ROWS}"
+    return " " * max(0, (cols - len(hint)) // 2) + clip(hint, cols)
+
+
 def draw_editor(fmt, path, slots, sel, undo, status, mult):
     cols, rows = term_size()
     sys.stdout.write("\033[H\033[2J")
+    if cols < MIN_COLS or rows < MIN_ROWS:
+        # No layout fits: say so instead of drawing a garbled frame.
+        sys.stdout.write(too_small_frame(cols) + "\r\n")
+        sys.stdout.flush()
+        return
     body = []
 
     head = f"  {BOLD}huebox{RESET}  {BOLD}{fmt}{RESET}"
@@ -118,10 +135,18 @@ def edit(fmt, path, slots, write):
         shutil.copy2(path, backup)
 
     fd, saved = enter_raw()
+    previous_winch = None
     try:
+        # §15.1 — resize wakes the loop through a flag, not a redraw callback
+        try:
+            previous_winch = signal.signal(signal.SIGWINCH, _on_winch)
+        except (OSError, ValueError, TypeError):
+            pass                      # no winch here; the flag never fires
         while True:
             draw_editor(fmt, path, slots, sel, undo, status, mult)
             key = read_key(fd)
+            if key == "resize":
+                continue        # no key consumed: the loop just redraws
             name = SLOTS[sel]
             value = slots.get(name)
             if value is None:
@@ -177,7 +202,14 @@ def edit(fmt, path, slots, write):
 
             write(path, slots)
     finally:
+        # termios first: nothing may prevent leaving raw mode, and the
+        # signal restore must never raise out of the finally (review P1)
         exit_raw(fd, saved)
+        if previous_winch is not None:
+            try:
+                signal.signal(signal.SIGWINCH, previous_winch)
+            except (OSError, ValueError, TypeError):
+                pass
 
     print(f"  updated {path}")
     print(f"  backup of the starting state: {backup}")

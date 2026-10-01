@@ -182,8 +182,10 @@ config path is ambiguous between formats?
 - Layout must hold in narrow terminals; `pack()` and `clip()` guarantee nothing
   overflows and nothing wraps badly.
 
-**TODO — minimum width.** Define the narrowest terminal huebox supports and the
-fallback layout below it.
+**Minimum width.** Defined in §15.4 — `MIN_COLS`/`MIN_ROWS` in `tui.py`;
+below them the editor renders one centered `terminal too small — enlarge to at
+least WxH` line instead of a garbled frame. Still a proposal until the picker
+lands.
 
 > Planned: the example area becomes a full live gallery (§14) and the layout
 > follows terminal resizes (§15).
@@ -206,6 +208,9 @@ fallback layout below it.
 - only the intended lines change
 - a no-op write is byte-identical (asserted for every format)
 - layout holds in narrow terminals
+- editor frames at 100x30, 80x24, 60x16 and 40x10 — reflow, clipping, the
+  too-small fallback below the minimum, and two identical draws producing a
+  byte-identical frame (§15)
 
 **TODO — the gaps.** Add explicit cases for: `config-file` includes, `theme =`
 indirection, inline Alacritty tables, malformed hex input, and a read-only or
@@ -422,15 +427,21 @@ is no small-size story.
 1. SIGWINCH sets a dirty flag; `read_key` is restructured around `select()`
    with a short timeout (~0.1 s) so the loop wakes, sees the flag and redraws
    — resize follows within a frame even with no input. Byte-at-a-time escape
-   parsing semantics are preserved.
+   parsing semantics are preserved. A SIGWINCH landing *mid-sequence* raises
+   the flag but does not break the sequence: PEP 475 retries the interrupted
+   `os.read` automatically, so parsing continues and the redraw happens at
+   the next idle tick.
 2. Layout is computed from the current (cols, rows) every frame. No cached
    coordinates survive across frames.
 3. `pack()` / `clip()` remain the only width-sensitive primitives; every new
    widget (examples strip, theme overlay) must go through them.
 4. Below a minimum size, render a centered
-   `terminal too small — enlarge to at least WxH` screen instead of garbling.
-   Exact minimum is TODO once the picker and gallery land; start at 80x24
-   and tune down.
+   `terminal too small — need WxH` screen instead of garbling.
+   **Proposal: `MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in
+   `tui.py` beside `term_size()`, and the numbers stay tunable until the theme
+   picker (§13.7) and gallery (§14) land, since the picker is the widest
+   widget. The floor is a proposal, not a promise: everything at or above it
+   still has to render (and is tested at 100x30, 80x24, 60x16, 40x12).
 5. Static `show` is unchanged: one-shot render at the current size.
 6. Tests: layout cases at several sizes including below-minimum (§10 grows
    one line: `pack`/`clip`/overlay rendering at 100x30, 80x24, 60x16, 40x10).

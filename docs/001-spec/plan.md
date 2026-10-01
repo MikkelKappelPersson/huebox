@@ -64,14 +64,16 @@ while True:
 
 The editor loop treats `"resize"` as a no-op key: the `while True` continues
 and `draw_editor` re-queries `term_size()`. Esc parsing is unchanged; a
-SIGWINCH landing mid-sequence just yields `"esc"` via the existing
-`OSError` path (acceptable, documented).
+SIGWINCH landing mid-sequence raises the flag but does not break the
+sequence — PEP 475 auto-retries the interrupted `os.read`, so parsing
+continues and the redraw is owed at the next idle tick.
 
 ### 1.2 Too-small screen
 
 `draw_editor` head: if `cols < MIN_COLS or rows < MIN_ROWS`, render a single
-centered line `terminal too small — enlarge to at least {MIN_COLS}x{MIN_ROWS}`
-on a blank screen and return. Proposal: `MIN_COLS = 40`, `MIN_ROWS = 12`
+centered line `terminal too small — need {MIN_COLS}x{MIN_ROWS}` (31 columns,
+so the hint survives unclipped at any width above 30) on a blank screen and
+return. Proposal: `MIN_COLS = 40`, `MIN_ROWS = 12`
 (spec leaves the exact number open; tune after the picker lands in Phase 5).
 `render_preview` (static) is untouched — it already clips.
 
@@ -370,7 +372,7 @@ checks case-insensitively for collisions too (case-insensitive filesystems).
 
 | Risk | Mitigation |
 | --- | --- |
-| SIGWINCH mid-escape-sequence | Rare; yields `"esc"` via existing OSError path; doc'd in P1 |
+| SIGWINCH mid-escape-sequence | Does not break the sequence — PEP 475 auto-retries `os.read`; redraw owed at next idle tick (§15.1) |
 | Hand-rolled TOML vs. exotic user files | Theme files are huebox-owned with a fixed grammar; loader warns + drops unknowns instead of failing |
 | Stale `GHOSTTY_RESOURCES_DIR` pushing to the wrong machine's paths | Push resolves the target config and refuses if it has no colours (P4) |
 | Raw-mode exit paths multiply (prompt, overlay, save-as-new) | One `enter/exit_raw` pair per raw session, re-enter after prompts; §4.3 TODO stays open until P5 closes it |
