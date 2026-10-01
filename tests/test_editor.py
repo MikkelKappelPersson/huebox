@@ -141,11 +141,15 @@ class EditLoop(unittest.TestCase):
         """Drive `edit()` with a scripted key stream; return the writes."""
         writes, draws, handlers = [], [], []
 
-        def record(target, values):
-            writes.append((target, dict(values)))
+        def record(name, target, values):
+            # §13.7 — the writer is handed the subject every save, because
+            # the picker can move it mid-session; a legacy session has none
+            writes.append((name, target, dict(values)))
 
-        def note_handler(*args):
-            draws.append({"slots": dict(args[2]), "status": args[5]})
+        def note_handler(*args, **kwargs):
+            draws.append({"slots": dict(args[2]), "status": args[5],
+                          "head": kwargs.get("head"),
+                          "overlay": kwargs.get("overlay")})
             handlers.append(signal.getsignal(signal.SIGWINCH))
 
         stream = iter(keys)
@@ -179,13 +183,20 @@ class EditLoop(unittest.TestCase):
     def test_the_loop_draws_from_the_buffer_and_saves_once(self):
         writes, draws, _, path = self.run_session(["w", SAVE, "esc"])
         self.assertEqual(len(writes), 1)
-        self.assertEqual(writes[0][0], path)
+        self.assertEqual(writes[0][:2], (None, path))   # direct mode: no theme
         # the frame drawn after "w" already carried the adjusted value,
         # before any save happened (palette-0 is the selected slot)
         self.assertNotEqual(draws[0]["slots"]["palette-0"],
                             draws[1]["slots"]["palette-0"])
         self.assertEqual(draws[1]["slots"]["palette-0"],
-                         writes[0][1]["palette-0"])
+                         writes[0][2]["palette-0"])
+
+    def test_the_head_names_the_config_in_a_direct_session(self):
+        _, draws, _, path = self.run_session(["esc"])
+        # §13.7 — `direct:<path>` says a save writes the config itself,
+        # and the dim path is dropped so it is not printed twice
+        self.assertEqual(draws[0]["head"], f"direct:{path}")
+        self.assertIsNone(draws[0]["overlay"])
 
     def test_a_dirty_quit_takes_two_escapes(self):
         writes, draws, _, _ = self.run_session(["w", "esc", "esc"])
@@ -332,7 +343,8 @@ class ApplyKey(unittest.TestCase):
         st, writes = self.background_state(prompt=prompt)
         self.dirty_and_adjust(st)
         editor.apply_key("i", st)
-        self.assertEqual(asked, ["background"])
+        # the prompt carries the slot, not just a bare name (P5 review)
+        self.assertEqual(asked, ["  new hex for background: "])
         self.assertEqual(st.slots["background"], "#abcdef")
         self.assertEqual(len(st.undo), 2)   # the nudge plus the typed hex
         self.assertEqual(st.status, "background = #abcdef")
@@ -340,7 +352,7 @@ class ApplyKey(unittest.TestCase):
         self.assertEqual(st.status, "undid background")
         self.assertEqual(writes, [])
         editor.apply_key("X", st)
-        self.assertEqual(asked[-1], "background")
+        self.assertEqual(asked[-1], "  new hex for background: ")
 
     def test_hex_entry_rejects_junk_and_cancellation(self):
         st, _ = self.background_state(prompt=lambda name: "not a colour")
@@ -476,16 +488,19 @@ class ThemeSession(unittest.TestCase):
                                   side_effect=lambda fd: next(stream)),\
                 mock.patch.object(sys, "stdout", out),\
                 mock.patch.object(sys, "stderr", err):
-            editor.edit("theme ember", self.theme, dict(FULL_SLOTS),
-                        lambda path, values: writes.append((path, dict(values))),
+            editor.edit("ghostty", self.theme, dict(FULL_SLOTS),
+                        lambda name, path, values: writes.append(
+                            (name, path, dict(values))),
                         backup=False, theme="ember", report=report)
         return writes, out.getvalue(), err.getvalue()
 
     def test_saving_writes_the_truth_file_and_nothing_else(self):
         writes, out, err = self.session(["w", SAVE, "esc"])
         self.assertEqual(len(writes), 1)
-        self.assertEqual(writes[0][0], self.theme)
-        self.assertNotEqual(writes[0][1]["palette-0"], FULL_SLOTS["palette-0"])
+        # the writer is told the subject, so a picker switch retargets it
+        self.assertEqual(writes[0][:2], ("ember", self.theme))
+        self.assertNotEqual(writes[0][2]["palette-0"],
+                            FULL_SLOTS["palette-0"])
         # huebox owns the file: no pre-save backup, and no claim about the
         # terminal — the writer's push report says what reached it (§13.6)
         self.assertFalse(os.path.exists(self.theme + ".huebox.bak"))
@@ -508,6 +523,578 @@ class ThemeSession(unittest.TestCase):
     def test_a_theme_session_that_saves_nothing_says_so(self):
         _, out, _ = self.session(["esc"])
         self.assertIn("no changes", out)
+
+    def test_the_head_names_the_theme_and_the_dirty_dot(self):
+        _, out, _ = self.session(["w", "esc", "esc"])
+        # §13.7 — `ember ghostty` while clean, a `●` between them once the
+        # buffer differs from the last save
+        plain = [ANSI.sub("", frame)
+                 for frame in out.split("\033[H\033[2J")]
+        self.assertTrue(any("  ember ghostty" in frame for frame in plain))
+        self.assertTrue(any(f"  ember {editor.DIRTY_MARK} ghostty" in frame
+                            for frame in plain))
+        self.assertTrue(any("/tmp" in frame or "ember.toml" in frame
+                            for frame in plain))
+
+
+def theme_slots(seed: int) -> dict:
+    """A recognisable slot dict per theme, so a switch cannot hide behind a
+    load that returns what was already in the buffer."""
+    return dict(FULL_SLOTS, background=f"#{seed:02x}2f4f",
+                foreground=f"#{seed:02x}bad0")
+
+
+class FakeLibrary:
+    """The three library calls the picker makes, with no disk behind them.
+
+    `problem` is what `create` complains with, `misses` the names `load`
+    cannot open — the two failure paths that have to stay on the status bar
+    instead of raising into the draw loop.
+    """
+
+    def __init__(self, names=("ash", "ember", "frost"), problem="",
+                 misses=()):
+        self.names_in = list(names)
+        self.problem = problem
+        self.misses = set(misses)
+        self.calls = []
+
+    def build(self):
+        return editor.Library(listing=lambda: list(self.names_in),
+                              loader=self.load, creator=self.create)
+
+    def load(self, name):
+        self.calls.append(("load", name))
+        if name in self.misses:
+            return None
+        return theme_slots(sum(ord(ch) for ch in name)), f"/themes/{name}.toml"
+
+    def create(self, name, slots, force=False):
+        self.calls.append(("create", name, force, dict(slots)))
+        if self.problem:
+            return "", self.problem
+        self.names_in.append(name)
+        return f"/themes/{name}.toml", ""
+
+
+class PickerCase(unittest.TestCase):
+    """Shared fixture: a theme session with a library and a scripted prompt."""
+
+    def picker_state(self, names=("ash", "ember", "frost"), theme="ember",
+                     prompts=(), problem="", misses=(), writes=None):
+        writes = [] if writes is None else writes
+        self.labels = []
+        self.library = FakeLibrary(names, problem=problem, misses=misses)
+        answers = list(prompts)
+        st = editor.EditorState(dict(FULL_SLOTS), None,
+                                theme=theme, fmt="ghostty",
+                                library=self.library.build(),
+                                path="/themes/ember.toml")
+
+        def prompt_name(label):
+            self.labels.append(label)
+            return answers.pop(0) if answers else None
+
+        def save(values):
+            writes.append((st.theme, st.path, dict(values)))
+            return f"saved {st.theme} → ghostty"
+
+        st.prompt_name = prompt_name
+        st.write = save
+        self.writes = writes
+        return st
+
+
+class PickerKeys(PickerCase):
+    """`t` and what the overlay does with keys (§13.7)."""
+
+    def test_t_opens_the_picker_on_the_session_theme(self):
+        st = self.picker_state()
+        editor.apply_key("t", st)
+        self.assertEqual(st.overlay, ["ash", "ember", "frost"])
+        self.assertEqual(st.overlay_index, 1)      # ember, what we are editing
+        self.assertEqual(st.status, "")
+        self.assertEqual(st.picker_frame(),
+                         (["ash", "ember", "frost"], 1, "ember"))
+
+    def test_a_direct_session_opens_on_the_first_row(self):
+        st = self.picker_state(theme=None)
+        editor.apply_key("t", st)
+        self.assertEqual(st.overlay_index, 0)
+        self.assertEqual(st.picker_frame()[2], "")   # nothing to mark yet
+
+    def test_arrows_move_the_selection_and_stop_at_the_edges(self):
+        st = self.picker_state()
+        editor.apply_key("t", st)
+        editor.apply_key("up", st)
+        self.assertEqual(st.overlay_index, 0)
+        editor.apply_key("up", st)
+        self.assertEqual(st.overlay_index, 0)
+        editor.apply_key("down", st)
+        editor.apply_key("down", st)
+        editor.apply_key("down", st)
+        self.assertEqual(st.overlay_index, 2)
+        self.assertEqual(st.sel, 0)                # slot selection is untouched
+
+    def test_enter_opens_the_theme_and_resets_the_session(self):
+        st = self.picker_state()
+        editor.apply_key("down", st)               # a selection to lose
+        editor.apply_key("w", st)                  # and an edit to lose
+        editor.apply_key("r", st)                  # clean again
+        editor.apply_key("t", st)
+        editor.apply_key("down", st)
+        st.armed = True        # a pending discard must not follow the switch
+        editor.apply_key("\r", st)
+        self.assertEqual(st.theme, "frost")
+        self.assertEqual(st.path, "/themes/frost.toml")
+        self.assertEqual(st.slots, theme_slots(sum(ord(c) for c in "frost")))
+        self.assertEqual(st.saved, st.slots)       # a fresh theme is clean
+        self.assertEqual(st.undo, [])
+        self.assertEqual(st.sel, 0)
+        self.assertFalse(st.armed)                 # P2 review: no inherited arm
+        self.assertIsNone(st.overlay)
+        self.assertEqual(st.status, "opened frost")
+        self.assertEqual(self.library.calls,
+                         [("load", "frost")])
+        self.assertEqual(self.writes, [])          # opening writes nothing
+
+    def test_a_dirty_switch_is_blocked_with_the_exact_status(self):
+        st = self.picker_state()
+        editor.apply_key("w", st)                  # dirty
+        dirty = dict(st.slots)
+        editor.apply_key("t", st)
+        editor.apply_key("down", st)
+        editor.apply_key("\r", st)
+        self.assertEqual(st.status, "save (Ctrl+S) or revert (r) first")
+        self.assertEqual(st.theme, "ember")        # decision 12
+        self.assertEqual(st.slots, dirty)
+        self.assertIsNotNone(st.overlay)            # the picker stays up
+        self.assertEqual(self.library.calls, [])   # nothing was even loaded
+        self.assertEqual(self.writes, [])
+
+    def test_esc_and_t_put_the_editor_back_without_quitting(self):
+        for closer in ("esc", "t", "Q", "\x03"):
+            with self.subTest(key=closer):
+                st = self.picker_state()
+                editor.apply_key("w", st)          # dirty: Esc must not quit
+                editor.apply_key("t", st)
+                editor.apply_key(closer, st)
+                self.assertIsNone(st.overlay)
+                self.assertFalse(st.quit)
+                self.assertFalse(st.armed)
+                self.assertEqual(st.status, "")
+                self.assertEqual(st.theme, "ember")
+
+    def test_the_picker_swallows_the_rest_of_the_key_surface(self):
+        st = self.picker_state()
+        before = dict(st.slots)
+        editor.apply_key("t", st)
+        for key in ("w", "a", "x", "u", "r", "f", SAVE, "i", "N"):
+            editor.apply_key(key, st)
+        self.assertEqual(st.slots, before)
+        self.assertEqual(st.mult, 1)
+        self.assertEqual(self.writes, [])
+        self.assertEqual(st.status, "")            # the picker answered, not `i`
+        self.assertFalse(st.quit)
+        self.assertEqual(st.overlay_index, 1)      # only arrows moved it
+
+    def test_a_theme_that_will_not_open_keeps_the_buffer(self):
+        st = self.picker_state(misses=("frost",))
+        editor.apply_key("t", st)
+        editor.apply_key("down", st)
+        editor.apply_key("\r", st)
+        self.assertEqual(st.status, "frost could not be opened")
+        self.assertEqual(st.theme, "ember")
+        self.assertEqual(st.slots, FULL_SLOTS)
+        self.assertIsNotNone(st.overlay)
+
+    def test_an_empty_library_says_so_and_opens_nothing(self):
+        st = self.picker_state(names=())
+        editor.apply_key("t", st)
+        self.assertIsNone(st.overlay)
+        self.assertIn("no themes yet", st.status)
+
+    def test_without_a_library_the_picker_is_a_no_op(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None)
+        editor.apply_key("t", st)
+        self.assertIsNone(st.overlay)
+        self.assertEqual(st.status, "no theme library in this session")
+        editor.apply_key("N", st)
+        self.assertEqual(st.status, "no theme library in this session")
+        self.assertIsNone(st.theme)
+
+
+class PickerCreates(PickerCase):
+    """`n` in the picker and `N` in the editor (§13.7)."""
+
+    def test_n_creates_a_theme_from_the_buffer_and_stays_up(self):
+        st = self.picker_state(prompts=["dusk"])
+        editor.apply_key("w", st)                  # dirty: creation is fine
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        name, force, values = self.library.calls[0][1:]
+        self.assertEqual((name, force), ("dusk", False))
+        self.assertEqual(values, st.slots)         # the buffer, unsaved and all
+        self.assertEqual(st.theme, "dusk")         # the session follows it
+        self.assertEqual(st.path, "/themes/dusk.toml")
+        self.assertEqual(st.overlay[-1], "dusk")   # the new row is selected
+        self.assertEqual(st.overlay_index, len(st.overlay) - 1)
+        self.assertEqual(st.status, "created dusk - current now")
+        self.assertFalse(st.dirty())
+        self.assertEqual(self.labels, ["  new theme name: "])
+
+    def test_n_keeps_the_overlay_usable(self):
+        st = self.picker_state(prompts=["dusk"])
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        editor.apply_key("esc", st)
+        self.assertIsNone(st.overlay)
+        self.assertFalse(st.quit)
+
+    def test_a_taken_name_is_confirmed_in_words_not_a_modal(self):
+        st = self.picker_state(prompts=["ember", "y"])
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        self.assertEqual(self.library.calls,
+                         [("create", "ember", True, dict(st.slots))])
+        self.assertIn("ember exists", self.labels[1])
+        self.assertIn("y overwrites", self.labels[1])
+
+    def test_another_name_at_the_prompt_replaces_the_answer(self):
+        st = self.picker_state(prompts=["ember", "dusk"])
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        self.assertEqual(self.library.calls[0][1:3], ("dusk", False))
+        self.assertEqual(st.theme, "dusk")
+
+    def test_a_cancelled_confirm_leaves_the_taken_theme_alone(self):
+        for answer in ("", None):
+            with self.subTest(answer=answer):
+                st = self.picker_state(prompts=["ember", answer])
+                editor.apply_key("t", st)
+                editor.apply_key("n", st)
+                self.assertEqual(self.library.calls, [])
+                self.assertEqual(st.status, "cancelled - ember is untouched")
+                self.assertEqual(st.theme, "ember")
+
+    def test_a_cancelled_prompt_creates_nothing(self):
+        st = self.picker_state(prompts=[""])
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        self.assertEqual(self.library.calls, [])
+        self.assertEqual(st.status, "cancelled - no theme created")
+
+    def test_a_retype_that_is_also_taken_creates_nothing(self):
+        st = self.picker_state(prompts=["ember", "frost"])
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        self.assertEqual(self.library.calls, [])
+        self.assertIn("frost exists too", st.status)
+
+    def test_a_refusal_comes_back_as_a_status_not_an_exception(self):
+        problem = "invalid theme name (letters, digits, - and _, 64 max)"
+        st = self.picker_state(prompts=["not a name"], problem=problem)
+        editor.apply_key("t", st)
+        editor.apply_key("n", st)
+        self.assertEqual(st.status, problem)
+        self.assertEqual(st.theme, "ember")
+        self.assertEqual(self.writes, [])
+
+    def test_capital_n_saves_the_buffer_as_a_new_theme(self):
+        st = self.picker_state(prompts=["dusk"])
+        editor.apply_key("w", st)
+        editor.apply_key("N", st)
+        name, force, values = self.library.calls[0][1:]
+        self.assertEqual((name, force), ("dusk", False))
+        self.assertEqual(values, st.slots)
+        # ... and then through the ordinary save pipeline, push included
+        self.assertEqual(len(self.writes), 1)
+        self.assertEqual(self.writes[0][:2], ("dusk", "/themes/dusk.toml"))
+        self.assertEqual(self.writes[0][2], st.slots)
+        self.assertEqual(st.status, "saved dusk → ghostty")
+        self.assertTrue(st.written)
+        self.assertFalse(st.dirty())
+        self.assertEqual(st.undo, [])
+
+    def test_capital_n_without_a_name_writes_nothing(self):
+        st = self.picker_state(prompts=[None])
+        editor.apply_key("w", st)
+        editor.apply_key("N", st)          # prompt cancelled: no name
+        self.assertEqual(self.writes, [])
+        self.assertFalse(st.written)
+        self.assertTrue(st.dirty())         # the buffer is untouched
+        self.assertEqual(st.status, "cancelled - no theme created")
+        self.assertEqual(st.theme, "ember")
+        self.assertEqual(self.library.calls, [])
+
+    def test_capital_n_migrates_a_direct_session_off_the_config(self):
+        # §13.4 — `N` is the way out of a legacy direct-mode session
+        st = self.picker_state(theme=None, prompts=["dusk"])
+        st.path = "/home/you/.config/kitty/kitty.conf"
+        st.backup_path = "/home/you/.config/kitty/kitty.conf"
+        editor.apply_key("w", st)
+        editor.apply_key("N", st)
+        self.assertEqual(st.theme, "dusk")
+        self.assertEqual(st.path, "/themes/dusk.toml")
+        self.assertIsNone(st.backup_path)         # huebox owns it now: no .bak
+        self.assertEqual(self.writes[0][:2], ("dusk", "/themes/dusk.toml"))
+        self.assertEqual(editor.head_label(st), "dusk ghostty")  # saved
+
+
+class StatusBar(unittest.TestCase):
+    """`<theme> ● <fmt>` and `direct:<path>` (§13.7)."""
+
+    def state(self, theme="ember", fmt="ghostty", path="/themes/ember.toml"):
+        return editor.EditorState(dict(FULL_SLOTS),
+                                  lambda values: "saved",
+                                  theme=theme, fmt=fmt, path=path)
+
+    def test_a_clean_theme_session_names_the_theme_and_the_target(self):
+        self.assertEqual(editor.head_label(self.state()), "ember ghostty")
+
+    def test_a_dirty_buffer_puts_a_dot_between_them(self):
+        st = self.state()
+        editor.apply_key("w", st)
+        self.assertTrue(st.dirty())
+        self.assertEqual(editor.head_label(st), "ember ● ghostty")
+        editor.apply_key(SAVE, st)                # saved: clean again
+        self.assertEqual(editor.head_label(st), "ember ghostty")
+
+    def test_with_no_named_target_only_the_theme_is_shown(self):
+        self.assertEqual(editor.head_label(self.state(fmt="")), "ember")
+        st = self.state(fmt="")
+        editor.apply_key("w", st)
+        self.assertEqual(editor.head_label(st), "ember ●")
+
+    def test_a_direct_session_names_the_config(self):
+        st = self.state(theme=None, path="/tmp/kitty.conf")
+        self.assertEqual(editor.head_label(st), "direct:/tmp/kitty.conf")
+        self.assertEqual(editor.session_path(st), "")      # not printed twice
+        self.assertEqual(editor.session_path(self.state()),
+                         "/themes/ember.toml")
+
+    def test_the_head_is_width_aware(self):
+        # the dim path is dropped when it does not fit beside the subject
+        out = io.StringIO()
+        with mock.patch.object(editor, "term_size", return_value=(40, 24)), \
+                mock.patch.object(sys, "stdout", out):
+            editor.draw_editor("", "/themes/a-very-long-theme-name.toml",
+                               FULL_SLOTS, 0, [], "", 1,
+                               head=editor.head_label(
+                                   self.state(path="/themes/a-very-long-"
+                                                  "theme-name.toml")))
+        self.assertNotIn("a-very-long-theme-name.toml",
+                         ANSI.sub("", out.getvalue()))
+
+
+class OverlayFrame(unittest.TestCase):
+    """The picker frame inside the width and height budget (§13.7, §15)."""
+
+    MANY = [f"theme-{index:02d}" for index in range(34)]
+
+    def overlay_frame(self, cols, rows, names=("ash", "ember", "frost"),
+                      index=0, current="ember", status=""):
+        out = io.StringIO()
+        with mock.patch.object(editor, "term_size", return_value=(cols, rows)),\
+                mock.patch.object(sys, "stdout", out):
+            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], status,
+                               1, overlay=(list(names), index, current))
+        return out.getvalue()
+
+    def test_the_frame_names_the_themes_and_marks_the_current_one(self):
+        body = ANSI.sub("", self.overlay_frame(80, 24))
+        self.assertIn("themes", body)
+        self.assertIn("* ember", body)             # the library's current
+        self.assertIn("ash", body)
+        self.assertIn("> ash", body)               # and the selection
+        self.assertIn("Enter open", body)
+
+    def test_every_line_holds_the_width_and_the_frame_the_height(self):
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(self.overlay_frame(cols, rows, self.MANY, 17))
+                self.assertLessEqual(len(body), rows)
+                for line in body:
+                    self.assertLessEqual(width(line), cols)
+
+    def test_a_long_library_scrolls_with_the_selection_in_view(self):
+        body = ANSI.sub("", self.overlay_frame(40, 12, self.MANY, 17,
+                                               status="opened theme-17"))
+        self.assertIn("> theme-17", body)          # the selection is on screen
+        self.assertIn("of 34", body)               # and the window is counted
+        self.assertLessEqual(body.count("theme-"), 12)
+        # the last row is reachable too: the window follows, it never runs off
+        last = ANSI.sub("", self.overlay_frame(40, 12, self.MANY, 33))
+        self.assertIn("34 of 34", last)
+
+    def test_the_hint_footer_folds_instead_of_overflowing(self):
+        for cols in (40, 60, 80):
+            with self.subTest(cols=cols):
+                body = lines(self.overlay_frame(cols, 12))
+                hints = [ANSI.sub("", line) for line in body
+                         if "move" in ANSI.sub("", line)
+                         or "open" in ANSI.sub("", line)
+                         or "new" in ANSI.sub("", line)
+                         or "back" in ANSI.sub("", line)]
+                self.assertTrue(hints)
+                for line in hints:
+                    self.assertLessEqual(width(line), cols)
+        # at the minimum width the footer cannot fit on one row, so it wraps
+        # (§13.7 - pack(), not a clipped single line)
+        narrow = lines(self.overlay_frame(40, 24))
+        self.assertGreaterEqual(
+            len([line for line in narrow if "move" in ANSI.sub("", line)
+                 or "back" in ANSI.sub("", line)]), 2)
+
+    def test_a_64_character_name_is_clipped_not_wrapped(self):
+        long = "x" * 64
+        body = lines(self.overlay_frame(40, 12, [long], 0))
+        self.assertLessEqual(len(body), 12)
+        for line in body:
+            self.assertLessEqual(width(line), 40)
+        self.assertIn("x" * 30, ANSI.sub("", "\r\n".join(body)))
+
+    def test_an_empty_library_says_how_to_start_one(self):
+        body = ANSI.sub("", self.overlay_frame(80, 24, []))
+        self.assertIn("no themes yet", body)
+        self.assertIn("N makes one from this buffer", body)
+
+    def test_the_status_line_is_the_last_row(self):
+        body = lines(self.overlay_frame(80, 24, status="save (Ctrl+S) or "
+                                                     "revert (r) first"))
+        self.assertIn("save (Ctrl+S) or revert (r) first", ANSI.sub("", body[-1]))
+
+    def test_the_frame_is_byte_identical_for_identical_input(self):
+        self.assertEqual(self.overlay_frame(60, 16, self.MANY, 4, "theme-04"),
+                         self.overlay_frame(60, 16, self.MANY, 4, "theme-04"))
+
+    def test_below_the_minimum_the_hint_replaces_the_picker(self):
+        for cols, rows in ((editor.MIN_COLS - 1, 24),
+                           (80, editor.MIN_ROWS - 1)):
+            with self.subTest(size=(cols, rows)):
+                out = self.overlay_frame(cols, rows, self.MANY)
+                self.assertIn(HINT, out)
+                self.assertNotIn("theme-", out)
+                self.assertNotIn("Enter open", out)
+
+
+class RawMode(unittest.TestCase):
+    """§4.3 — one enter/exit pair per raw session, prompts included.
+
+    The paths that leave raw mode are: the quit (clean or armed), each
+    prompt (hex entry and the picker's name prompts), and any exception out
+    of the loop. Every one of them has to come back to a sane terminal.
+    """
+
+    def run_session(self, keys, answers=(), input_error=None, edit_kwargs=None,
+                    keys_side_effect=None, exit_error=None):
+        events = []
+        entered = []
+
+        def enter_raw():
+            state = (10 + len(entered), f"termios-{len(entered)}")
+            entered.append(state)
+            events.append(("enter", state))
+            return state
+
+        def exit_raw(fd, saved):
+            events.append(("exit", (fd, saved)))
+            if exit_error is not None:
+                raise exit_error
+
+        def fake_input(label):
+            events.append(("prompt", label))
+            if input_error is not None:
+                raise input_error
+            return answers.pop(0) if answers else ""
+
+        stream = iter(keys)
+        with mock.patch.object(editor, "enter_raw", enter_raw), \
+                mock.patch.object(editor, "exit_raw", exit_raw), \
+                mock.patch.object(editor, "draw_editor"), \
+                mock.patch.object(editor, "read_key",
+                                  side_effect=keys_side_effect
+                                  or (lambda fd: next(stream))), \
+                mock.patch("builtins.input", fake_input), \
+                mock.patch.object(sys, "stdout", io.StringIO()), \
+                mock.patch.object(sys, "stderr", io.StringIO()):
+            editor.edit("ghostty", "/tmp/huebox.conf", dict(FULL_SLOTS),
+                        lambda name, path, values: "saved",
+                        **(edit_kwargs or {}))
+        return events
+
+    def pairs(self, events):
+        """Every exit paired with the enter whose state it restores."""
+        out, live = [], None
+        for kind, payload in events:
+            if kind == "enter":
+                live = payload
+            elif kind == "exit":
+                out.append((live, payload))
+                live = None
+        return out
+
+    def test_a_session_without_prompts_enters_once_and_exits_once(self):
+        events = self.run_session(["f", "esc"])
+        self.assertEqual(events, [("enter", (10, "termios-0")),
+                                  ("exit", (10, "termios-0"))])
+
+    def test_a_dirty_quit_exits_the_same_way(self):
+        events = self.run_session(["w", "esc", "esc"])
+        self.assertEqual(len(self.pairs(events)), 1)
+        self.assertEqual(events[-1], ("exit", (10, "termios-0")))
+
+    def test_each_prompt_closes_and_reopens_the_pair(self):
+        library = FakeLibrary().build()
+        events = self.run_session(
+            ["i", "N", "esc"], answers=["#abcdef", "dusk"],
+            edit_kwargs={"theme": "ember", "backup": False,
+                         "library": library})
+        self.assertEqual([kind for kind, _ in events],
+                         ["enter", "exit", "prompt", "enter", "exit", "prompt",
+                          "enter", "exit"])
+        # every exit restores exactly the state its own enter saved
+        self.assertEqual(self.pairs(events),
+                         [((10, "termios-0"), (10, "termios-0")),
+                          ((11, "termios-1"), (11, "termios-1")),
+                          ((12, "termios-2"), (12, "termios-2"))])
+
+    def test_the_closing_exit_uses_the_last_enter_state(self):
+        # the loop's finally restores the termios state of the *current*
+        # raw session, not the one from before a prompt (§4.3)
+        library = FakeLibrary().build()
+        events = self.run_session(
+            ["i", SAVE, "esc"], answers=["#abcdef"],
+            edit_kwargs={"theme": "ember", "backup": False,
+                         "library": library})
+        self.assertEqual(events[-1], ("exit", (11, "termios-1")))
+
+    def test_a_cancelled_prompt_still_closes_the_pair(self):
+        for problem in (EOFError(""), KeyboardInterrupt()):
+            with self.subTest(problem=type(problem).__name__):
+                library = FakeLibrary().build()
+                events = self.run_session(
+                    ["i", "N", "esc"], input_error=problem,
+                    edit_kwargs={"theme": "ember", "backup": False,
+                                 "library": library})
+                self.assertEqual([kind for kind, _ in events],
+                                 ["enter", "exit", "prompt", "enter", "exit",
+                                  "prompt", "enter", "exit"])
+                self.assertEqual(self.pairs(events)[-1],
+                                 ((12, "termios-2"), (12, "termios-2")))
+
+    def test_an_exception_out_of_the_loop_still_exits_raw(self):
+        before = signal.getsignal(signal.SIGWINCH)
+        with self.assertRaises(RuntimeError):
+            self.run_session(["x"], keys_side_effect=["x", RuntimeError("boom")])
+        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
+
+    def test_the_winch_handler_survives_a_failing_termios_restore(self):
+        # nothing may leave the user with a raw shell *or* a stale handler
+        before = signal.getsignal(signal.SIGWINCH)
+        with self.assertRaises(OSError):
+            self.run_session(["esc"], exit_error=OSError("tty"))
+        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
 
 
 if __name__ == "__main__":

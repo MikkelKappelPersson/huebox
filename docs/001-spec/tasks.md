@@ -1,6 +1,7 @@
 # huebox — tasks
 
-Status: **in execution — P4 in review** · Plan: `plan.md` · Spec: `spec.md` · Rules: `AGENTS.md`
+Status: **in execution — P5 implemented, pending review** · Plan: `plan.md` ·
+Spec: `spec.md` · Rules: `AGENTS.md`
 
 Execution order is top to bottom; phases are checkboxes, tasks are `- [ ]`.
 Every phase ends with `python3 -m unittest discover -s tests` green and the
@@ -171,20 +172,67 @@ mtime — §6.2 rule 4 ("must not rewrite the file at all") is unmet by
 
 ## P5 — TUI picker + save-as-new (§13.7, plan phase 5)
 
-- [ ] reset `armed` when the overlay loads another theme (P2 review note:
+- [x] reset `armed` when the overlay loads another theme (P2 review note:
       the armed flag persists post-quit by design — harmless there, but a
       fresh theme must not inherit a pending discard)
-- [ ] `editor.py`: `t` overlay (list/pack rows, arrows, Enter opens + sets
+- [x] `editor.py`: `t` overlay (list/pack rows, arrows, Enter opens + sets
       current, `n` new-from-buffer via name prompt, Esc back)
-- [ ] dirty-switch block with `save (Ctrl+S) or revert (r) first`
-- [ ] `N` save-as-new (name prompt, existing-name confirm) — the legacy
+- [x] dirty-switch block with `save (Ctrl+S) or revert (r) first`
+- [x] `N` save-as-new (name prompt, existing-name confirm) — the legacy
       migration path
-- [ ] status bar: `theme ● fmt` / `direct:<path>` + dirty dot
-- [ ] tune MIN sizes (P1 TODO closes); overlay under too-small check
-- [ ] tests: overlay apply_key flows, dirty block, save-as-new, overlay
+- [x] status bar: `theme ● fmt` / `direct:<path>` + dirty dot
+- [x] tune MIN sizes (P1 TODO closes); overlay under too-small check
+- [x] tests: overlay apply_key flows, dirty block, save-as-new, overlay
       rendering within width budget
-- [ ] spec: close §4.3 raw-mode TODO (one enter/exit pair rule, prompt paths
+- [x] spec: close §4.3 raw-mode TODO (one enter/exit pair rule, prompt paths
       enumerated); AGENTS.md guideline if patterns changed
+
+Notes: the picker is the one place where the session's *subject* changes, and
+that rippled into two seams. `edit()`'s writer is now called as
+`write(theme, path, slots)` — the name travels with every save because a
+switch mid-session has to retarget `Ctrl+S`; cli's single writer branches on
+it (`None` = the v1 direct-mode config write, a name = truth-then-push), so
+`N` can migrate a direct session without the writer ever seeing a format
+mismatch. Two existing test helpers (`EditLoop.run_session`,
+`ThemeSession.session`) were updated for that signature — no assertions were
+weakened.
+
+The library arrives as an injected `editor.Library` (list / load / create),
+not an import: `editor` still depends only on `render` + `tui` + `color`, and
+every failure comes back as a status line instead of an exception into the
+draw loop. Load-time complaints a status bar cannot hold — a theme that would
+not open, a state file that could not be written, dropped keys and grey gaps —
+are collected in a `notes` list and printed after the session on stderr,
+exactly like the push report.
+
+Three judgement calls for the reviewer. **The picker replaces the frame**
+rather than insetting a box (decision 19): one frame means one layout budget,
+its widest row is a name `clip` truncates, and its hint footer folds through
+`pack` — which is also why `MIN_COLS`/`MIN_ROWS` stay 40x12 (§15.4). While
+the picker is up it owns the whole key surface, so `Q` and `Ctrl+C` close it
+instead of quitting: a stray key cannot quit or edit behind a list you are
+reading. And **creating adopts**: `n` (in the picker) and `N` (in the editor)
+both make the new theme the session's subject and the library's current, with
+`N` then running the ordinary save pipeline — one writer, one push contract,
+and the status bar always names the theme the next `Ctrl+S` will write. The
+undo log is cleared on adoption (the buffer and the new file are identical, so
+there is nothing to undo into) and `.huebox.bak` no longer applies.
+
+`<fmt>` in the status bar is the push target the command line named (`-f`, or
+the first of `--to`); with neither flag there is no target to name until a save
+resolves one, and the save's own status line names every format it pushed. The
+editor frame's key-hint line now packs two spaces apart: the two new keys would
+otherwise have cost the examples strip a row at 60x24, which P2's test guards.
+
+Raw mode (§4.3, now a guarantee instead of a TODO): one `enter_raw` per
+session, one `exit_raw` in `edit()`'s `finally`, every prompt closing and
+reopening the pair with its re-entry in a `finally` (Ctrl+C/EOF cancel the
+prompt and return to the editor), and the SIGWINCH handler restored in a
+nested block that runs even if the termios restore itself raises — the old
+`finally` could leave the handler installed when `exit_raw` threw. The overlay
+is not a fifth path: it is drawn and read inside the same loop. `tests/
+test_editor.py::RawMode` asserts the whole list by pairing every exit with
+the enter whose state it restores.
 
 ## P6 — Ghostty native export (§13.6 phase 2, plan phase 6)
 

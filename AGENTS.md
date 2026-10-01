@@ -23,7 +23,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip | §8, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
-| `huebox/editor.py` | draw loop, keys, overlay, staged buffer + save | §4.3, §14 |
+| `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
@@ -32,6 +32,14 @@ Dependency rule, no exceptions: `color` imports nothing intra-package;
 through the same `resolve()` the CLI does); `render` imports `color`;
 `editor` imports `render` + `tui` + `color`; `cli` imports everything.
 No cycles. Every module header cites its spec section.
+
+**Injected seams keep those edges clean.** `editor.py` reaches the outside
+world through four callables `cli.py` builds: the save callback
+(`write(theme, path, slots)` — handed the subject every time, because a
+picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one
+raw-mode prompt pattern, §4.3), and the `Library` object (list / load /
+create) that backs the theme picker (§13.7). Never import `themes` or
+`detect` into `editor` to save a parameter.
 
 ## Guidelines
 
@@ -47,6 +55,10 @@ No cycles. Every module header cites its spec section.
   theme file exactly as written (spec decision 7).
 - **Buffer renders, save writes.** The editor draws from the in-memory buffer
   every frame; disk changes happen on Ctrl+S only (§14).
+- **The editor asks, it never reaches.** Nothing in the draw loop may write
+  to stdout outside a frame, prompt inside raw mode, or import a module the
+  dependency rule forbids. Anything the picker cannot say in one status line
+  is collected by `cli` and printed after the session, on stderr (§13.7).
 - **3.9-compatible code.** No `match`, no `tomllib` (3.11+ — the TOML subset
   parser stays hand-rolled), no runtime `X | Y` (keep
   `from __future__ import annotations` in every file).

@@ -26,7 +26,7 @@ from collections import namedtuple
 from . import __version__, themes
 from .color import SLOTS
 from .detect import resolve
-from .editor import edit
+from .editor import Library, edit
 from .formats import FORMAT_NAMES, FORMATS
 from .render import render_preview
 from .tui import term_size
@@ -274,8 +274,13 @@ def _edit_target(args) -> Target:
 def _run_editor(target: Target, spec: PushSpec = None) -> int:
     """Open the editor; theme mode writes truth, then pushes (§13.6).
 
-    The save is the pipeline of plan 4.2 - truth first, terminal second -
-    and the returned status string is what the status bar shows
+    One writer serves the whole session, and it branches on the subject:
+    a theme name means truth-then-push, `None` means the v1 direct-mode
+    write into the terminal config itself (§13.4). The picker can move the
+    subject mid-session (§13.7), so the writer is handed the name and the
+    path instead of closing over them.
+
+    The returned status string is what the status bar shows
     (`saved ember → ghostty`). A push that fails never undoes the save
     (decision 7): the buffer is clean, the report says why, and the process
     ends 1.
@@ -291,32 +296,82 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
         _warn(f"not a terminal - run `{command}` in a terminal")
         return 0
 
-    if target.theme is None:
-        write = FORMATS[target.label]["write"]
-        edit(target.label, target.path, target.slots, write)
-        return 0
-
-    name = target.theme
+    direct_fmt = target.label if target.theme is None else None
+    label = spec.fmt or (spec.to[0] if spec.to else "")
     report: list = []          # the last save's push report, read at exit
+    notes: list = []           # the picker's complaints, printed the same way
     failed: list = []          # non-empty when a push did not get through
+    direct_warned = [False]    # --to-in-direct-mode note fires once
 
-    def write(_path, values):
-        themes.save(name, values)              # truth first, always
-        del report[:]                          # one report: this save's
+    def write(theme, path, values):
+        if theme is None:      # legacy direct mode: the config is the truth
+            if spec.to and not spec.no_push and not direct_warned[0]:
+                direct_warned[0] = True
+                notes.append("--to has no push target in a direct session "
+                             "- the config itself is written")
+            return FORMATS[direct_fmt]["write"](path, values)
+        themes.save(theme, values)          # truth first, always
+        del report[:]                      # one report: this save's
         del failed[:]
         if spec.no_push:
             report.append(NO_PUSH_LINE)
-            return f"saved {name} (truth only)"
+            return f"saved {theme} (truth only)"
         result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path)
         report.extend(_push_lines(result))
         if result.failed:
             failed.append(result)
-            return f"saved {name} - push failed"
-        return f"saved {name} → {_pushed(result)}"
+            return f"saved {theme} - push failed"
+        return f"saved {theme} → {_pushed(result)}"
 
-    edit(f"theme {name}", target.path, target.slots, write,
-         backup=False, theme=name, report=report)
+    edit(label, target.path, target.slots, write, backup=direct_fmt is not None,
+         theme=target.theme, report=report, library=_library(notes),
+         notes=notes)
     return 1 if failed else 0
+
+
+def _library(notes: list) -> Library:
+    """The picker onto the theme store (§13.7) — three calls, no import.
+
+    `notes` collects what cannot go on a one-line status bar: a theme that
+    would not open, a state file that could not be written, a hand-edited
+    theme's dropped keys. `_run_editor` prints them after the session,
+    where a report belongs and not inside the frame.
+    """
+
+    def listing():
+        return [name for name, _path, _mtime in themes.list_themes()]
+
+    def loader(name):
+        warnings: list = []
+        try:
+            slots = themes.load(name, warnings)
+        except themes.ThemeError as error:
+            notes.append(str(error))
+            return None
+        try:
+            themes.set_current(name)          # opening is choosing (§13.4)
+        except OSError as error:
+            notes.append(f"cannot write state: {error}")
+        notes.extend(warnings)
+        return slots, themes.theme_path(name)
+
+    def creator(name, slots, force=False):
+        try:
+            path = themes.create(name, slots, force=force)
+        except themes.ThemeError as error:
+            return "", f"{error} (letters, digits, - and _, 64 max)"
+        except OSError as error:
+            notes.append(f"could not create {name}: {error}")
+            return "", f"could not create {name}"
+        try:
+            themes.set_current(name)
+        except OSError as error:
+            notes.append(f"created {name} but the state file could not "
+                         f"be written: {error}")
+            return path, f"created {name} - state not written"
+        return path, ""
+
+    return Library(listing, loader, creator)
 
 
 # --------------------------------------------------------------------------

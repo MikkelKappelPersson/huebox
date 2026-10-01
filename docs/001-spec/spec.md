@@ -39,11 +39,12 @@ naming.
 
 ## 4. User-visible surface
 
-> Since §13–§14: this surface grew theme commands (§13) and save semantics
-> changed (§14). The theme commands of §13.5 are live — `new`, `list`, `use`,
-> `import`, and `[name]` on `edit` / `show` / `--dump` — and a save or a
-> `use` now writes the theme file and then pushes it to the terminal
-> (§13.6). The picker (`t`, §13.7) is still ahead.
+> Since §13–§15: this surface grew theme commands (§13), save semantics
+> changed (§14) and the layout follows the terminal (§15). The theme commands
+> of §13.5 and the picker of §13.7 are live — `new`, `list`, `use`, `import`,
+> `[name]` on `edit` / `show` / `--dump`, and `t` inside the editor — and a
+> save or a `use` writes the theme file and then pushes it to the terminal
+> (§13.6).
 
 ### 4.1 Commands
 
@@ -84,6 +85,8 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `i` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
 | `u` / `r` | undo / revert to the last save |
+| `t` | theme picker — arrows, `Enter` opens, `n` new from the buffer, `Esc` back (§13.7) |
+| `N` | save the buffer as a new theme, then save it like any other (§13.7) |
 | `Esc` | quit — twice if the buffer is dirty |
 
 Since §14, keystrokes do not write the file. They mutate an in-memory buffer
@@ -96,10 +99,31 @@ while the selected slot has no value — save, undo, revert and navigation work
 regardless (v1 blocked every action on it). The `<config>.huebox.bak` is
 taken at the first save of a session, not at editor open (§14.2).
 
-**TODO — raw-mode cleanup.** On `Esc`, an interrupt or a crash while in raw mode,
-the terminal must be restored. Specify the exact restoration sequence and the
-signal handling required, so `huebox` can never leave a user's shell without
-echo.
+**Raw-mode guarantee.** A session enters raw mode exactly once, in `edit()`,
+before its draw loop, and leaves it exactly once, in the `finally` that wraps
+that loop. The paths out of raw mode are therefore all the same path:
+
+1. the loop's `finally` on a clean quit (`Esc`, `Q`, `Ctrl+C`);
+2. the same, after an armed dirty quit discarded the buffer;
+3. a prompt — hex entry (`i` / `X`), the picker's name prompt (`n`, `N`) and
+   its exists-confirm follow-up — each of which drops out of raw mode for one
+   line and re-enters it in its own `finally`;
+4. any exception out of the draw, the key reader or a handler.
+
+The theme picker never leaves raw mode: it is drawn and read inside the same
+loop, so opening it is not a fourth path.
+
+`exit_raw` in that `finally` restores the termios state saved by the *most
+recent* `enter_raw`, which matters because every prompt has closed and reopened
+the pair since the session started. A prompt cancelled with `Ctrl+C` or EOF
+returns to the editor rather than stranding the session, and each exit is
+paired with an enter. The `SIGWINCH` handler (§15.1) is installed after
+entering raw mode and restored in the same `finally`, in a nested block that
+runs even if restoring the terminal itself fails — no path leaves a user with a
+raw shell or with huebox's resize handler still installed. `Ctrl+C` needs no
+signal handling at all: raw mode clears `ISIG`, so it arrives as byte `0x03`
+and takes the Esc path. Only `SIGKILL`, or a terminal that goes away
+underneath the process, can leave a shell without echo.
 
 ## 5. Colour model
 
@@ -201,9 +225,8 @@ config path is ambiguous between formats?
   overflows and nothing wraps badly.
 
 **Minimum width.** Defined in §15.4 — `MIN_COLS`/`MIN_ROWS` in `tui.py`;
-below them the editor renders one centered `terminal too small — enlarge to at
-least WxH` line instead of a garbled frame. Still a proposal until the picker
-lands.
+below them the editor renders one centered `terminal too small — need WxH`
+line instead of a garbled frame. Settled in phase 5, when the picker landed.
 
 > Planned: the example area becomes a full live gallery (§14) and the layout
 > follows terminal resizes (§15).
@@ -226,9 +249,12 @@ lands.
 - only the intended lines change
 - a no-op write is byte-identical (asserted for every format)
 - layout holds in narrow terminals
-- editor frames at 100x30, 80x24, 60x16 and 40x10 — reflow, clipping, the
+- editor frames at 100x30, 80x24, 60x16 and 40x12 — reflow, clipping, the
   too-small fallback below the minimum, and two identical draws producing a
   byte-identical frame (§15)
+- the theme picker frame at the same sizes, including a library larger than
+  the screen (it scrolls), and the picker flows at the key level: open,
+  move, open, blocked-while-dirty, new-from-buffer, save-as-new (§13.7)
 
 **TODO — the gaps.** Add explicit cases for: `config-file` includes, `theme =`
 indirection, inline Alacritty tables, malformed hex input, and a read-only or
@@ -236,10 +262,12 @@ unwritable config.
 
 ## 11. Open questions
 
-Collected, unsorted, all still live. Theme-library, staged-save and resize
-questions live with their sections (§§13–15); this list stays v1-only:
+Collected, unsorted. Theme-library, staged-save and resize questions live with
+their sections (§§13–15); this list is v1-only:
 
-1. Raw-mode restoration and signal handling (§4.3).
+1. Raw-mode restoration and signal handling (§4.3) — **decided**: the
+   guarantee in §4.3 (one enter/exit pair per session, prompts close and
+   reopen it, the resize handler is restored in the same `finally`).
 2. Accumulated drift from HSV round-trips (§5.1).
 3. The 140 luminance threshold (§5.1).
 4. When the `.huebox.bak` is written and refreshed (§6.2).
@@ -271,6 +299,9 @@ Append-only. Newest last. One line per decision, with the reason.
 | 16 | The fallback ramp is a neutral dark base, a readable foreground, an inverting cursor, and muted hues with bright siblings — the plan's values, unchanged | It has to be legible the moment `new` opens the editor on an empty machine, and one dict with a comment is easier to argue about than a tuning session |
 | 17 | No `huebox rm` / `mv`: the filesystem manages the library and the state file tolerates a dangling pointer | huebox would be offering to delete a user's dotfile; a deleted theme already warns and falls back to direct mode (§13.4) |
 | 18 | Push is report-only for keys the target config does not carry | Inserting a key is the one thing that would break the §6.2 line-level contract; saying `not carried by this config: …` tells the user what to add, and the next push fills it in (§13.6, open question 1 stays open) |
+| 19 | The picker takes over the frame while it is open, instead of insetting a box over the editor | One frame means one layout budget, and the picker's own footer folds through `pack` — a centred box would have needed a wider floor than §15.4 promises for no extra information |
+| 20 | `n` / `N` adopt the new theme as the session's subject, and `N` then runs the ordinary save | One writer, one save pipeline: a theme made in the editor is pushed like any other (§13.6), and the status bar names the theme the next `Ctrl+S` will write |
+| 21 | An already-taken name is confirmed in text (`y` overwrites, another name is used), never with a modal | Same reasoning as decision 10: no modal inside raw mode, and the answer is a word rather than a keystroke that could land on the wrong widget |
 
 ---
 
@@ -368,7 +399,8 @@ plus exit 1, never a rolled-back truth.
 > to open (no current theme, or one whose file has been deleted). Bare
 > `huebox` resolves the same way — the current theme, edited on a TTY and
 > previewed off one — because that is the subject; an explicit `show`
-> without a name stays the terminal config. The picker (`t`) is still §13.7.
+> without a name stays the terminal config. Inside the editor, `t` opens the
+> picker and `N` is the way out of direct mode (§13.7).
 
 ### 13.6 Push (truth → terminal)
 
@@ -407,8 +439,51 @@ leaves a saved theme and a failing exit code — fix the target and press
   way out of legacy direct-config sessions.
 - Switching while dirty is blocked: status reads
   `save (Ctrl+S) or revert (r) first`. No silent loss, no modal.
-- The status bar always shows `<theme> ● <fmt>` (or `direct:<path>` in
-  legacy mode) plus a dirty dot `●` when the buffer differs from last save.
+- The status bar shows `<theme> <fmt>` (or `direct:<path>` in legacy
+  mode); a dirty dot `●` appears between theme and target when the buffer
+  differs from last save.
+
+As built:
+
+- **The picker owns the frame while it is up** (decision 19) and takes the
+  whole key surface: arrows move the selection, `Enter` opens, `n` creates
+  from the buffer, `Esc` / `t` / `Q` / `Ctrl+C` all just put the editor back.
+  No colour edit, no save and no quit can happen behind a list the user is
+  reading.
+- **Opening a theme resets the session around it**: the buffer becomes the
+  loaded colours, `saved` is that same snapshot (so the new theme is clean),
+  the undo log is empty, the selection starts at slot 0, and the pending-discard
+  arm is dropped — a fresh theme must never inherit a half-armed Esc. Status
+  reads `opened <name>`.
+- **`n` creates and adopts.** The prompt is one line (`new theme name:`); a
+  name that is taken gets a second one (`<name> exists - y overwrites it, or
+  type another name:`) and nothing is written without an answer (decision 21).
+  The new theme becomes the session's subject *and* the library's current, so
+  the next `Ctrl+S` writes it, and the picker stays open with the new row
+  selected. Creation is not switching, so a dirty buffer is fine — the buffer
+  is exactly what gets written.
+- **`N` is the same, plus the save.** Prompt, `create`, `set_current`, then the
+  ordinary save pipeline, so the new theme is pushed like any other truth file
+  (§13.6) and the status bar shows `saved dusk → ghostty`. This is the
+  migration path out of a legacy direct-mode session (§13.4): the subject
+  becomes a theme, the `.huebox.bak` rule goes with it (§13.2), and everything
+  after it is an ordinary theme session.
+- **One writer for the whole session.** The session's save callback is handed
+  the theme name and path every time, not closed over one: a switch mid-session
+  has to retarget `Ctrl+S`, and the caller's writer is what decides
+  truth-then-push versus the v1 direct-config write.
+- **`<fmt>` is the push target the command line named** (`-f`, or the first of
+  `--to`). With neither there is no target to name until a save resolves one,
+  and the save's own status line names every format it pushed. `●` appears
+  between the theme and the target while the buffer differs from the last save;
+  a legacy direct-mode session shows `direct:<path>` instead, because that is
+  the file its save writes.
+- **What the picker cannot say in one line is reported after the session**: a
+  theme that would not open, a state file that could not be written, a
+  hand-written theme's dropped keys and grey gaps (§13.2), a creation whose
+  theme file or state write failed, and a `--to` named in a legacy direct
+  session where it has no push target. All of it is stderr,
+  after raw mode is over, exactly like the push report (§13.6).
 
 ### 13.8 Open questions (§13)
 
@@ -465,7 +540,7 @@ and hex, each updating per keystroke.
 - Esc with a clean buffer quits. Esc with a dirty buffer arms
   `unsaved changes — Esc again to discard`; the second Esc discards. Ctrl+C
   follows the Esc path; during a prompt it cancels the prompt (raw-mode
-  restoration, §4.3 TODO, still required). A write failure surfaces as
+  restoration is the guarantee in §4.3). A write failure surfaces as
   `write failed: …` in the status bar and leaves the buffer dirty — `saved`
   is never snapshot on a failed write.
 - `--dump` and `show` read saved files only. The buffer lives and dies inside
@@ -498,11 +573,17 @@ is no small-size story.
    widget (examples strip, theme overlay) must go through them.
 4. Below a minimum size, render a centered
    `terminal too small — need WxH` screen instead of garbling.
-   **Proposal: `MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in
-   `tui.py` beside `term_size()`, and the numbers stay tunable until the theme
-   picker (§13.7) and gallery (§14) land, since the picker is the widest
-   widget. The floor is a proposal, not a promise: everything at or above it
-   still has to render (and is tested at 100x30, 80x24, 60x16, 40x12).
+   **`MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in `tui.py`
+   beside `term_size()`. Phase 1 proposed these numbers and left them
+   tunable "until the theme picker lands"; phase 5 kept them, because the
+   picker is not the wide widget it was feared to be: it replaces the frame
+   rather than insetting a box (decision 19), its widest row is a name that
+   `clip` truncates, and its hint footer folds through `pack` into two or
+   three rows inside the same floor. The floor is a promise, not a
+   proposal: everything at or above it renders, and is tested at 100x30,
+   80x24, 60x16 and 40x12. One consequence is recorded in the editor: the
+   key-hint line packs its items two spaces apart, so adding the two picker
+   keys did not cost the examples strip a row at 60x24.
 5. Static `show` is unchanged: one-shot render at the current size.
 6. Tests: layout cases at several sizes including below-minimum (§10 grows
    one line: `pack`/`clip`/overlay rendering at 100x30, 80x24, 60x16, 40x10).

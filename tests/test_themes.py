@@ -709,6 +709,168 @@ class PushOnSave(LibraryHome):
         self.assertIn("saved ember (truth only)", out)
 
 
+class Picker(LibraryHome):
+    """The picker and save-as-new against a real library (§13.7)."""
+
+    def setUp(self):
+        super().setUp()
+        themes.create("ember", FULL)
+        themes.create("frost", dict(FULL, background="#0a0a13"))
+        themes.set_current("ember")
+        self.spec = cli.PushSpec(("ghostty",), None, self.config, False)
+
+    def theme_target(self, name):
+        return cli.Target(name, f"theme {name}", self.theme_file(name),
+                          themes.load(name))
+
+    def direct_target(self):
+        """A v1 session: no theme, the config itself is the subject (§13.4)."""
+        return cli.Target(None, "ghostty", self.config,
+                          themes.read_terminal("ghostty", self.config))
+
+    def session(self, keys, target=None, spec=None, answers=()):
+        drawn = []
+        real = editor.draw_editor
+        answers = list(answers)
+
+        def record(*args, **kwargs):
+            drawn.append({"status": args[5], "head": kwargs.get("head"),
+                          "overlay": kwargs.get("overlay")})
+            return real(*args, **kwargs)
+
+        def ask(label):
+            return answers.pop(0) if answers else ""
+
+        stream = iter(keys)
+        out, err = FakeOut(), io.StringIO()
+        with mock.patch.object(sys, "stdin", FakeTTY()), \
+                mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(editor, "enter_raw", return_value=(7, None)), \
+                mock.patch.object(editor, "exit_raw"), \
+                mock.patch.object(editor, "term_size", return_value=(80, 24)), \
+                mock.patch.object(editor, "draw_editor", side_effect=record), \
+                mock.patch.object(editor, "read_key",
+                                  side_effect=lambda fd: next(stream)), \
+                mock.patch("builtins.input", side_effect=ask):
+            status = cli._run_editor(target or self.theme_target("ember"),
+                                     spec if spec is not None else self.spec)
+        return status, drawn, out.getvalue(), err.getvalue()
+
+    def test_t_opens_the_picker_with_the_current_theme_marked(self):
+        _, drawn, _, _ = self.session(["t", "esc", "esc"])
+        overlay = next(d["overlay"] for d in drawn if d["overlay"])
+        self.assertEqual(overlay, (["ember", "frost"], 0, "ember"))
+        self.assertEqual(overlay[0][overlay[1]], "ember")
+
+    def test_opening_another_theme_switches_the_buffer_and_the_save(self):
+        # the whole point: the subject can change mid-session, so Ctrl+S
+        # writes the new truth file and pushes that (§13.6, §13.7)
+        status, drawn, out, err = self.session(["t", "down", "\r", "x",
+                                                editor.SAVE_KEY, "esc"])
+        self.assertEqual(status, 0)
+        self.assertEqual(themes.current(), "frost")
+        self.assertEqual(drawn[-1]["head"], "frost ghostty")
+        self.assertEqual(drawn[-2]["head"], "frost ● ghostty")   # dirty dot
+        self.assertEqual(themes.load("ember"), FULL)     # the old one untouched
+        saved = themes.load("frost")
+        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
+                      self.read(self.theme_file("frost")))
+        self.assertIn(f"palette = 0={saved['palette-0']}", self.read(self.config))
+        self.assertIn("saved theme frost", out)
+        self.assertIn("huebox: ghostty: pushed to", err)
+
+    def test_a_dirty_switch_is_blocked_and_says_exactly_why(self):
+        before = self.read(self.theme_file("frost"))
+        status, drawn, _, err = self.session(["x", "t", "down", "\r",
+                                              "esc", "r", "esc"])
+        self.assertEqual(status, 0)
+        self.assertEqual(themes.current(), "ember")       # decision 12
+        self.assertEqual(self.read(self.theme_file("frost")), before)
+        self.assertEqual(themes.load("ember"), FULL)
+        self.assertIn("save (Ctrl+S) or revert (r) first",
+                      [d["status"] for d in drawn])
+        self.assertEqual(err, "")
+
+    def test_n_makes_a_theme_from_the_buffer_and_the_next_save_pushes_it(self):
+        status, drawn, _, err = self.session(
+            ["x", "t", "n", "esc", editor.SAVE_KEY, "esc"], answers=["dusk"])
+        self.assertEqual(status, 0)
+        self.assertTrue(os.path.isfile(self.theme_file("dusk")))
+        self.assertEqual(themes.current(), "dusk")
+        self.assertNotEqual(themes.load("dusk")["palette-0"],
+                            FULL["palette-0"])
+        self.assertEqual(drawn[-1]["head"], "dusk ghostty")
+        self.assertIn(f"palette = 0={themes.load('dusk')['palette-0']}",
+                      self.read(self.config))
+        self.assertIn("huebox: ghostty: pushed to", err)
+
+    def test_save_as_new_migrates_a_direct_session_onto_the_library(self):
+        # §13.4 — `N` is the documented way out of a v1 direct-mode session
+        status, drawn, out, err = self.session(
+            ["x", "N", "esc"], target=self.direct_target(), answers=["dusk"])
+        self.assertEqual(status, 0)
+        self.assertEqual(themes.current(), "dusk")
+        expected = themes.load("dusk")
+        self.assertNotEqual(expected["palette-0"], FULL["palette-0"])
+        self.assertEqual(expected["background"], FULL["background"])
+        self.assertIn(f"palette = 0={expected['palette-0']}",
+                      self.read(self.config))
+        self.assertEqual(drawn[-1]["head"], "dusk ghostty")
+        self.assertIn("saved theme dusk", out)
+        self.assertIn("huebox: ghostty: pushed to", err)
+
+    def test_save_as_new_asks_before_replacing_a_taken_name(self):
+        original = self.read(self.theme_file("ember"))
+        status, drawn, _, err = self.session(["x", "N", "esc"],
+                                             answers=["ember", "y"])
+        self.assertEqual(status, 0)
+        self.assertNotEqual(self.read(self.theme_file("ember")), original)
+        self.assertNotEqual(themes.load("ember")["palette-0"],
+                            FULL["palette-0"])
+        self.assertIn("huebox: ghostty: pushed to", err)
+
+    def test_cancelling_the_confirm_leaves_the_taken_theme_alone(self):
+        original = self.read(self.theme_file("ember"))
+        config_before = self.read(self.config)
+        status, drawn, out, err = self.session(["x", "N", "esc", "esc"],
+                                               answers=["ember", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(self.read(self.theme_file("ember")), original)
+        self.assertEqual(self.read(self.config), config_before)
+        self.assertEqual(themes.current(), "ember")
+        self.assertIn("cancelled - ember is untouched",
+                      [d["status"] for d in drawn])
+        self.assertNotIn("saved theme", out)
+        self.assertEqual(err, "")
+
+    def test_a_theme_with_gaps_reports_them_after_the_session(self):
+        # §13.2 — a hand-written theme loads with MISSING grey and says so;
+        # the picker cannot print inside raw mode, so it reports at exit
+        self.write(self.theme_file("gaps"),
+                   '# owned by huebox\n[colors]\nbackground = "#123456"\n')
+        _, drawn, _, err = self.session(["t", "down", "down", "\r", "esc"])
+        self.assertEqual(themes.current(), "gaps")
+        self.assertEqual(drawn[-1]["head"], "gaps ghostty")
+        self.assertIn("huebox: gaps: 21 slot(s) have no value", err)
+
+    def test_an_illegal_name_comes_back_as_a_status_line(self):
+        _, drawn, _, err = self.session(["N", "esc"], answers=["not a name"])
+        self.assertEqual(themes.current(), "ember")
+        self.assertTrue(any("invalid theme name" in status
+                            for status in (d["status"] for d in drawn)))
+        self.assertEqual(err, "")
+
+    def test_no_themes_yet_says_so_in_the_status_bar(self):
+        self.drop("ember")
+        self.drop("frost")
+        os.unlink(themes.state_path())
+        _, drawn, _, _ = self.session(["t", "esc"], target=self.direct_target())
+        self.assertTrue(any("no themes yet" in status
+                            for status in (d["status"] for d in drawn)))
+
+
 class Ramp(unittest.TestCase):
     """The fallback palette `new` seeds from (spec §13.8 question 3)."""
 

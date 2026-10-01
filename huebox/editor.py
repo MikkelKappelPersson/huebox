@@ -1,8 +1,13 @@
-"""The interactive editor: draw loop, keys and the staged buffer (§4.3, §14).
+"""The interactive editor: draw loop, keys, picker, staged buffer
+(§4.3, §13.7, §14).
 
 Keystrokes mutate an in-memory buffer; nothing reaches disk until Ctrl+S
 (§14.2). The writer is injected by cli so this module never touches the
 format registry — saving is the caller's decision, drawing is ours.
+
+The theme picker (§13.7) follows the same rule one level up: the library
+arrives as an injected `Library` (list / load / create) rather than an
+import, so a switch can re-target a save mid-session without a cycle.
 """
 
 from __future__ import annotations
@@ -31,6 +36,49 @@ MULT_STEPS = [1, 5, 20]
 MOVE = {"up": -8, "down": 8, "left": -1, "right": 1}
 QUIT_KEYS = ("esc", "Q", "\x03")
 SAVE_KEY = "\x13"
+ENTER_KEYS = ("\r", "\n")
+
+# §13.7 — the picker takes the frame over while it is up (decision 19), so
+# it shares the editor's minimum size and header width instead of adding a
+# box of its own. `●` is the spec's own dirty mark, not an ASCII stand-in.
+DIRTY_MARK = "●"
+THEME_HINTS = ["arrows move", "Enter open", "n new from buffer",
+               "N save as new", "t / Esc back"]
+
+
+class Library:
+    """The three things the picker may ask of the theme library (§13.7).
+
+    Injected by cli and never imported: this module must not know how a
+    theme is stored, and a test can hand it three lambdas. Failure is
+    reported by return value, never by an exception into the draw loop —
+    `names()` is a (possibly empty) list, `load()` gives `(slots, path)` or
+    `None`, `create()` gives `(path, problem)` with `problem` empty on
+    success.
+    """
+
+    def __init__(self, listing=None, loader=None, creator=None):
+        self.listing = listing        # () -> [name, ...]
+        self.loader = loader          # (name) -> (slots, path) | None
+        self.creator = creator        # (name, slots, force) -> (path, problem)
+
+    def names(self) -> list:
+        if not self.listing:
+            return []
+        try:
+            return list(self.listing())
+        except OSError:               # a library that vanished mid-session
+            return []
+
+    def load(self, name: str):
+        if not self.loader:
+            return None
+        return self.loader(name)
+
+    def create(self, name: str, slots: dict, force: bool = False):
+        if not self.creator:
+            return "", "no theme library in this session"
+        return self.creator(name, slots, force)
 
 
 def too_small_frame(cols):
@@ -43,7 +91,87 @@ def too_small_frame(cols):
     return " " * max(0, (cols - len(hint)) // 2) + clip(hint, cols)
 
 
-def draw_editor(fmt, path, slots, sel, undo, status, mult):
+def head_label(st) -> str:
+    """The status bar's subject: `<theme> ● <fmt>`, or `direct:<path>` (§13.7).
+
+    A theme session names the theme it is editing plus the push target the
+    command line named — with no `-f`/`--to` there is no target to name
+    until a save resolves one, and the save's own status line names every
+    format it pushed. The `●` appears only while the buffer differs from
+    the last save. A legacy direct-mode session names the config instead,
+    because that is the file its Ctrl+S writes (§13.4).
+    """
+    if st.theme is None:
+        return f"direct:{st.path}"
+    parts = [st.theme]
+    if st.dirty():
+        parts.append(DIRTY_MARK)
+    parts.append(st.fmt)
+    return " ".join(part for part in parts if part)
+
+
+def session_path(st) -> str:
+    """The dim path after the subject — theme sessions only.
+
+    `direct:<path>` already carries the config's path; printing it twice
+    reads like two files.
+    """
+    return st.path if st.theme is not None else ""
+
+
+def _theme_row(name: str, selected: bool, current: bool) -> str:
+    """One picker row: `> name`, `*` on the library's current theme.
+
+    Both marks share the two columns in front of the name, so the names
+    line up and `>* name` reads as "selected, and the current one".
+    """
+    mark = ">" if selected else ""
+    flag = "*" if current else ""
+    return f"  {BOLD if selected else ''}{mark}{flag} {name}{RESET}"
+
+
+def theme_lines(names, index, current, cols, rows, status=""):
+    """The theme picker as a frame of lines (§13.7).
+
+    Pure, like the editor frame: rows are the library's names, the session's
+    subject is marked `*` (the theme this buffer came from — after `n`/Enter
+    it is also the library's current, but the mark follows the session, not
+    the state file), the selected row `>`, and the hint footer folds
+    through `pack` so it can never widen the frame. Every line is `clip`ped
+    and the list is trimmed to `rows` with a window that keeps the
+    selection visible — a library with more themes than rows scrolls, it
+    never wraps. The status line is the last row and is never the row that
+    gets cut, exactly as in the editor frame.
+    """
+    out = [f"  {BOLD}huebox{RESET}  {BOLD}themes{RESET}", ""]
+    footer = [f"  {DIM}{line}{RESET}"
+              for line in pack(THEME_HINTS, cols - 2, sep="  ")]
+    if status:
+        footer.append(f"  {BOLD}{status}{RESET}")
+
+    if not names:
+        out.append(f"  {DIM}no themes yet - N makes one from this buffer{RESET}")
+    else:
+        index = max(0, min(index, len(names) - 1))
+        # two rows of the budget: the "x-y of n" counter and the blank
+        # before the footer — the footer itself is never trimmed
+        room = max(1, rows - len(out) - len(footer) - 2)
+        start = max(0, min(index - room + 1, len(names) - room))
+        for row in range(start, min(len(names), start + room)):
+            name = names[row]
+            out.append(_theme_row(name, row == index, name == current))
+        if start or len(names) > start + room:
+            out.append(f"  {DIM}{start + 1}-{min(len(names), start + room)}"
+                       f" of {len(names)}{RESET}")
+    out.append("")
+    out.extend(footer)
+    if len(out) > rows:                    # belt and braces: keep the footer
+        out = out[:len(out) - len(footer)] + footer
+    return [clip(line, cols) for line in out[:rows]]
+
+
+def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
+                overlay=None):
     cols, rows = term_size()
     sys.stdout.write("\033[H\033[2J")
     if cols < MIN_COLS or rows < MIN_ROWS:
@@ -51,12 +179,22 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult):
         sys.stdout.write(too_small_frame(cols) + "\r\n")
         sys.stdout.flush()
         return
+    if overlay is not None:
+        # §13.7 — the picker owns the frame while it is up. It shares the
+        # editor's minimum size, so the too-small check above already said
+        # what to do when there is no room for either.
+        names, index, current = overlay
+        sys.stdout.write("\r\n".join(
+            theme_lines(names, index, current, cols, rows, status)) + "\r\n")
+        sys.stdout.flush()
+        return
     body = []
 
-    head = f"  {BOLD}huebox{RESET}  {BOLD}{fmt}{RESET}"
-    if path and len(path) + len(head) + 2 <= cols:
-        head += f"  {DIM}{path}{RESET}"
-    body.append(head)
+    label = fmt if head is None else head
+    first = f"  {BOLD}huebox{RESET}  {BOLD}{label}{RESET}"
+    if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
+        first += f"  {DIM}{path}{RESET}"
+    body.append(first)
     body.append("")
 
     cell_full, cell_min = 13, 6
@@ -105,8 +243,11 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult):
 
     tail = [f"  {DIM}{line}{RESET}" for line in pack(
         ["arrows move", "q/w hue", "a/s sat", "z/x light", f"f x{mult}",
-         "i hex", "^S save", f"u undo({len(undo)})", "r revert", "Esc quit"],
-        cols - 2)]
+         "i hex", "^S save", f"u undo({len(undo)})", "r revert", "t themes",
+         "N as new", "Esc quit"],
+        # two spaces, not three: the picker added two keys to this line and
+        # one more row here would come out of the examples strip's budget
+        cols - 2, sep="  ")]
     if status:
         tail.append(f"  {BOLD}{status}{RESET}")
 
@@ -140,15 +281,23 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult):
 
 
 class EditorState:
-    """Everything one editor session mutates (§14.2).
+    """Everything one editor session mutates (§14.2, §13.7).
 
     `slots` is the buffer: it renders every frame and reaches disk only via
     the injected `write`, called from the Ctrl+S branch of `apply_key`.
     `saved` is the last-save snapshot, so `dirty()` means "the buffer
-    differs from what is on disk" — that is what arms Esc.
+    differs from what is on disk" — that is what arms Esc, and what blocks
+    a theme switch (decision 12).
+
+    `theme` is the name of the theme being edited (`None` in a legacy
+    direct-mode session), `overlay` the picker's rows while it is up, and
+    `library` the injected seam the picker asks for themes. Each of those
+    can change mid-session, which is why the writer is bound to the state
+    and not to `edit()`'s arguments.
     """
 
-    def __init__(self, slots, write, prompt_hex=None, backup_path=None):
+    def __init__(self, slots, write, prompt_hex=None, backup_path=None,
+                 theme=None, fmt="", library=None, path=""):
         self.slots = dict(slots)
         self.saved = dict(self.slots)
         self.sel = 0
@@ -162,9 +311,28 @@ class EditorState:
         self.write = write                  # write(slots) -> status | None
         self.prompt_hex = prompt_hex        # prompt_hex(name) -> str | None
         self.quit = False
+        self.theme = theme                  # theme name, None: direct mode
+        self.fmt = fmt                      # push target label (§13.7)
+        self.path = path                    # the file a save writes
+        self.library = library              # Library | None: the picker seam
+        self.prompt_name = None             # prompt_name(label) -> str | None
+        self.created = None                 # name created via n/N this session
+        self.overlay = None                 # [name, ...] while the picker is up
+        self.overlay_index = 0
 
     def dirty(self) -> bool:
         return self.slots != self.saved
+
+    def picker_frame(self):
+        """`(names, index, current)` for the draw call, or None when closed.
+
+        `current` is the theme the buffer holds, so it is only marked while
+        it is one of the rows on screen.
+        """
+        if self.overlay is None:
+            return None
+        return (self.overlay, self.overlay_index,
+                self.theme if self.theme in self.overlay else "")
 
 
 def ensure_backup(path):
@@ -222,7 +390,7 @@ def _adjust(st, key):
 def _prompt(st):
     """`i` / `X` — hex entry, re-injected so `apply_key` stays testable."""
     name = SLOTS[st.sel]
-    typed = st.prompt_hex(name) if st.prompt_hex else None
+    typed = st.prompt_hex(f"  new hex for {name}: ") if st.prompt_hex else None
     if typed is None:                        # cancelled: leave the buffer be
         return
     typed = typed.strip()
@@ -234,16 +402,185 @@ def _prompt(st):
         st.status = "not a valid 6-digit hex - ignored"
 
 
-def apply_key(key, st):
-    """One keypress against the buffer (§14.2).
+# --------------------------------------------------------------------------
+# the theme picker (§13.7)
+# --------------------------------------------------------------------------
 
-    Pure apart from disk: the injected `write` callback fires on Ctrl+S
-    (and the session's first save also snapshots `<path>.huebox.bak`), and
-    `prompt_hex` on i/X drops out of raw mode for one line — so the key
-    surface itself is testable without a terminal. Sets `st.quit` when the
-    session is done: a clean Esc (or Ctrl+C) quits at once, a dirty one
-    arms and takes a second press.
+NEW_THEME_LABEL = "  new theme name: "
+
+
+def _ask(st, label: str) -> str:
+    """One line of input, or "" when the prompt was cancelled (§13.7).
+
+    The prompt is the same injected raw-mode closure hex entry uses, so a
+    cancelled read (Ctrl+C, EOF) returns to the editor with the buffer and
+    the library exactly as they were.
     """
+    typed = st.prompt_name(label) if st.prompt_name else None
+    return (typed or "").strip()
+
+
+def _taken(st, name: str) -> bool:
+    """Is this name in the library? Case-folded, as `create` compares (§13.3)."""
+    library = st.library
+    return bool(library) and name.lower() in {row.lower()
+                                              for row in library.names()}
+
+
+def _adopt(st, name: str, slots: dict, path: str) -> None:
+    """Make `name` the subject of the session (§13.7).
+
+    A different theme means a different buffer, a different file to save,
+    and no history to carry over: `saved` is what was loaded, the undo log
+    is empty, the selection starts at slot 0, and the pending-discard arm
+    is dropped — a fresh theme must never inherit a half-armed Esc.
+    """
+    st.slots = dict(slots)
+    st.saved = dict(slots)
+    st.undo.clear()
+    st.sel = 0
+    st.armed = False
+    st.theme = name
+    st.path = path
+    st.backup_path = None           # huebox owns theme files: no .bak (§13.2)
+
+
+def _create_theme(st, label: str = NEW_THEME_LABEL):
+    """Ask for a name and write the buffer as that theme (§13.7).
+
+    Text-based the whole way, no modal (decision 10's spirit): a name that
+    is taken gets one more line saying so, where `y` overwrites it and any
+    other name is used instead. Returns `(name, path)`, or `None` with the
+    reason on `st.status` and nothing written.
+    """
+    if st.library is None:
+        st.status = "no theme library in this session"
+        return None
+    name = _ask(st, label)
+    if not name:
+        st.status = "cancelled - no theme created"
+        return None
+    force = False
+    if _taken(st, name):
+        answer = _ask(st, f"  {name} exists - y overwrites it, "
+                          f"or type another name: ")
+        if not answer:
+            st.status = f"cancelled - {name} is untouched"
+            return None
+        if answer.lower() in ("y", "yes"):
+            force = True
+        else:
+            name = answer
+            if _taken(st, name):
+                st.status = f"{name} exists too - nothing created"
+                return None
+    path, problem = st.library.create(name, st.slots, force)
+    if problem:
+        st.status = problem
+        return None
+    return name, path
+
+
+def _open_overlay(st) -> None:
+    """`t` — the picker, with the session's own theme selected (§13.7)."""
+    if st.library is None:
+        st.status = "no theme library in this session"
+        return
+    names = st.library.names()
+    if not names:
+        st.status = "no themes yet - N makes one from this buffer"
+        return
+    st.overlay = names
+    st.overlay_index = names.index(st.theme) if st.theme in names else 0
+    st.status = ""
+
+
+def _open_selected(st) -> None:
+    """Enter in the picker: load the selected theme into the buffer."""
+    if st.dirty():
+        st.status = "save (Ctrl+S) or revert (r) first"      # decision 12
+        return
+    name = st.overlay[st.overlay_index]
+    loaded = st.library.load(name) if st.library else None
+    if loaded is None:
+        st.status = f"{name} could not be opened"
+        return
+    slots, path = loaded
+    _adopt(st, name, slots, path)
+    st.overlay = None
+    st.status = f"opened {name}"
+
+
+def _picker_new(st) -> None:
+    """`n` in the picker: the buffer becomes a new theme (§13.7).
+
+    Creating is not switching — the buffer is exactly what gets written,
+    so a dirty one is fine — but the new theme becomes the session's
+    subject, which is what makes this a way out of a legacy direct-mode
+    session (§13.4). The picker stays up with the new row selected.
+    """
+    made = _create_theme(st)
+    if made is None:
+        return
+    name, path = made
+    _adopt(st, name, st.slots, path)
+    st.created = name
+    _open_overlay(st)                 # re-read the library, land on the new row
+    st.status = f"created {name} - current now"
+
+
+def _overlay_key(key, st) -> None:
+    """Keys while the picker is up: it owns the surface (§13.7).
+
+    Nothing else can fire — no colour changes, no save, no quit — so a key
+    meant for the editor cannot do damage behind a list the user is
+    reading. `Esc`, `t`, `Q` and `Ctrl+C` all just put the editor back.
+    """
+    st.armed = False
+    st.status = ""
+    if key == "up":
+        st.overlay_index = max(0, st.overlay_index - 1)
+    elif key == "down":
+        st.overlay_index = min(len(st.overlay) - 1, st.overlay_index + 1)
+    elif key in ENTER_KEYS:
+        _open_selected(st)
+    elif key == "n":
+        _picker_new(st)
+    elif key == "t" or key in QUIT_KEYS:
+        st.overlay = None
+
+
+def _save_as_new(st) -> None:
+    """`N` — the buffer becomes a new theme, and then it is saved (§13.7).
+
+    The migration path out of a legacy direct-config session (§13.4): one
+    prompt, `create` + `set_current`, then the ordinary save pipeline, so a
+    theme made here is pushed exactly like one saved all session (§13.6).
+    """
+    made = _create_theme(st)
+    if made is None:
+        return
+    name, path = made
+    _adopt(st, name, st.slots, path)
+    save_state(st)
+
+
+def apply_key(key, st):
+    """One keypress against the buffer (§14.2) or the picker (§13.7).
+
+    Pure apart from disk and prompts: the injected `write` callback fires
+    on Ctrl+S (and the session's first save also snapshots
+    `<path>.huebox.bak`), and `prompt_hex` / `prompt_name` drop out of raw
+    mode for one line — so the key surface itself is testable without a
+    terminal. Sets `st.quit` when the session is done: a clean Esc (or
+    Ctrl+C) quits at once, a dirty one arms and takes a second press. An
+    open picker takes the whole key surface first, so quitting and colour
+    edits cannot happen behind it.
+    """
+    if st.overlay is not None:
+        _overlay_key(key, st)
+        return
+
     if key in QUIT_KEYS:
         if st.dirty() and not st.armed:
             st.armed = True
@@ -274,6 +611,10 @@ def apply_key(key, st):
         st.undo.clear()
         st.slots = dict(st.saved)
         st.status = "reverted to last save" if st.written else "reverted to start"
+    elif key == "t":
+        _open_overlay(st)
+    elif key == "N":
+        _save_as_new(st)
     elif value is None:
         return                  # slot absent from this config: nothing to do
     elif key in ADJUST:
@@ -282,33 +623,56 @@ def apply_key(key, st):
         _prompt(st)
 
 
-def edit(fmt, path, slots, write, backup=True, theme=None, report=None):
+def edit(fmt, path, slots, write, backup=True, theme=None, report=None,
+         library=None, notes=None):
     """Run one editor session: staged buffer, save on Ctrl+S (§14.2).
 
+    `write` is the session's one save path, called as
+    `write(theme_name_or_None, path, values)`. The name is in the call
+    because the picker can re-target a save mid-session (§13.7): a writer
+    closed over one name would save the wrong file after a switch. The
+    caller's writer is what decides truth-then-push (§13.6) or the v1
+    direct-config write (§13.4).
+
+    `theme` is the subject the session starts with (`None` in the legacy
+    direct mode), `library` the picker's seam onto the theme store,
+    `report` the list a save fills with what its push did and `notes` the
+    list anything else has to say — the picker cannot print inside raw
+    mode, so both are printed after the frame is done (§13.6).
+
     `backup` is False for files huebox owns (theme files, §13.2 — no .bak
-    there); the terminal-config session snapshots `<path>.huebox.bak` on its
-    first save. `theme` names the theme being edited: same loop, same keys,
-    a truth-file writer instead of the terminal one, and `report` — the
-    list the writer fills with what its push did — printed after raw mode
-    is over, so a save can say honestly which terminal it updated (§13.6).
+    there); a terminal-config session snapshots `<path>.huebox.bak` on its
+    first save.
     """
     fd = saved = None
     previous_winch = None
 
-    def prompt_hex(name):
-        """Hex entry drops out of raw mode for one line, then comes back."""
+    def prompt_text(label):
+        """The one prompt pattern: drop out of raw mode, read a line, come
+        back in — hex entry (`i`) and every name prompt of §13.7 use it.
+
+        §4.3: the pair is always closed. `finally` re-enters raw mode even
+        when the read raises, so a cancelled prompt (Ctrl+C, EOF) returns
+        to the editor instead of stranding the session with echo on or
+        off; and `edit()`'s finally owns the exit, restoring whatever
+        termios state the *last* `enter_raw` saved.
+        """
         nonlocal fd, saved
         exit_raw(fd, saved)
         sys.stdout.write("\r\033[2J\033[H")
         try:
-            return input(f"  new hex for {name}: ").strip()
+            return input(label).strip()
         except (EOFError, KeyboardInterrupt):
             return None          # Ctrl+C inside a prompt cancels the prompt
         finally:
             fd, saved = enter_raw()
 
-    st = EditorState(slots, lambda values: write(path, values), prompt_hex,
-                     path if backup else None)
+    st = EditorState(slots, None, prompt_text, path if backup else None,
+                     theme=theme, fmt=fmt, library=library, path=path)
+    st.prompt_name = prompt_text
+    # bound to the state, not to this call's arguments: both the theme and
+    # the path can change while the session runs (§13.7)
+    st.write = lambda values: write(st.theme, st.path, values)
 
     fd, saved = enter_raw()
     try:
@@ -318,8 +682,9 @@ def edit(fmt, path, slots, write, backup=True, theme=None, report=None):
         except (OSError, ValueError, TypeError):
             pass                      # no winch here; the flag never fires
         while True:
-            draw_editor(fmt, path, st.slots, st.sel, st.undo, st.status,
-                        st.mult)
+            draw_editor(st.fmt, session_path(st), st.slots, st.sel, st.undo,
+                        st.status, st.mult, head=head_label(st),
+                        overlay=st.picker_frame())
             key = read_key(fd)
             if key == "resize":
                 continue        # no key consumed: the loop just redraws
@@ -327,30 +692,38 @@ def edit(fmt, path, slots, write, backup=True, theme=None, report=None):
             if st.quit:
                 break
     finally:
-        # termios first: nothing may prevent leaving raw mode, and the
-        # signal restore must never raise out of the finally (review P1)
-        exit_raw(fd, saved)
-        if previous_winch is not None:
-            try:
-                signal.signal(signal.SIGWINCH, previous_winch)
-            except (OSError, ValueError, TypeError):
-                pass
+        # §4.3 — the terminal comes back first, and the SIGWINCH handler is
+        # restored even if restoring the terminal itself fails: nothing may
+        # leave the user with a raw shell or a stale handler (review P1)
+        try:
+            exit_raw(fd, saved)
+        finally:
+            if previous_winch is not None:
+                try:
+                    signal.signal(signal.SIGWINCH, previous_winch)
+                except (OSError, ValueError, TypeError):
+                    pass
 
     if st.written:
-        if theme is not None:
-            # §13.6 - the push report is stderr (diagnostics), printed
-            # after the frame is done and never inside the raw-mode loop.
-            # The wording is the caller's: it knows what it pushed.
-            print(f"  saved theme {theme}  {path}")
-            for line in report or []:
-                print(f"huebox: {line}", file=sys.stderr)
+        if st.theme is not None:
+            print(f"  saved theme {st.theme}  {st.path}")
             print("")
         else:
-            print(f"  saved {path}")
+            print(f"  saved {st.path}")
             if st.backup_made:
                 print(f"  backup of the pre-save state: {st.backup_path}.huebox.bak")
             print("  reload your terminal to see the change\n")
     elif st.dirty():
         print("  nothing saved - the buffer was discarded\n")
+    elif st.created:
+        print(f"  created theme {st.created}  {st.path}")
+        print("  Ctrl+S saves it to the terminal\n")
     else:
         print("  no changes\n")
+
+    # §13.6 / §13.7 — the push report and the picker's complaints are
+    # stderr, after the frame is done and never inside the raw-mode loop,
+    # where they would scroll through the editor. The wording is the
+    # caller's: it knows what it pushed and what it could not read.
+    for line in list(report or []) + list(notes or []):
+        print(f"huebox: {line}", file=sys.stderr)

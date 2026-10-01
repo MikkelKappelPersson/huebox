@@ -66,6 +66,8 @@ Run `huebox edit` and drive it with the keyboard.
 | `i` | type a hex value |
 | `Ctrl+S` | save — the session's only write: the theme file, then a push |
 | `u` / `r` | undo / revert to the last save |
+| `t` | theme picker — arrows, `Enter` opens, `n` makes a theme from the buffer, `Esc` back |
+| `N` | save the buffer as a new theme (and then save it) |
 | `Esc` | quit — twice if there are unsaved changes |
 
 Edits live in an in-memory buffer: nothing is written until you press
@@ -74,6 +76,17 @@ palette, interface, code sample, and the background / selection / cursor
 examples — is live and truecolor before the file changes. Quit with unsaved
 changes and huebox asks for a second `Esc` first; `r` throws the buffer away
 and goes back to your last save.
+
+The header names what you are editing: `ember ● ghostty` for a theme (the `●`
+marks unsaved buffer changes) or `direct:/path/to/config` in a legacy
+direct-config session. `t` opens the theme picker without leaving the editor:
+arrows and `Enter` to open a theme, `n` to make one from the buffer you are
+looking at, `Esc` to go back. Opening a theme while the buffer has unsaved
+edits is refused with `save (Ctrl+S) or revert (r) first` rather than losing
+them. `N` is the way out of a direct-config session: it asks for a name, makes
+the theme, makes it current, and saves it through the same pipeline. If a name
+is already taken, huebox says so and waits for `y` (overwrite) or another name
+— no modal, and nothing is written until you answer.
 
 `Ctrl+S` is two writes: the theme file first, then a push into the terminal
 config that holds your colours — the status bar says which

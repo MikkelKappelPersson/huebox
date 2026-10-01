@@ -295,6 +295,17 @@ exit codes; status string shape.
   with a mocked prompt) + `draw_editor` renders overlay rows under width
   budget.
 
+As built: the picker **replaces** the frame while it is open (one frame, one
+budget — decision 19), so it needed no wider floor than `MIN_COLS = 40` /
+`MIN_ROWS = 12`, which §15.4 keeps. The library reaches `editor.py` as an
+injected `Library` (list / load / create), so the dependency rule still holds,
+and the save callback became `write(theme, path, values)` — the name travels
+with every save because a switch has to retarget `Ctrl+S` mid-session. `n` and
+`N` both adopt the new theme as the session's subject (and set it current);
+`N` then runs the ordinary save pipeline, so one writer and one push contract
+cover every theme the editor ever writes. Loading a theme also resets the arm,
+the undo log and the selection (§13.7, P2 review).
+
 ## Phase 6 — Ghostty native export (§13.6 phase 2)
 
 Behind an opt-in flag (open question 2 leans opt-in; default decided at
@@ -383,6 +394,6 @@ checks case-insensitively for collisions too (case-insensitive filesystems).
 | SIGWINCH mid-escape-sequence | Does not break the sequence — PEP 475 auto-retries `os.read`; redraw owed at next idle tick (§15.1) |
 | Hand-rolled TOML vs. exotic user files | Theme files are huebox-owned with a fixed grammar; loader warns + drops unknowns instead of failing |
 | Stale `GHOSTTY_RESOURCES_DIR` pushing to the wrong machine's paths | Push resolves the target config and refuses if it has no colours (P4) |
-| Raw-mode exit paths multiply (prompt, overlay, save-as-new) | One `enter/exit_raw` pair per raw session, re-enter after prompts; §4.3 TODO stays open until P5 closes it |
+| Raw-mode exit paths multiply (prompt, overlay, save-as-new) | Closed in P5: one `enter_raw` per session and one `exit_raw` in `edit()`'s `finally`; prompts close and reopen the pair with the re-entry in a `finally`, and the SIGWINCH restore is nested inside it (§4.3 guarantee) |
 | Case-insensitive FS name collisions | `create` checks case-insensitively (B) |
 | Rewrite drift (HSV round-trip) | Spec TODO stays open; not a v2 blocker, edits accumulate hex-to-hex |
