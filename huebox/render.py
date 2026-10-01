@@ -143,8 +143,38 @@ def sample_lines(slots):
 # --------------------------------------------------------------------------
 
 EXAMPLE_PHRASE = "The quick brown fox jumps over the lazy dog"
-CURSOR_BLOCK = "██"                 # a solid block, one column per glyph
-LABEL_WIDTH = 21                    # widest name (20) + one padding column
+CURSOR_INDEX = 8                    # the character the cursor sits on
+SELECTION_INDEX = 4                 # where the selected run starts
+
+
+def _split(phrase, start, length):
+    """(head, span, tail): the phrase cut around one span of `length`."""
+    return (phrase[:start], phrase[start:start + length],
+            phrase[start + length:])
+
+
+SEL_HEAD, SELECTED_TEXT, SEL_TAIL = _split(EXAMPLE_PHRASE, SELECTION_INDEX, 15)
+CUR_HEAD, CURSOR_CHAR, CUR_TAIL = _split(EXAMPLE_PHRASE, CURSOR_INDEX, 1)
+LABEL_WIDTH = 21                    # widest short name (20) + one padding column
+PAIR_WIDTH = 32                     # widest pair label (31) + one padding column
+MIN_SAMPLE = 24                     # a phrase worth showing; the pairs yield to it
+PAIR_MIN_COLS = 2 + PAIR_WIDTH + MIN_SAMPLE
+
+
+def pair_label(bg_slot, fg_slot):
+    """`selection-background/foreground` — a shared prefix is printed once.
+
+    The strip names both slots of the pair it demonstrates, so the reader
+    never has to guess which foreground rides on the swatch.
+    """
+    common = 0
+    for a, b in zip(bg_slot, fg_slot):
+        if a != b:
+            break
+        common += 1
+    if common and bg_slot[common - 1] == "-":
+        return f"{bg_slot}/{fg_slot[common:]}"
+    return f"{bg_slot}/{fg_slot}"
 
 
 def example_lines(slots, cols=None):
@@ -152,32 +182,48 @@ def example_lines(slots, cols=None):
 
     Pure like `sample_lines`: every colour is read out of `slots` on each
     call, so a single slot change moves the background, the highlight and
-    the cursor on the same frame. `cols` is the width the caller can spend
-    (optional): the sample text folds to fit through `pack`, the row is
-    finally `clip`ped, so the strip never overflows or wraps badly.
+    the cursor on the same frame. Each row names the pair of slots it
+    demonstrates — `selection-background/foreground` — and shows the colour
+    itself: no hex, the swatch is the readout. Wide terminals get the pair
+    names; a narrow one keeps the plain slot name so the sentence still has
+    room to show anything (`PAIR_MIN_COLS`).
+    `cols` is the width the caller can spend (optional): the sample text
+    folds to fit through `pack`, the row is finally `clip`ped, so the
+    strip never overflows or wraps badly.
     """
     def value(name):
         return slots.get(name, MISSING)
 
-    # (label, hex shown, fill colour, [(text, slot for bg, slot for fg)])
+    # (short label, (bg slot, fg slot), fill colour, [(text, bg, fg)])
+    # the fill is a resolved value, not a slot name: it paints the rest of
+    # the row in the colour that row demonstrates (§14.1)
     rows = [
-        ("background", value("background"), value("background"),
+        ("background", ("background", "foreground"),
+         value("background"),
          [(EXAMPLE_PHRASE, "background", "foreground")]),
-        ("selection-background", value("selection-background"),
+        # a selected run of words, in selection-foreground on the
+        # selection background, sitting in the sentence like a real one
+        ("selection-background",
+         ("selection-background", "selection-foreground"),
          value("selection-background"),
-         [("selected text", "selection-background", "selection-foreground")]),
-        ("cursor-color", value("cursor-color"), value("background"),
-         [(CURSOR_BLOCK, "cursor-color", "cursor-text"),
-          ("I", "background", "cursor-text")]),
+         [(SEL_HEAD, "background", "foreground"),
+          (SELECTED_TEXT, "selection-background", "selection-foreground"),
+          (SEL_TAIL, "background", "foreground")]),
+        # the cursor covers one character and carries it in cursor-text on
+        # cursor-color — a block cursor drawn the way the terminal draws it
+        ("cursor-color", ("cursor-color", "cursor-text"),
+         value("background"),
+         [(CUR_HEAD, "background", "foreground"),
+          (CURSOR_CHAR, "cursor-color", "cursor-text"),
+          (CUR_TAIL, "background", "foreground")]),
     ]
+    pairs = cols is None or cols >= PAIR_MIN_COLS
+    label_width = PAIR_WIDTH if pairs else LABEL_WIDTH
     out = []
-    for label, label_hex, fill, segments in rows:
-        head = f"  {label:<{LABEL_WIDTH}} "
+    for name, pair, fill, segments in rows:
+        label = pair_label(*pair) if pairs else name
+        head = f"  {label:<{label_width}} "
         room = None if cols is None else cols - len(head)
-        if room is not None and room - 8 >= 12:
-            # wide enough to carry the hex too; drop it before the text
-            head += f"{label_hex} "
-            room -= len(label_hex) + 1
         plain = "".join(chunk for chunk, _, _ in segments)
         if room is not None:
             # pack keeps whole words: fold instead of cutting mid-word
@@ -193,7 +239,7 @@ def example_lines(slots, cols=None):
                 painted += (f"{bg(value(chunk_bg))}{fg(value(chunk_fg))}"
                             f"{take}{RESET}")
         if room is not None:
-            painted += f"{bg(value(fill))}{' ' * max(0, room - len(plain))}{RESET}"
+            painted += f"{bg(fill)}{' ' * max(0, room - len(plain))}{RESET}"
         row = head + painted
         out.append(clip(row, cols) if cols is not None else row)
     return out

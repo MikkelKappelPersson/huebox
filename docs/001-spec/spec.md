@@ -647,10 +647,22 @@ moves the background, the highlight, the text under it and the cursor together,
 on the same frame.
 
 Concretely, next to the existing palette / interface / code widgets the editor
-gains an examples strip: a background swatch with readable foreground text on
-it, a selection-background sample with selection-foreground text, and a cursor
-block in cursor-color carrying cursor-text — each labelled with its slot name
-and hex, each updating per keystroke.
+gains an examples strip: three rows over one sample sentence, each labelled
+with the *pair* of slots it demonstrates — `background/foreground`,
+`selection-background/foreground`, `cursor-color/text`, the shared prefix
+printed once — and with no hex column: the colour *is* the readout. The
+background row sets the whole sentence in foreground on background; the
+selection row carries a run of words in selection-foreground on
+selection-background, sitting in the sentence where a selection would; the
+cursor row covers exactly one character, drawn in cursor-text on
+cursor-color, the way a block cursor sits over the character under it.
+Each row updates per keystroke. Below `PAIR_MIN_COLS` (58 columns: two of
+padding, the 31-column label, a phrase worth showing) the rows fall back to
+the plain slot name — the sentence gets those columns back, because a label
+that crowds out the sample demonstrates nothing. The rest of each row is
+padded in the colour that row demonstrates (background,
+selection-background, background), never in a placeholder: a missing slot
+renders as `MISSING` grey *in place*, and nothing paints MISSING by accident.
 
 ### 14.2 Save, quit, undo
 
