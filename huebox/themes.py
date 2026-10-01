@@ -6,23 +6,30 @@
     load() / list_themes()             the hand-rolled reader for our
                                        TOML subset — no tomllib (3.9)
     current() / set_current()          state.toml, two lines at most
+    push()                             truth → terminal, the one write out
     RAMP                               the built-in palette `new` seeds from
 
 Theme files belong to huebox: the writer emits one canonical layout and
 replaces the file atomically, so a hand-edited theme only ever loses its
 unknown keys, never its structure or its colours. Terminal configs are the
-opposite case and keep their line-level writer (§6.2) — this module never
-touches one.
+opposite case and keep their line-level writer (§6.2): `push()` goes through
+the format registry like every other write and never re-serialises one.
+
+A save is truth first, terminal second, and never the other way round
+(decision 7): the theme file outlives any one config, so a push that fails
+is reported and left alone — nothing is ever rolled back.
 """
 
 from __future__ import annotations
 
 import os
 import re
+from collections import namedtuple
 from datetime import datetime
 
 from .color import MISSING, SLOTS, is_hex, normalize_hex
-from .formats import FORMATS
+from .detect import resolve
+from .formats import FORMAT_NAMES, FORMATS
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SUFFIX = ".toml"
@@ -361,12 +368,112 @@ def list_themes() -> list:
 
 
 # --------------------------------------------------------------------------
-# the terminal side (§6 — read only here; pushing lands with §13.6)
+# the terminal side (§6, §13.6)
 # --------------------------------------------------------------------------
 
 def read_terminal(fmt: str, path: str) -> dict:
     """The slots a terminal config holds right now — an import source."""
     return FORMATS[fmt]["read"](path)
+
+
+#: What one `push` did. The caller routes `lines` (they are its report) and
+#: the verdict: `failed` is the exit code, `pushed` the `fmt: path` pairs a
+#: status line names. A plain list of strings could not say which target
+#: failed without the caller re-reading the text.
+PushResult = namedtuple("PushResult", "lines pushed failed")
+
+
+def _target_names(to, fmt) -> list:
+    """The formats a push aims at, in order.
+
+    `--to` (a comma list or a list) wins; otherwise the caller's forced
+    format, otherwise `None` — the sentinel that means "whatever terminal
+    this is", which only today's `resolve()` can answer.
+    """
+    if to:
+        wanted = to.split(",") if isinstance(to, str) else list(to)
+        names = []
+        for part in wanted:
+            name = str(part).strip()
+            if not name:
+                continue
+            if name not in FORMATS:
+                raise ThemeError(f"unknown format {name!r} "
+                                 f"(choose from {', '.join(FORMAT_NAMES)})")
+            if name not in names:
+                names.append(name)
+        if not names:
+            raise ThemeError("--to needs at least one format")
+        return names
+    return [fmt or None]
+
+
+def push(slots: dict, to=None, fmt: str = None, path: str = None,
+         no_push: bool = False) -> PushResult:
+    """Write a saved buffer into the terminal config(s) that hold colours.
+
+    Phase 1 of §13.6: every target goes through today's `resolve()` — the
+    file the colours actually live in, whether that is the config itself, a
+    Ghostty `config-file` include or the file a `theme =` points at — and
+    then through that format's own line-level writer, so the §6.2 contract
+    holds for every byte that lands (decision 9). One writer, one promise.
+
+    Three rules the terminal side does not get to negotiate:
+
+    - A config with no colours is never a target, exactly as in detection
+      (§7.3): a stale env var must not turn into a rewritten config.
+    - Keys the target does not carry are reported, never inserted
+      (`not carried by this config: …`). Adding a line would break the
+      line-level contract, and open question 1 is still open.
+    - Every target is tried even when an earlier one failed; `failed` is
+      the caller's exit code, and the truth file written before this call
+      is never rolled back (decision 7).
+
+    `path` is an explicit config (the `--config` seam) and only makes sense
+    for a single target — several targets with one file is a CLI error.
+    """
+    if no_push:
+        return PushResult((), (), False)
+
+    names = _target_names(to, fmt)
+    if path is not None and len(names) != 1:
+        raise ValueError(f"an explicit config path pushes exactly one "
+                         f"target, got {len(names)} target names")
+    explicit = path if len(names) == 1 else None
+    lines: list = []
+    pushed: list = []
+    failed = False
+
+    for name in names:
+        found, target, error = resolve(name, explicit)
+        label = name or "terminal"
+        if error or not target or not found:
+            # `--config` with a path that says neither format gets here
+            # too: §7.1 makes that an error, not a coin toss
+            reason = error or (f"cannot tell which format {target} is - pass "
+                               f"--format with one of {', '.join(FORMAT_NAMES)}")
+            lines.append(f"{label}: {reason}")
+            failed = True
+            continue
+        existing = FORMATS[found]["read"](target)
+        if not existing:
+            lines.append(f"{found}: no colours in {target} - not a push target")
+            failed = True
+            continue
+        try:
+            FORMATS[found]["write"](target, slots)
+        except OSError as problem:
+            lines.append(f"{found}: {target}: {problem}")
+            failed = True
+            continue
+        pushed.append((found, target))
+        lines.append(f"{found}: pushed to {target}")
+        missing = [slot for slot in SLOTS if slot not in existing]
+        if missing:
+            lines.append(f"{found}: not carried by this config: "
+                         f"{', '.join(missing)}")
+
+    return PushResult(tuple(lines), tuple(pushed), failed)
 
 
 # --------------------------------------------------------------------------

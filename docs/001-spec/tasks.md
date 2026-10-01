@@ -1,6 +1,6 @@
 # huebox — tasks
 
-Status: **in execution — P1 in review** · Plan: `plan.md` · Spec: `spec.md` · Rules: `AGENTS.md`
+Status: **in execution — P4 in review** · Plan: `plan.md` · Spec: `spec.md` · Rules: `AGENTS.md`
 
 Execution order is top to bottom; phases are checkboxes, tasks are `- [ ]`.
 Every phase ends with `python3 -m unittest discover -s tests` green and the
@@ -126,17 +126,48 @@ status string (`saved ember` today, `saved ember → ghostty` after the push),
 and `huebox use <name>` already sets current and prints that the terminal is
 untouched. Everything below replaces truth-only with truth-then-push.
 
-- [ ] `themes.py`: `push(fmt, slots, to=None, no_push)` — resolve targets,
+- [x] `themes.py`: `push(slots, to, fmt, path, no_push)` — resolve targets,
       refuse colourless configs, line-level write, missing-key report,
       truth-first/never-rollback
-- [ ] `cli.py`: build the save callback from `--to`/`--no-push`; `use` =
+- [x] `cli.py`: build the save callback from `--to`/`--no-push`; `use` =
       set_current + push (exit 1 on push failure); report lines to stderr
-- [ ] `editor.py`: status `saved <theme> → <fmt>` on save
-- [ ] tests: push fixtures (kitty/ghostty), missing-key report, --no-push
+- [x] `editor.py`: status `saved <theme> → <fmt>` on save, push report on
+      stderr after the session
+- [x] tests: push fixtures (kitty/ghostty), missing-key report, --no-push
       no-op bytes, colourless-target failure after truth write, use exit codes
-- [ ] spec: §6.2 planned note → save pipeline; decision log entry for
+- [x] spec: §6.2 planned note → save pipeline; decision log entry for
       report-only push (open question 1 stays open)
-- [ ] README: push-on-save section
+- [x] README: push-on-save section
+
+Notes: `push()` returns a `PushResult(lines, pushed, failed)` — a plain list
+of report lines could not tell the caller which target failed, and text-
+sniffing a report for a failure marker is the fragile coupling worth
+avoiding. Targets come from `--to` (comma list, validated before any write),
+else the caller's `--format`, else today's `resolve()`; `--config` pins a
+single target and is refused with several (`--config names one file`).
+A target whose format cannot be inferred from an explicit `--config` is
+reported, not guessed (§7.1). Report lines are stderr everywhere: `use`
+prints them after `  current theme: <name>`, and the editor prints them
+after the session with a `huebox: ` prefix — never inside the raw-mode loop,
+where they would scroll through the frame.
+
+Two judgement calls for the reviewer. A push that cannot find a terminal at
+all is a *failure* (exit 1) even when the user never named a target, because
+the promise of §13.6 is "being in Ghostty means Ghostty follows" and a silent
+success with no terminal touched would be a lie; `--no-push` is the escape
+hatch. And gap slots push the `MISSING` grey the editor already shows — the
+truth file says all 22 slots have that value, and inventing a different rule
+here would make the file and the terminal disagree. The session's exit code
+is the *last* save's push verdict, and `edit()` called programmatically
+(no spec) writes truth only, so nothing pushes a terminal nobody named.
+
+P5 needs to know: `_run_editor(target, spec)` now returns an exit code and
+hands `report` (the list the writer fills, cleared at the top of every save)
+to `edit()`, which prints it as `huebox: <line>` on stderr after the closing
+`  saved theme <name>  <path>` line. The picker should save through the same
+`write` callback, so it inherits the push and the reset for free. Also: no-op pushes leave the config byte-identical but still bump its
+mtime — §6.2 rule 4 ("must not rewrite the file at all") is unmet by
+`write_flat` in v1 as well, so it is a P7 hygiene item, not a P4 one.
 
 ## P5 — TUI picker + save-as-new (§13.7, plan phase 5)
 
@@ -172,6 +203,9 @@ untouched. Everything below replaces truth-only with truth-then-push.
 - [ ] `detect.py`: `KITTY_CONFIG_DIRECTORY` (old spelling secondary);
       verify/drop `ALACRITTY_CONFIG_DIR`/`ALACRITTY_CONFIG`
 - [ ] Alacritty search order gains `$XDG_CONFIG_HOME/alacritty.toml`
+- [ ] no-op push must not rewrite the config at all — byte-identical AND
+      mtime-stable (§6.2 rule 4; pre-existing `write_flat` behaviour, logged
+      by the P4 review)
 - [ ] `with open(...)` sweep — silence ResourceWarnings (zero-behaviour)
 - [ ] README/AGENTS/spec full sync; version → 2.0.0; changelog blurb
 - [ ] final: full suite + `pipx install .` smoke + one manual editor session

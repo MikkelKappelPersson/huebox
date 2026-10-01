@@ -39,10 +39,11 @@ naming.
 
 ## 4. User-visible surface
 
-> Planned: this surface grows theme commands (§13) and save semantics change
-> (§14). The theme commands of §13.5 are live — `new`, `list`, `use`,
-> `import`, and `[name]` on `edit` / `show` / `--dump` — but they write
-> truth only; pushing to a terminal is still ahead (§13.6).
+> Since §13–§14: this surface grew theme commands (§13) and save semantics
+> changed (§14). The theme commands of §13.5 are live — `new`, `list`, `use`,
+> `import`, and `[name]` on `edit` / `show` / `--dump` — and a save or a
+> `use` now writes the theme file and then pushes it to the terminal
+> (§13.6). The picker (`t`, §13.7) is still ahead.
 
 ### 4.1 Commands
 
@@ -60,8 +61,12 @@ naming.
 | --- | --- |
 | `-f`, `--format` | Force a format instead of detecting one. One of the `--formats` values |
 | `-c`, `--config` | Use an explicit config path instead of the detected one |
+| `--to` | Push targets for a theme save or `use`: a comma list of formats (§13.6). Default: the terminal you are in |
+| `--no-push` | Write the theme file only; the terminal config is not touched (§13.6) |
 | `--version` | Print `huebox <semver>` and exit |
 | `--help` | argparse default |
+
+(`--force` and `--from` belong to the theme commands of §13.5.)
 
 Exit codes: `0` success, `1` every failure (no colours found, unreadable config,
 unresolvable format, missing config). Errors go to stderr and are prefixed
@@ -161,9 +166,11 @@ This is the safety promise, and it is the strictest thing in this document.
 holding pre-huebox state. Specify precisely when it is written, when it is
 refreshed, and whether it is ever overwritten.
 
-> Planned (§§13–14): every save splits into truth-write + push to the active
-> terminal. The backup moves to first-save-of-session. The four rules above
-> apply to both writes unchanged.
+> Since §13–§14: a save is two writes — the truth theme file, then a
+> push to the terminal config. The backup moves to first-save-of-session,
+> and theme files get none (huebox owns them). The four rules above hold
+> unchanged for both writes: the push goes through the same line-level
+> writers, so a terminal config is still never re-serialised.
 
 ## 7. Detection and resolution
 
@@ -263,6 +270,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 15 | No autosave: the buffer is written only when the user presses Ctrl+S | Staging exists so edits are deliberate; a timer would write on every idle and make the save key meaningless |
 | 16 | The fallback ramp is a neutral dark base, a readable foreground, an inverting cursor, and muted hues with bright siblings — the plan's values, unchanged | It has to be legible the moment `new` opens the editor on an empty machine, and one dict with a comment is easier to argue about than a tuning session |
 | 17 | No `huebox rm` / `mv`: the filesystem manages the library and the state file tolerates a dangling pointer | huebox would be offering to delete a user's dotfile; a deleted theme already warns and falls back to direct mode (§13.4) |
+| 18 | Push is report-only for keys the target config does not carry | Inserting a key is the one thing that would break the §6.2 line-level contract; saying `not carried by this config: …` tells the user what to add, and the next push fills it in (§13.6, open question 1 stays open) |
 
 ---
 
@@ -352,16 +360,15 @@ also seeds `new`).
 `use` sets the current theme first and pushes second: a failed push is stderr
 plus exit 1, never a rolled-back truth.
 
-> Landed so far: every row above except the push. `new`, `import`, `list`,
-> `use` (current only) and `[name]` on `edit` / `show` / `--dump` work, and a
-> save writes the truth file alone. The push half — `--to`, `--no-push`,
-> `use` as "make it live", `saved ember → ghostty` in the status bar — is
-> the next phase (§13.6). `edit` with no name opens the current theme, and
-> falls back to the v1 direct mode when there is nothing to open (no
-> current theme, or one whose file has been deleted). Bare `huebox` resolves
-> the same way — the current theme, edited on a TTY and previewed off one —
-> because that is the subject; an explicit `show` without a name stays the
-> terminal config.
+> Landed so far: every row above works, and the push half is real — a save
+> writes the theme file and then the terminal config, `use` sets current and
+> pushes, `--to` / `--no-push` choose and suppress the targets, and the
+> status bar reads `saved ember → ghostty`. `edit` with no name opens the
+> current theme, and falls back to the v1 direct mode when there is nothing
+> to open (no current theme, or one whose file has been deleted). Bare
+> `huebox` resolves the same way — the current theme, edited on a TTY and
+> previewed off one — because that is the subject; an explicit `show`
+> without a name stays the terminal config. The picker (`t`) is still §13.7.
 
 ### 13.6 Push (truth → terminal)
 
@@ -384,6 +391,14 @@ plus exit 1, never a rolled-back truth.
   the `theme =` value or append the line. Other theme files are left
   untouched. Open whether this is the default or opt-in.
 
+As built: a push returns report lines, not an exit code, and the caller
+routes them. The editor prints them on stderr after the session (never
+inside the raw-mode loop) and the status bar carries the one-line verdict,
+`saved ember → ghostty`; `use` prints them on stderr and exits 1 if any
+target failed. A push never rolls the truth file back, so a failed push
+leaves a saved theme and a failing exit code — fix the target and press
+`Ctrl+S` again.
+
 ### 13.7 TUI theme switching
 
 - `t` opens a theme overlay: arrows + Enter to open, `n` for new (name via
@@ -398,6 +413,9 @@ plus exit 1, never a rolled-back truth.
 ### 13.8 Open questions (§13)
 
 1. Should push insert keys the target config lacks, or stay report-only?
+   — **report-only so far** (decision 18): the config tells huebox which
+   keys it has, and huebox never invents a line. Still open whether a
+   future phase should offer to add them.
 2. Ghostty native theme-file export: default or opt-in?
 3. Exact values of the built-in fallback ramp for `new` with no colours
    found — **decided** (decision 16): the `RAMP` dict in `huebox/themes.py`,

@@ -1,8 +1,11 @@
 """Theme library: names, the canonical writer, gap-tolerant reads, state,
-and the CLI surface of §13.1-13.5.
+push (§13.1-13.6), and the CLI surface of §13.5.
 
 Every test gets its own `XDG_CONFIG_HOME`, so nothing here reads or writes
-the developer's real `~/.config/huebox`.
+the developer's real `~/.config/huebox`. Push tests name the target
+explicitly (`path=`/`--config`) because the format candidate paths are
+computed at import time, from whatever home was current then; only a
+subprocess sees a temp home in the detection order.
 """
 
 import io
@@ -40,6 +43,21 @@ def ghostty_text(slots=None):
     return "\n".join(lines) + "\n"
 
 
+#: kitty's dialect has no `cursor-text` at all, and a sparse palette - so
+#: this fixture is both a push target and the missing-key report (§13.6).
+def kitty_text():
+    return ("# kitty fixture\n"
+            "font_family      SauceCodePro Nerd Font\n\n"
+            "background            #0f0f1a\n"
+            "foreground            #ededfe\n"
+            "cursor                #ededfe\n"
+            "selection_background  #202036\n"
+            "selection_foreground  #ededff\n"
+            "color0  #0a0a13\n"
+            "color1  #ff0067\n"
+            "color15 #f8f8ff\n")
+
+
 class LibraryHome(unittest.TestCase):
     """An isolated `$XDG_CONFIG_HOME` plus a fixture config on disk."""
 
@@ -68,6 +86,12 @@ class LibraryHome(unittest.TestCase):
 
     def drop(self, name):
         os.unlink(self.theme_file(name))
+
+    def xdg(self, relative, text):
+        """A config where a subprocess's detection will actually look."""
+        path = os.path.join(self.root, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return self.write(path, text)
 
     def run_cli(self, *args):
         """`python -m huebox` with a home that has no terminal in it."""
@@ -380,6 +404,159 @@ class Listing(LibraryHome):
         self.assertEqual(themes.read_terminal("ghostty", self.config), FULL)
 
 
+class Push(LibraryHome):
+    """§13.6 - truth -> terminal: one line-level write, per target, no keys
+    invented, no truth rolled back. Targets are named here (never detected)
+    because a candidate-path search in-process would find the developer's
+    real configs; the detection path is covered by the `Cli` subprocesses."""
+
+    def setUp(self):
+        super().setUp()
+        self.kitty = self.write(os.path.join(self.root, "kitty.conf"),
+                                kitty_text())
+
+    def test_push_lands_the_values_and_nothing_else(self):
+        edited = dict(FULL, background="#010203", **{"palette-0": "#040506"})
+        result = themes.push(edited, to="ghostty", path=self.config)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.config),))
+        after = self.read(self.config)
+        self.assertIn("background = #010203", after)
+        self.assertIn("palette = 0=#040506", after)
+        self.assertIn("# fixture config", after)
+        self.assertIn("font-size = 12", after)
+        before = ghostty_text().splitlines()
+        changed = [i for i, (a, b) in enumerate(zip(before, after.splitlines()))
+                   if a != b]
+        self.assertEqual(len(changed), 2, [before[i] for i in changed])
+        self.assertIn(f"ghostty: pushed to {self.config}", result.lines)
+
+    def test_push_keeps_the_kitty_dialect(self):
+        edited = dict(FULL, background="#010203",
+                      **{"palette-0": "#040506", "palette-15": "#0a0b0c"})
+        result = themes.push(edited, to=["kitty"], path=self.kitty)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("kitty", self.kitty),))
+        after = self.read(self.kitty)
+        self.assertIn("background            #010203", after)   # spacing kept
+        self.assertIn("color0  #040506", after)
+        self.assertIn("color15 #0a0b0c", after)
+        self.assertIn("font_family      SauceCodePro Nerd Font", after)
+
+    def test_missing_keys_are_reported_and_never_inserted(self):
+        slots = dict(themes.read_terminal("kitty", self.kitty))
+        slots["background"] = "#010203"
+        result = themes.push(slots, to="kitty", path=self.kitty)
+        self.assertFalse(result.failed)        # a report, not a failure
+        report = "\n".join(result.lines)
+        self.assertIn("not carried by this config:", report)
+        self.assertIn("cursor-text", report)   # kitty has no such key
+        self.assertIn("palette-2", report)
+        after = self.read(self.kitty)
+        before = kitty_text().splitlines()
+        self.assertEqual(len(after.splitlines()), len(before))
+        changed = [i for i, (a, b) in enumerate(zip(before, after.splitlines()))
+                   if a != b]
+        self.assertEqual(len(changed), 1, [before[i] for i in changed])
+        self.assertNotIn("color2", after)      # no key was invented
+        self.assertIn("background            #010203", after)
+
+    def test_a_no_op_push_is_byte_identical(self):
+        # §6.2 rule 3 — a second push of the same slots changes nothing
+        first = themes.push(FULL, to="ghostty", path=self.config)
+        self.assertFalse(first.failed)
+        before = self.read(self.config)
+        second = themes.push(FULL, to="ghostty", path=self.config)
+        self.assertFalse(second.failed)
+        self.assertEqual(self.read(self.config), before)
+
+    def test_an_explicit_path_with_several_targets_is_an_error(self):
+        # P4 review: the API refuses what the CLI refuses — no silent drop
+        with self.assertRaises(ValueError):
+            themes.push(FULL, to="ghostty,kitty", path=self.config)
+
+    def test_a_config_without_colours_is_never_a_target(self):
+        blank = self.write(os.path.join(self.root, "blank.ghostty"),
+                           "font-size = 12\n")
+        result = themes.push(FULL, to="ghostty", path=blank)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("no colours in", "\n".join(result.lines))
+        self.assertEqual(self.read(blank), "font-size = 12\n")
+
+    def test_a_target_without_a_config_is_reported(self):
+        with mock.patch.object(huebox.detect, "_candidate_paths",
+                               return_value=iter(())):
+            result = themes.push(FULL, to="alacritty")
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("no alacritty config with colours found",
+                      "\n".join(result.lines))
+
+    def test_the_default_target_is_the_terminal_you_are_in(self):
+        with mock.patch.object(themes, "resolve",
+                               return_value=("ghostty", self.config, None)) as ask:
+            result = themes.push(dict(FULL, background="#010203"))
+        ask.assert_called_once_with(None, None)     # no format, no path: today
+        self.assertEqual(result.pushed, (("ghostty", self.config),))
+        self.assertIn("background = #010203", self.read(self.config))
+
+    def test_every_target_is_tried_even_after_one_fails(self):
+        blank = self.write(os.path.join(self.root, "empty.kitty.conf"),
+                           "font-size 12\n")
+
+        def fake(name, path):
+            return {"ghostty": ("ghostty", self.config, None),
+                    "kitty": ("kitty", blank, None)}[name]
+
+        with mock.patch.object(themes, "resolve", side_effect=fake):
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty,kitty")
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.config),))
+        self.assertIn("background = #010203", self.read(self.config))
+        self.assertEqual(self.read(blank), "font-size 12\n")
+        report = "\n".join(result.lines)
+        self.assertIn("ghostty: pushed to", report)
+        self.assertIn("kitty: no colours in", report)
+
+    def test_an_unknown_target_is_refused(self):
+        for bad in ("wezterm", "ghostty,wezterm", ["kitty", "nope"]):
+            with self.subTest(to=bad):
+                with self.assertRaises(themes.ThemeError) as caught:
+                    themes.push(FULL, to=bad)
+                self.assertIn("unknown format", str(caught.exception))
+        with self.assertRaises(themes.ThemeError) as caught:
+            themes.push(FULL, to=" , ")
+        self.assertIn("--to needs at least one format", str(caught.exception))
+
+    def test_no_push_touches_nothing(self):
+        before = self.read(self.config)
+        stamp = os.path.getmtime(self.config)
+        result = themes.push(dict(FULL, background="#010203"),
+                             to="ghostty", path=self.config, no_push=True)
+        self.assertEqual(result, themes.PushResult((), (), False))
+        self.assertEqual(self.read(self.config), before)
+        self.assertEqual(os.path.getmtime(self.config), stamp)
+
+    def test_an_explicit_path_pins_one_target(self):
+        with mock.patch.object(themes, "resolve",
+                               return_value=("ghostty", self.config, None)) as ask:
+            themes.push(FULL, to="ghostty", path=self.config)
+        ask.assert_called_once_with("ghostty", self.config)
+
+    def test_an_explicit_path_of_an_unknown_format_is_reported(self):
+        # `background = #…` parses as ghostty *and* kitty: §7.1 says that
+        # is not guessable, so the push says so instead of picking one
+        odd = self.write(os.path.join(self.root, "theme-x"),
+                         "background = #101014\n")
+        result = themes.push(FULL, path=odd)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("cannot tell which format", "\n".join(result.lines))
+        self.assertEqual(self.read(odd), "background = #101014\n")
+
+
 class FakeTTY:
     """Just enough of a terminal for the editor's isatty check."""
 
@@ -400,18 +577,23 @@ class FakeOut(io.StringIO):
 class EditorWiring(LibraryHome):
     """The whole path: an editor session in theme mode writes the truth."""
 
-    def session(self, keys):
+    def session(self, keys, spec=None):
         stream = iter(keys)
+        out, err = FakeOut(), io.StringIO()
         with mock.patch.object(sys, "stdin", FakeTTY()), \
-                mock.patch.object(sys, "stdout", FakeOut()), \
+                mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err), \
                 mock.patch.object(editor, "enter_raw",
                                   return_value=(7, None)), \
                 mock.patch.object(editor, "exit_raw"), \
+                mock.patch.object(editor, "term_size",
+                                  return_value=(100, 30)), \
                 mock.patch.object(editor, "read_key",
                                   side_effect=lambda fd: next(stream)):
             cli._run_editor(cli.Target("ember", "theme ember",
                                        self.theme_file("ember"),
-                                       themes.load("ember")))
+                                       themes.load("ember")), spec)
+        return out.getvalue(), err.getvalue()
 
     def test_ctrl_s_writes_the_theme_file(self):
         themes.create("ember", FULL)
@@ -429,6 +611,102 @@ class EditorWiring(LibraryHome):
         original = self.read(self.theme_file("ember"))
         self.session(["x", "esc", "esc"])
         self.assertEqual(self.read(self.theme_file("ember")), original)
+
+
+class PushOnSave(LibraryHome):
+    """§13.6 - Ctrl+S in a theme session is truth first, terminal second."""
+
+    def setUp(self):
+        super().setUp()
+        self.kitty = self.write(os.path.join(self.root, "kitty.conf"),
+                                kitty_text())
+        self.before = self.read(self.kitty)
+        themes.create("ember", FULL)
+
+    def session(self, keys, spec):
+        stream = iter(keys)
+        out, err = FakeOut(), io.StringIO()
+        with mock.patch.object(sys, "stdin", FakeTTY()), \
+                mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(editor, "enter_raw",
+                                  return_value=(7, None)), \
+                mock.patch.object(editor, "exit_raw"), \
+                mock.patch.object(editor, "term_size",
+                                  return_value=(100, 30)), \
+                mock.patch.object(editor, "read_key",
+                                  side_effect=lambda fd: next(stream)):
+            status = cli._run_editor(
+                cli.Target("ember", "theme ember", self.theme_file("ember"),
+                           themes.load("ember")), spec)
+        return status, out.getvalue(), err.getvalue()
+
+    def test_ctrl_s_writes_truth_then_pushes(self):
+        spec = cli.PushSpec(("kitty",), None, self.kitty, False)
+        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        self.assertEqual(status, 0)
+        saved = themes.load("ember")
+        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
+                      self.read(self.theme_file("ember")))
+        after = self.read(self.kitty)
+        self.assertIn(f"color0  {saved['palette-0']}", after)
+        self.assertIn("# kitty fixture", after)
+        self.assertIn("saved ember → kitty", out)          # the status line
+        self.assertIn(f"huebox: kitty: pushed to {self.kitty}", err)
+        self.assertIn("huebox: reload your terminal", err)
+        self.assertIn("not carried by this config", err)   # cursor-text, ...
+
+    def test_the_status_names_every_target(self):
+        def fake(name, path):
+            return {"ghostty": ("ghostty", self.config, None),
+                    "kitty": ("kitty", self.kitty, None)}[name]
+
+        spec = cli.PushSpec(("ghostty", "kitty"), None, None, False)
+        with mock.patch.object(themes, "resolve", side_effect=fake):
+            status, out, _ = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertIn("saved ember → ghostty, kitty", out)
+        saved = themes.load("ember")
+        self.assertIn(f"background = {saved['background']}",
+                      self.read(self.config))
+        self.assertIn(f"background            {saved['background']}",
+                      self.read(self.kitty))
+
+    def test_no_push_leaves_the_config_bytes_and_mtime_alone(self):
+        stamp = os.path.getmtime(self.kitty)
+        spec = cli.PushSpec((), None, self.kitty, True)
+        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertNotEqual(themes.load("ember")["palette-0"],
+                            FULL["palette-0"])
+        self.assertEqual(self.read(self.kitty), self.before)
+        self.assertEqual(os.path.getmtime(self.kitty), stamp)
+        self.assertIn("saved ember (truth only)", out)
+        self.assertIn("--no-push", err)
+
+    def test_a_failed_push_keeps_the_truth_and_exits_1(self):
+        # decision 7: the theme file is written first and never rolled back
+        blank = self.write(os.path.join(self.root, "blank.ghostty"),
+                           "font-size = 12\n")
+        spec = cli.PushSpec(("ghostty",), None, blank, False)
+        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        self.assertEqual(status, 1)
+        saved = themes.load("ember")
+        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
+                      self.read(self.theme_file("ember")))
+        self.assertEqual(self.read(blank), "font-size = 12\n")
+        self.assertIn("saved ember - push failed", out)
+        self.assertIn("huebox: ghostty: no colours in", err)
+
+    def test_a_session_with_no_spec_pushes_nothing(self):
+        # the programmatic default: `edit()` without a command line writes
+        # truth only, and never reaches for a terminal nobody named
+        status, out, _ = self.session(["x", editor.SAVE_KEY, "esc"], None)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.read(self.kitty), self.before)
+        self.assertIn("saved ember (truth only)", out)
 
 
 class Ramp(unittest.TestCase):
@@ -535,12 +813,127 @@ class Cli(LibraryHome):
         self.assertTrue(out[1].startswith("  slate"), out)
         self.assertIn("-", out[1])                # no source recorded
 
-    def test_use_sets_current_and_stops_there(self):
+    def test_use_sets_current_and_pushes_to_the_detected_terminal(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
         self.run_cli("import", "ember", "--config", self.config)
+        themes.save("ember", dict(FULL, background="#010203"))
         out = self.run_cli("use", "ember")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(themes.current(), "ember")
         self.assertIn("current theme: ember", out.stdout)
+        self.assertIn(f"ghostty: pushed to {config}", out.stderr)
+        self.assertIn("reload your terminal", out.stderr)
+        after = self.read(config)
+        self.assertIn("background = #010203", after)
+        changed = [i for i, (a, b)
+                   in enumerate(zip(ghostty_text().splitlines(),
+                                    after.splitlines())) if a != b]
+        self.assertEqual(len(changed), 1, changed)
+
+    def test_use_without_a_terminal_fails_but_keeps_the_theme_current(self):
+        # the fixture sits outside the XDG tree, so there is no terminal to
+        # detect: truth first, report second, exit 1 (decision 7)
+        self.run_cli("import", "ember", "--config", self.config)
+        out = self.run_cli("use", "ember")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(themes.current(), "ember")
+        self.assertIn("no terminal config with colours", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+
+    def test_use_no_push_writes_truth_only(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        self.run_cli("import", "ember", "--config", self.config)
+        before, stamp = self.read(config), os.path.getmtime(config)
+        out = self.run_cli("use", "ember", "--no-push")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(themes.current(), "ember")
+        self.assertEqual(self.read(config), before)
+        self.assertEqual(os.path.getmtime(config), stamp)
+        self.assertIn("--no-push", out.stderr)
+
+    def test_use_to_several_targets_pushes_all_of_them(self):
+        ghostty = self.xdg("ghostty/config.ghostty", ghostty_text())
+        kitty = self.xdg("kitty/kitty.conf", kitty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "ember", "--to", "ghostty,kitty")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("background = #010203", self.read(ghostty))
+        self.assertIn("background            #010203", self.read(kitty))
+
+    def test_use_to_a_deduplicated_list_pushes_each_format_once(self):
+        # P4 review: `--to ghostty,ghostty` must behave like `--to ghostty`
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "ember", "--to", "ghostty,ghostty")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stderr.count("pushed to"), 1)
+        self.assertIn("background = #010203", self.read(config))
+
+    def test_use_to_an_empty_list_is_refused(self):
+        # P4 review: `--to ""` must not silently fall back to detection
+        themes.create("ember", dict(FULL))
+        out = self.run_cli("use", "ember", "--to", "")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("--to needs at least one format", out.stderr)
+
+    def test_use_config_with_a_single_to_pushes_that_one_file(self):
+        # P4 review critical: the README's example is single --to + --config
+        # and must work; only SEVERAL --to targets with --config are refused
+        dotfiles = self.xdg("dotfiles/ghostty-config", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "ember", "--to", "ghostty",
+                           "--config", dotfiles)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(f"ghostty: pushed to {dotfiles}", out.stderr)
+        self.assertIn("background = #010203", self.read(dotfiles))
+
+    def test_use_config_with_several_to_is_refused_before_any_write(self):
+        # several --to targets with --config is an ambiguity, refused before
+        # any write (P4 review: single --to + --config stays legal)
+        dotfiles = self.xdg("dotfiles/ghostty-config", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        before, stamp = self.read(dotfiles), os.path.getmtime(dotfiles)
+        out = self.run_cli("use", "ember", "--to", "ghostty,kitty",
+                           "--config", dotfiles)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("--config pushes one format", out.stderr)
+        self.assertEqual(self.read(dotfiles), before)
+        self.assertEqual(os.path.getmtime(dotfiles), stamp)
+        self.assertFalse(os.path.exists(themes.state_path()))
+
+    def test_to_is_validated_before_anything_is_written(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        before = self.read(config)
+        for bad in ("wezterm", "ghostty,nope"):
+            with self.subTest(to=bad):
+                out = self.run_cli("use", "ember", "--to", bad)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("unknown format", out.stderr)
+        blank = self.run_cli("use", "ember", "--to", " , ")
+        self.assertEqual(blank.returncode, 1)
+        self.assertIn("--to needs at least one format", blank.stderr)
+        self.assertEqual(self.read(config), before)
+        self.assertFalse(os.path.exists(themes.state_path()))
+
+    def test_to_with_config_asks_for_one_file(self):
+        out = self.run_cli("use", "ember", "--to", "ghostty,kitty",
+                           "--config", self.config)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("--config pushes one format", out.stderr)
+        self.assertFalse(os.path.exists(themes.state_path()))
+
+    def test_a_save_side_flag_never_pushes_on_dump(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        stamp = os.path.getmtime(config)
+        out = self.run_cli("--dump", "ember", "--to", "ghostty")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("background=#010203", out.stdout)
+        self.assertEqual(self.read(config), ghostty_text())
+        self.assertEqual(os.path.getmtime(config), stamp)
+
+    def test_use_refuses_a_missing_or_illegal_theme(self):
         for name, args in (("ghost", ()), ("bad name", ()), ((), ())):
             with self.subTest(name=name):
                 bad = self.run_cli("use", *args)
@@ -548,6 +941,7 @@ class Cli(LibraryHome):
         self.assertIn("no such theme", self.run_cli("use", "ghost").stderr)
         self.assertIn("invalid theme name",
                       self.run_cli("use", "bad name").stderr)
+        self.assertIn("needs a theme name", self.run_cli("use").stderr)
 
     def test_dump_of_a_theme_is_header_plus_every_slot(self):
         self.run_cli("import", "ember", "--config", self.config)

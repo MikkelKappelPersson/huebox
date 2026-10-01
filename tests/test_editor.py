@@ -454,7 +454,8 @@ class Backup(unittest.TestCase):
 
 
 class ThemeSession(unittest.TestCase):
-    """Theme mode: same keys, truth file, no `.bak`, no push yet (§13.2)."""
+    """Theme mode: same keys, truth file, no `.bak`, push report on
+    stderr (§13.2, §13.6)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -463,34 +464,49 @@ class ThemeSession(unittest.TestCase):
         with open(self.theme, "w", encoding="utf-8") as handle:
             handle.write('[colors]\nbackground = "#000000"\n')
 
-    def session(self, keys):
+    def session(self, keys, report=None):
         writes = []
         stream = iter(keys)
-        out = io.StringIO()
+        out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(editor, "enter_raw", return_value=(7, None)),\
                 mock.patch.object(editor, "exit_raw"),\
+                mock.patch.object(editor, "term_size",
+                                  return_value=(100, 30)),\
                 mock.patch.object(editor, "read_key",
                                   side_effect=lambda fd: next(stream)),\
-                mock.patch.object(sys, "stdout", out):
+                mock.patch.object(sys, "stdout", out),\
+                mock.patch.object(sys, "stderr", err):
             editor.edit("theme ember", self.theme, dict(FULL_SLOTS),
                         lambda path, values: writes.append((path, dict(values))),
-                        backup=False, theme="ember")
-        return writes, out.getvalue()
+                        backup=False, theme="ember", report=report)
+        return writes, out.getvalue(), err.getvalue()
 
     def test_saving_writes_the_truth_file_and_nothing_else(self):
-        writes, out = self.session(["w", SAVE, "esc"])
+        writes, out, err = self.session(["w", SAVE, "esc"])
         self.assertEqual(len(writes), 1)
         self.assertEqual(writes[0][0], self.theme)
         self.assertNotEqual(writes[0][1]["palette-0"], FULL_SLOTS["palette-0"])
-        # huebox owns the file: no pre-save backup, and no claim that the
-        # terminal changed — the push is §13.6
+        # huebox owns the file: no pre-save backup, and no claim about the
+        # terminal — the writer's push report says what reached it (§13.6)
         self.assertFalse(os.path.exists(self.theme + ".huebox.bak"))
         self.assertIn("saved theme ember", out)
         self.assertNotIn("reload your terminal", out)
         self.assertNotIn("backup of the pre-save state", out)
+        self.assertEqual(err, "")
+
+    def test_the_push_report_is_stderr_not_frame_noise(self):
+        # printed after raw mode is over, so a save can say what it pushed
+        # without the report scrolling through the editor frame (§13.6)
+        report = ["ghostty: pushed to /tmp/config", "reload your terminal"]
+        _, out, err = self.session(["w", SAVE, "esc"], report)
+        self.assertIn("saved theme ember", out)
+        self.assertNotIn("pushed to", out)
+        self.assertEqual(err.splitlines(),
+                         ["huebox: ghostty: pushed to /tmp/config",
+                          "huebox: reload your terminal"])
 
     def test_a_theme_session_that_saves_nothing_says_so(self):
-        _, out = self.session(["esc"])
+        _, out, _ = self.session(["esc"])
         self.assertIn("no changes", out)
 
 

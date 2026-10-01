@@ -234,17 +234,23 @@ Goal: saving the truth pushes to the terminal you're in. No separate apply.
 
 ### 4.1 `themes.py` push
 
+As built (P4 review settled the shape — the plan's original `fmt`-first
+signature returning a bare list forced text-sniffing for the verdict):
+
 ```python
-push(fmt, slots, to=None, no_push=False) -> list[str]  # report lines
+push(slots, to=None, fmt=None, path=None, no_push=False)
+    -> PushResult(lines, pushed, failed)
 ```
 
-- Targets: `to` (comma list) else `[fmt]` from today's `resolve()`.
+- Targets: `to` (comma list) else `[fmt]` from today's `resolve()`; `path`
+  is the explicit `--config` seam and pushes exactly one target — an
+  explicit path with more than one target name raises `ValueError`.
 - Per target: `resolve()` (refuses targets whose config has no colours —
   same rule as detection, stderr + failure) → `FORMATS[fmt]["write"]` —
   reusing the line-level writers keeps the §6.2 contract byte-for-byte.
 - Missing-key report: read the target first; `SLOTS - target.keys()` →
   `not carried by this config: …`. Push never inserts keys (open question 1
-  stays open; report-only is the default).
+  stays open; report-only is decision 18).
 - Report lines go to stderr when any target fails; exit 1 after truth is
   written (truth-first is decision 7 — a failed push never rolls back).
 
@@ -260,7 +266,9 @@ save(slots): save_theme(current, slots)   # truth, atomic
 
 Legacy direct mode: save = `FORMATS[fmt]["write"]` exactly as today.
 `use <name>` = `set_current` + push (exit 1 on push failure); it takes no
-editor. `--no-push` writes truth only.
+editor. `--no-push` writes truth only. `--config` plus a single `--to`
+names one file for one format; `--config` plus several `--to` targets is
+refused before any write (ambiguity, not a guess).
 
 ### 4.3 Tests
 

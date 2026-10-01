@@ -6,12 +6,13 @@
     huebox --dump [name]  print the resolved colours and exit
     huebox new <name>     seed a theme from the terminal (or the ramp), edit it
     huebox list           the library, current theme marked
-    huebox use <name>     make a theme current
+    huebox use <name>     make a theme current and push it to the terminal
     huebox import <name>  snapshot the detected terminal into a theme
 
 A name argument means "a theme in ~/.config/huebox"; without one the v1
-terminal config is the subject. Pushing a saved theme back to a terminal
-arrives with §13.6 — until then `use` and `edit` write truth only.
+terminal config is the subject. Saving or using a theme writes the truth
+file first and pushes it to the terminal second (§13.6, decision 7) - a push
+that fails is reported and exits 1, and the truth file stays written.
 """
 
 from __future__ import annotations
@@ -33,6 +34,17 @@ from .tui import term_size
 #: What a command works on: a theme (by name) or a terminal config.
 Target = namedtuple("Target", "theme label path slots")
 ACTIONS = ("show", "edit", "new", "list", "use", "import")
+
+#: Where a save pushes, from `--to` / `--format` / `--config` / `--no-push`
+#: (§13.6). An empty `to` means "the terminal you are in", which only
+#: `resolve()` can answer.
+PushSpec = namedtuple("PushSpec", "to fmt path no_push")
+
+#: The two lines that are advice rather than report. Both are about the
+#: terminal, not the theme, so they belong to the caller that knows what it
+#: just did.
+NO_PUSH_LINE = "no push requested (--no-push) - the terminal is unchanged"
+RELOAD_HINT = "reload your terminal to see it (alacritty reloads by itself)"
 
 
 def main(argv=None) -> int:
@@ -56,6 +68,12 @@ def main(argv=None) -> int:
                         metavar="FMT",
                         help="terminal format to read from (import, and the "
                              "seed for new)")
+    parser.add_argument("--to", metavar="FMT[,FMT...]",
+                        help="push targets for a theme save or `use` "
+                             "(default: the terminal you are in)")
+    parser.add_argument("--no-push", action="store_true",
+                        help="write the theme file only, leave the terminal "
+                             "config alone")
     parser.add_argument("--dump", action="store_true",
                         help="print the resolved colours as key=value and exit")
     parser.add_argument("--formats", action="store_true",
@@ -83,24 +101,32 @@ def main(argv=None) -> int:
             print(name)
         return 0
 
+    # push targets are validated before anything else runs: a bad `--to`
+    # must never be discovered half a save in (§13.6)
+    try:
+        spec = _push_spec(args)
+    except themes.ThemeError as error:
+        return _fail(str(error))
+
     action = args.action
     if action is None:
         # Bare `huebox`: the thing you are working on, edited on a TTY and
         # previewed off one. §13.4 puts the terminal config behind it as the
         # fallback, so this is only different once a theme library exists.
         tty = sys.stdout.isatty() and sys.stdin.isatty()
-        return _cmd_view(args, "edit" if tty else "show", follow_current=True)
+        return _cmd_view(args, "edit" if tty else "show", spec,
+                         follow_current=True)
 
     try:
         if action == "list":
             return _cmd_list()
         if action == "new":
-            return _cmd_new(args)
+            return _cmd_new(args, spec)
         if action == "import":
             return _cmd_import(args)
         if action == "use":
-            return _cmd_use(args)
-        return _cmd_view(args, action)
+            return _cmd_use(args, spec)
+        return _cmd_view(args, action, spec)
     except themes.ThemeError as error:      # bad name, no such theme, ...
         return _fail(str(error))
 
@@ -125,6 +151,48 @@ def _name_problem(name, verb: str):
     if not themes.valid_name(name):
         return "invalid theme name"
     return None
+
+
+# --------------------------------------------------------------------------
+# where a save pushes (§13.6)
+# --------------------------------------------------------------------------
+
+def _push_spec(args) -> PushSpec:
+    """`--to` / `--format` / `--config` / `--no-push` as one push target.
+
+    Raises `ThemeError` for anything the user has to fix, and this runs
+    before the first write of every command, so a typo in `--to` can never
+    leave a half-pushed save behind.
+    """
+    to: list = []
+    for part in (args.to or "").split(","):
+        name = part.strip()
+        if not name:
+            continue
+        if name not in FORMATS:
+            raise themes.ThemeError(f"unknown format {name!r} "
+                                    f"(choose from {', '.join(FORMAT_NAMES)})")
+        if name not in to:
+            to.append(name)
+    if args.to is not None and not to:
+        raise themes.ThemeError("--to needs at least one format")
+    if to and args.config and len(to) > 1:
+        raise themes.ThemeError("--config pushes one format; --to names "
+                                "several - drop --config or keep a single --to")
+    return PushSpec(tuple(to), args.format, args.config, args.no_push)
+
+
+def _push_lines(result) -> list:
+    """A push report plus the one line of advice a written config needs."""
+    lines = list(result.lines)
+    if result.pushed:
+        lines.append(RELOAD_HINT)
+    return lines
+
+
+def _pushed(result) -> str:
+    """`ghostty, kitty` - the format names a status line names."""
+    return ", ".join(fmt for fmt, _ in result.pushed)
 
 
 # --------------------------------------------------------------------------
@@ -203,39 +271,59 @@ def _edit_target(args) -> Target:
 # running the editor
 # --------------------------------------------------------------------------
 
-def _run_editor(target: Target) -> None:
-    """Open the editor; theme mode writes truth, direct mode writes config.
+def _run_editor(target: Target, spec: PushSpec = None) -> int:
+    """Open the editor; theme mode writes truth, then pushes (§13.6).
 
-    Theme mode has no `.bak` (huebox owns the file, §14.2) and no push yet
-    — the writer returns the status the status bar shows (§13.6 lands the
-    terminal side).
+    The save is the pipeline of plan 4.2 - truth first, terminal second -
+    and the returned status string is what the status bar shows
+    (`saved ember → ghostty`). A push that fails never undoes the save
+    (decision 7): the buffer is clean, the report says why, and the process
+    ends 1.
+
+    `spec=None` is a caller with no command line behind it, so the session
+    writes truth only: a programmatic `edit()` must never push a terminal
+    the caller did not ask about.
     """
+    spec = spec or PushSpec((), None, None, True)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         # a pipe or a file: no terminal to drive, and no traceback either
         command = f"huebox edit {target.theme}" if target.theme else "huebox edit"
         _warn(f"not a terminal - run `{command}` in a terminal")
-        return
+        return 0
 
     if target.theme is None:
         write = FORMATS[target.label]["write"]
         edit(target.label, target.path, target.slots, write)
-        return
+        return 0
 
     name = target.theme
+    report: list = []          # the last save's push report, read at exit
+    failed: list = []          # non-empty when a push did not get through
 
     def write(_path, values):
-        themes.save(name, values)
-        return f"saved {name}"
+        themes.save(name, values)              # truth first, always
+        del report[:]                          # one report: this save's
+        del failed[:]
+        if spec.no_push:
+            report.append(NO_PUSH_LINE)
+            return f"saved {name} (truth only)"
+        result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path)
+        report.extend(_push_lines(result))
+        if result.failed:
+            failed.append(result)
+            return f"saved {name} - push failed"
+        return f"saved {name} → {_pushed(result)}"
 
     edit(f"theme {name}", target.path, target.slots, write,
-         backup=False, theme=name)
+         backup=False, theme=name, report=report)
+    return 1 if failed else 0
 
 
 # --------------------------------------------------------------------------
 # commands
 # --------------------------------------------------------------------------
 
-def _cmd_view(args, action: str, follow_current: bool = False) -> int:
+def _cmd_view(args, action: str, spec: PushSpec, follow_current: bool = False) -> int:
     """`show` / `edit` / `--dump` — a theme when named, else the config.
 
     `follow_current` is the bare-`huebox` default: with no name and no
@@ -260,15 +348,19 @@ def _cmd_view(args, action: str, follow_current: bool = False) -> int:
         return 0
 
     if action == "edit":
-        _run_editor(target)
-    else:
-        cols = term_size()[0] if sys.stdout.isatty() else 96
-        print(render_preview(target.label, target.path, target.slots, cols=cols))
+        return _run_editor(target, spec)
+    cols = term_size()[0] if sys.stdout.isatty() else 96
+    print(render_preview(target.label, target.path, target.slots, cols=cols))
     return 0
 
 
-def _cmd_new(args) -> int:
-    """`new <name>`: seed from the terminal if it has colours, else the ramp."""
+def _cmd_new(args, spec: PushSpec) -> int:
+    """`new <name>`: seed from the terminal if it has colours, else the ramp.
+
+    Creating a theme is not a push: the file starts out equal to whatever
+    it was seeded from. The editor session that follows pushes on its saves
+    like any other theme session.
+    """
     problem = _name_problem(args.name, "new")
     if problem:
         return _fail(problem)
@@ -288,16 +380,20 @@ def _cmd_new(args) -> int:
         slots, source = dict(themes.RAMP), None    # §13.5 fallback
 
     themes.create(args.name, slots, source=source, force=args.force)
-    themes.set_current(args.name)
+    try:
+        themes.set_current(args.name)
+    except OSError as error:
+        return _fail(f"cannot write state: {error}")
     seeded = (f"seeded from {source}" if source
               else "seeded from the built-in ramp")
     # open the file that was just written, so gaps a sparse config left are
     # editable greys rather than absent slots (§13.2)
-    _run_editor(Target(args.name, f"theme {args.name}",
-                       themes.theme_path(args.name), themes.load(args.name)))
+    status = _run_editor(Target(args.name, f"theme {args.name}",
+                                themes.theme_path(args.name),
+                                themes.load(args.name)), spec)
     print(f"  new theme {args.name}  {themes.theme_path(args.name)}")
     print(f"  {seeded}\n")
-    return 0
+    return status
 
 
 def _cmd_import(args) -> int:
@@ -319,19 +415,38 @@ def _cmd_import(args) -> int:
     return 0
 
 
-def _cmd_use(args) -> int:
-    """`use <name>`: make it current. The push is the next phase (§13.6)."""
+def _cmd_use(args, spec: PushSpec) -> int:
+    """`use <name>`: make it current, then push it live (§13.6).
+
+    Current first, terminal second, and the truth is never rolled back: a
+    push that cannot land is a report on stderr and exit 1, with the theme
+    still current and still the thing the next push will send.
+    """
     problem = _name_problem(args.name, "use")
     if problem:
         return _fail(problem)
     if not os.path.isfile(themes.theme_path(args.name)):
         return _fail(f"no such theme: {args.name}")
 
-    themes.set_current(args.name)
-    print(f"  current theme: {args.name}")
-    print("  your terminal is not updated yet - push arrives with "
-          "push-on-save\n")
-    return 0
+    name = args.name
+    try:
+        themes.set_current(name)
+    except OSError as error:
+        return _fail(f"cannot write state: {error}")
+    print(f"  current theme: {name}")
+    sys.stdout.flush()          # the report is stderr: keep the order honest
+    if spec.no_push:
+        _warn(NO_PUSH_LINE)
+        return 0
+
+    warnings: list = []
+    slots = themes.load(name, warnings)     # a hand-edited theme still says
+    for warning in warnings:                 # what it could not read (§13.2)
+        _warn(warning)
+    result = themes.push(slots, to=spec.to, fmt=spec.fmt, path=spec.path)
+    for line in _push_lines(result):
+        _warn(line)
+    return 1 if result.failed else 0
 
 
 def _cmd_list() -> int:

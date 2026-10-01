@@ -282,14 +282,15 @@ def apply_key(key, st):
         _prompt(st)
 
 
-def edit(fmt, path, slots, write, backup=True, theme=None):
+def edit(fmt, path, slots, write, backup=True, theme=None, report=None):
     """Run one editor session: staged buffer, save on Ctrl+S (§14.2).
 
     `backup` is False for files huebox owns (theme files, §13.2 — no .bak
     there); the terminal-config session snapshots `<path>.huebox.bak` on its
     first save. `theme` names the theme being edited: same loop, same keys,
-    a truth-file writer instead of the terminal one, and closing lines that
-    do not claim a terminal reloaded itself — the push is §13.6.
+    a truth-file writer instead of the terminal one, and `report` — the
+    list the writer fills with what its push did — printed after raw mode
+    is over, so a save can say honestly which terminal it updated (§13.6).
     """
     fd = saved = None
     previous_winch = None
@@ -337,8 +338,13 @@ def edit(fmt, path, slots, write, backup=True, theme=None):
 
     if st.written:
         if theme is not None:
+            # §13.6 - the push report is stderr (diagnostics), printed
+            # after the frame is done and never inside the raw-mode loop.
+            # The wording is the caller's: it knows what it pushed.
             print(f"  saved theme {theme}  {path}")
-            print("  the terminal is unchanged - pushing is not wired up yet\n")
+            for line in report or []:
+                print(f"huebox: {line}", file=sys.stderr)
+            print("")
         else:
             print(f"  saved {path}")
             if st.backup_made:

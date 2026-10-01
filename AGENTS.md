@@ -20,7 +20,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/color.py` | 22-slot model, hex/rgb/hsv maths, luminance | §5 |
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty` (TOML); registry in `__init__` | §6 |
 | `huebox/detect.py` | probes, candidate paths, Ghostty includes / `theme =`, `resolve()` | §7 |
-| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `RAMP` | §13 |
+| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip | §8, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, overlay, staged buffer + save | §4.3, §14 |
@@ -28,9 +28,10 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
 `formats` and `tui` import `color` only; `detect` imports `formats`;
-`themes` imports `color` + `formats`; `render` imports `color`; `editor`
-imports `render` + `tui` + `color`; `cli` imports everything. No cycles.
-Every module header cites its spec section.
+`themes` imports `color` + `formats` + `detect` (push resolves its target
+through the same `resolve()` the CLI does); `render` imports `color`;
+`editor` imports `render` + `tui` + `color`; `cli` imports everything.
+No cycles. Every module header cites its spec section.
 
 ## Guidelines
 
@@ -39,7 +40,11 @@ Every module header cites its spec section.
 - **Theme files are ours; configs are theirs.** `themes/` may be rewritten
   freely — canonical layout, written to a `.tmp` and renamed over the file,
   never partially written; anything under Ghostty/kitty/Alacritty config
-  follows §6.2.
+  follows §6.2, which includes the push: it reuses `FORMATS[fmt]["write"]`,
+  never invents a key, and never re-serialises.
+- **Truth first, never rollback.** A save writes `themes.save()` and only
+  then pushes; a push that fails is a report plus exit 1 and leaves the
+  theme file exactly as written (spec decision 7).
 - **Buffer renders, save writes.** The editor draws from the in-memory buffer
   every frame; disk changes happen on Ctrl+S only (§14).
 - **3.9-compatible code.** No `match`, no `tomllib` (3.11+ — the TOML subset
