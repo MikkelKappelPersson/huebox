@@ -35,7 +35,7 @@ The one dependency beyond the stdlib is [Pygments](https://pygments.org),
 which powers the editor's live code sample — it installs automatically,
 and every colour in the sample comes from the theme's own palette.
 
-## What's new in 2.0
+## What's new in 0.2
 
 **Your themes live in one place, not in three configs.** `~/.config/huebox` is
 the truth: `huebox import dusk` snapshots a terminal into a theme,

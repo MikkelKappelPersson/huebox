@@ -368,7 +368,7 @@ As built (decision 22: **opt-in**, phase 1 unchanged as the default):
    today (pre-existing in v1, zero-behaviour change).
 4. Docs sync: README (theme commands + new save model), AGENTS.md (themes.py
    row, `use`/`import` notes), spec TODOs closed with decisions.
-5. Version: theme library + staged saving is the 2.0.0 line (save semantics
+5. Version: theme library + staged saving is the 0.2.0 line (save semantics
    change; `edit` without themes keeps working, so not a hard break).
 
 As built (P7):

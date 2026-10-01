@@ -299,7 +299,7 @@ cover `formats/base.py`, not only the files this phase touched.
       old sloppy way — same class of bug the P6 `THEME_LINE` fix removed
       for `theme =` (logged by the P6 review)
 - [x] `with open(...)` sweep — silence ResourceWarnings (zero-behaviour)
-- [x] README/AGENTS/spec full sync; version → 2.0.0; changelog blurb
+- [x] README/AGENTS/spec full sync; version → 0.2.0; changelog blurb
 - [x] final: full suite + `uv build` + CLI round-trip in a clean env + one
       real editor session driven through a pty (edit, save+push, quit)
 
@@ -339,8 +339,8 @@ AGENTS.md's `detect` row names the P5/P6 seams and two new guidelines cover
 the no-op rule and `with open`. plan.md has the as-built notes.
 
 Suite: 253 tests, green twice, no warnings. `uv build` produces
-`huebox-2.0.0.tar.gz` + wheel with every module and the console script.
-Clean-env round-trip: `--help`, `--version` (`huebox 2.0.0`), `import` →
+`huebox-0.2.0.tar.gz` + wheel with every module and the console script.
+Clean-env round-trip: `--help`, `--version` (`huebox 0.2.0`), `import` →
 `list` → `use --no-push` → `list` (current marked) → `--dump smoke`, plus a
 real push whose second run left the config's mtime untouched, and
 `resolve()` finding alacritty at `$XDG_CONFIG_HOME/alacritty.toml`, kitty via

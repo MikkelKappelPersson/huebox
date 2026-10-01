@@ -153,7 +153,7 @@ into and out of.
 **TODO — is 140 right?** Recalibrate if the sample text or grid ever looks
 washed out on mid-tones. Record the reason when it changes.
 
-> Re-checked at 2.0: kept. `#808080` MISSING and every ramp slot render
+> Re-checked at 0.2: kept. `#808080` MISSING and every ramp slot render
 > legibly at it, and `pack`/`clip` guarantee the swatch grid never has to
 > rely on a threshold to fit.
 
@@ -161,7 +161,7 @@ washed out on mid-tones. Record the reason when it changes.
 repeated hue nudges on the same slot are acceptable, or whether edits should
 accumulate in a higher-precision space.
 
-> Answered at 2.0, and it is the reason this stays a note rather than a
+> Answered at 0.2, and it is the reason this stays a note rather than a
 > queue: the buffer's storage form is hex (§5), so every nudge is
 > hex → hsv → hex through the slot value and nothing accumulates between
 > keystrokes. The visible cost is quantisation — a ×1 nudge on a value that
@@ -241,7 +241,7 @@ refreshed, and whether it is ever overwritten.
    are the ones upstream documents (plan appendix A): kitty's
    `KITTY_CONFIG_DIRECTORY`, and nothing at all for alacritty. `KITTY_CONFIG_DIR`
    was a huebox invention and is probed second as a **deprecated** spelling for
-   one release after 2.0 (decision 23); it is removed with the next minor bump.
+   one release after 0.2 (decision 23); it is removed with the next minor bump.
 3. **Only offer a terminal whose config actually contains colours.** A stale
    `ALACRITTY_SOCKET` must never hijack a working Ghostty config.
 4. Ghostty `config-file` includes and `theme = Name` are followed to the file
@@ -265,7 +265,7 @@ pointer is still a terminal, while one that points at nothing is not (§7.3).
 `huebox` do with no `--format`? Pick one silently, or prompt? What if the
 config path is ambiguous between formats?
 
-> Decided at 2.0 (decision 25): the first format that *resolves* wins, in
+> Decided at 0.2 (decision 25): the first format that *resolves* wins, in
 > probe order — per-window env vars first, then `TERM_PROGRAM`, then the
 > format table — and nothing prompts. A terminal you are inside is the
 > subject; a machine with several configs is a machine whose user passes
@@ -319,7 +319,7 @@ line instead of a garbled frame. Settled in phase 5, when the picker landed.
 indirection, inline Alacritty tables, malformed hex input, and a read-only or
 unwritable config.
 
-> Closed at 2.0: includes (§7.4, quoted / bare / commented / `?`-relative and
+> Closed at 0.2: includes (§7.4, quoted / bare / commented / `?`-relative and
 > the missing-file case), `theme =` indirection (§13.6 phase 2), inline
 > Alacritty tables, a malformed theme file (binary garbage loads as
 > MISSING with a warning) and an unwritable config (a write that raises is
@@ -335,10 +335,10 @@ their sections (§§13–15); this list is v1-only:
 1. Raw-mode restoration and signal handling (§4.3) — **decided**: the
    guarantee in §4.3 (one enter/exit pair per session, prompts close and
    reopen it, the resize handler is restored in the same `finally`).
-2. Accumulated drift from HSV round-trips (§5.1) — **answered at 2.0**: the
+2. Accumulated drift from HSV round-trips (§5.1) — **answered at 0.2**: the
    buffer stores hex, so nothing accumulates between keystrokes; the residue
    is quantisation, not drift.
-3. The 140 luminance threshold (§5.1) — **kept at 2.0**, re-checked against
+3. The 140 luminance threshold (§5.1) — **kept at 0.2**, re-checked against
    MISSING and the fallback ramp.
 4. When the `.huebox.bak` is written and refreshed (§6.2) — **decided**:
    first save of a session, once, never overwritten (§14.2).
@@ -347,7 +347,7 @@ their sections (§§13–15); this list is v1-only:
    otherwise (decision 25).
 6. Minimum supported terminal width (§8) — **decided**: 40x12 (§15.4).
 7. Test coverage for includes, indirection and unwritable configs (§10) —
-   **closed at 2.0** for all three; malformed hex inside a terminal config
+   **closed at 0.2** for all three; malformed hex inside a terminal config
    is the one thin spot left.
 
 ## 12. Decisions
