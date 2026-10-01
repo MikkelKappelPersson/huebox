@@ -80,7 +80,7 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 
 | Key | Action |
 | --- | --- |
-| arrows | move between slots |
+| arrows | move between slots — along a row, or up/down a row, in the grid as drawn (§4.3.1) |
 | `q` / `w` | hue −/+ |
 | `a` / `s` | saturation −/+ |
 | `z` / `x` | lightness −/+ |
@@ -101,6 +101,25 @@ prompt instead of quitting. Since §14 only the HSL keys and hex entry no-op
 while the selected slot has no value — save, undo, revert and navigation work
 regardless (v1 blocked every action on it). The `<config>.huebox.bak` is
 taken at the first save of a session, not at editor open (§14.2).
+
+### 4.3.1 The arrows move the way the frame reads
+
+The frame is two stacked grids — the palette (eight swatches to a row at the
+default width) and the six interface cells (two to a row) — and an arrow key
+moves one cell *in that geometry*: left/right along a row, up/down a row in
+the same column. No key uses a fixed slot stride, so what a key does depends
+on the width the frame was drawn at: at 40 columns the palette is four to a
+row and one arrow down is the swatch below the selection, not the one two
+rows down. A vertical key that runs off a grid crosses to the other one in
+the same column — the palette's bottom row is the row directly above the
+interface's first — while `palette-0` and `selection-foreground`, the outer
+ends of the frame, stay put; a row's edge is an edge, so `right` on the last
+cell of a row stays rather than wrapping into the next row.
+
+The grid is computed once per frame from the live width and handed to both
+the frame and the keys (§15.2), so what is drawn and what the arrows step
+through cannot disagree — including across a resize, where the selection
+follows the new layout.
 
 **Raw-mode guarantee.** A session enters raw mode exactly once, in `edit()`,
 before its draw loop, and leaves it exactly once, in the `finally` that wraps
@@ -336,6 +355,10 @@ line instead of a garbled frame. Settled in phase 5, when the picker landed.
 - editor frames at 100x30, 80x24, 60x16 and 40x12 — reflow, clipping, the
   too-small fallback below the minimum, and two identical draws producing a
   byte-identical frame (§15)
+- the arrow keys walk the grid the frame was drawn for, at every width:
+  left/right along a row, up/down a row, the crossing between the palette and
+  the interface grid, the outer edges, and a narrow frame whose rows are four
+  or one wide (§4.3.1)
 - the theme picker frame at the same sizes, including a library larger than
   the screen (it scrolls), and the picker flows at the key level: open,
   move, open, blocked-while-dirty, new-from-buffer, save-as-new (§13.7)
@@ -731,7 +754,10 @@ is no small-size story.
    `os.read` automatically, so parsing continues and the redraw happens at
    the next idle tick.
 2. Layout is computed from the current (cols, rows) every frame. No cached
-   coordinates survive across frames.
+   coordinates survive across frames. The frame's grid — how many swatches
+   and interface cells fit to a row — is part of that per-frame computation
+   and is handed to the arrow keys along with the draw (§4.3.1), so the
+   selection and the layout are one calculation, not two that can drift.
 3. `pack()` / `clip()` remain the only width-sensitive primitives; every new
    widget (examples strip, theme overlay) must go through them.
 4. Below a minimum size, render a centered

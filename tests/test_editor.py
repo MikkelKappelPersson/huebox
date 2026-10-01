@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
-from huebox.color import SLOTS  # noqa: E402
+from huebox.color import NAMED, SLOTS  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -207,7 +207,7 @@ class NormalFrame(unittest.TestCase):
 class EditLoop(unittest.TestCase):
     """The loop itself: draw / read / apply, and only save writes (§14.2)."""
 
-    def run_session(self, keys, path=None, slots=None):
+    def run_session(self, keys, path=None, slots=None, cols=None):
         """Drive `edit()` with a scripted key stream; return the writes."""
         writes, draws, handlers = [], [], []
 
@@ -219,7 +219,8 @@ class EditLoop(unittest.TestCase):
         def note_handler(*args, **kwargs):
             draws.append({"slots": dict(args[2]), "status": args[5],
                           "head": kwargs.get("head"),
-                          "overlay": kwargs.get("overlay")})
+                          "overlay": kwargs.get("overlay"),
+                          "grid": kwargs.get("grid")})
             handlers.append(signal.getsignal(signal.SIGWINCH))
 
         stream = iter(keys)
@@ -232,6 +233,8 @@ class EditLoop(unittest.TestCase):
                                   side_effect=note_handler),\
                 mock.patch.object(editor, "read_key",
                                   side_effect=lambda fd: next(stream)),\
+                mock.patch.object(editor, "term_size",
+                                  return_value=(cols or 80, 24)),\
                 mock.patch.object(sys, "stdout", io.StringIO()):
             editor.edit("kitty", target, dict(slots or FULL_SLOTS), record)
         return writes, draws, handlers, target
@@ -273,6 +276,24 @@ class EditLoop(unittest.TestCase):
         self.assertEqual(writes, [])        # discarded, not saved
         self.assertIn("unsaved changes", draws[-1]["status"])
         self.assertEqual(len(draws), 3)      # armed frame is drawn once
+
+    def test_the_frame_and_the_keys_are_given_one_geometry(self):
+        # §4.3 / §15.2 — the grid the loop computes per frame is the one the
+        # frame draws and the arrows walk, so the two cannot disagree
+        for cols in (80, 60, 40):
+            writes, draws, _, _ = self.run_session(["esc"], cols=cols)
+            self.assertEqual(writes, [])
+            self.assertTrue(draws)
+            for draw in draws:
+                self.assertEqual(draw["grid"], editor.grid_geometry(cols))
+
+    def test_the_keys_follow_the_terminal_the_frame_is_drawn_for(self):
+        # 40 columns puts four swatches to a row, so one arrow down is
+        # palette-4 — not the palette-8 a fixed eight-slot stride would pick
+        writes, _, _, _ = self.run_session(["down", "s", SAVE, "esc"], cols=40)
+        self.assertEqual(len(writes), 1)
+        self.assertNotEqual(writes[0][2]["palette-4"], FULL_SLOTS["palette-4"])
+        self.assertEqual(writes[0][2]["palette-8"], FULL_SLOTS["palette-8"])
 
 
 class ApplyKey(unittest.TestCase):
@@ -470,6 +491,131 @@ class ApplyKey(unittest.TestCase):
         self.assertFalse(st.dirty())
         editor.apply_key("esc", st)
         self.assertTrue(st.quit)            # Esc still quits
+
+
+class GridArrows(unittest.TestCase):
+    """The arrows walk the grid the frame draws, row for row (§4.3).
+
+    The old movement was a fixed slot stride, which only ever matched the
+    80-column frame: the six interface cells are drawn as three rows of two
+    and were stepped through as a single list, so left/right read as "next
+    in the list" and down fell off the end of it.
+    """
+
+    def land(self, name, *keys, cols=80):
+        """The slot `keys` reach from `name`, in the grid at `cols`."""
+        index = SLOTS.index(name)
+        grid = editor.grid_geometry(cols)
+        for key in keys:
+            index = editor.move_slot(index, key, grid)
+        return SLOTS[index]
+
+    def swatch_rows(self, cols, rows=16):
+        """How many swatches the frame actually put on each palette row."""
+        raw = lines(frame(cols, rows, sel=0))
+        start = next(i for i, line in enumerate(raw)
+                     if ANSI.sub("", line).strip() == "palette")
+        out = []
+        for line in raw[start + 1:]:
+            if "48;2;" not in line:         # the escapes count the cells
+                break
+            out.append(line.count("48;2;"))
+        return out
+
+    def marked(self, name, cols, rows=16):
+        """A frame with `name` selected, as plain text."""
+        return "".join(ANSI.sub("", line) for line in lines(
+            frame(cols, rows, sel=SLOTS.index(name))))
+
+    def mark(self, name):
+        """How the frame prints `>` on a palette swatch (`> 8 `, `>12 `)."""
+        return f">{int(name.split('-')[-1]):>2} "
+
+    def test_the_interface_grid_is_three_rows_of_two(self):
+        self.assertEqual((editor.grid_geometry(80).named_cols, len(NAMED)),
+                         (2, 6))
+        # right crosses the pair; down walks the column it is in
+        self.assertEqual(self.land("background", "right"), "foreground")
+        self.assertEqual(self.land("foreground", "left"), "background")
+        self.assertEqual(self.land("background", "down"), "cursor-color")
+        self.assertEqual(self.land("background", "down", "down"),
+                         "selection-background")
+        self.assertEqual(self.land("foreground", "down"), "cursor-text")
+        self.assertEqual(self.land("cursor-text", "down"),
+                         "selection-foreground")
+        # down and right from one cell meet at the same place as the other
+        self.assertEqual(self.land("background", "down", "right"),
+                         self.land("background", "right", "down"))
+
+    def test_left_and_right_stay_in_their_row(self):
+        self.assertEqual(self.land("cursor-text", "left"), "cursor-color")
+        # a row's edge is the frame's edge — no wrap into the next row
+        self.assertEqual(self.land("foreground", "right"), "foreground")
+        self.assertEqual(self.land("cursor-color", "left"), "cursor-color")
+
+    def test_down_crosses_from_the_palette_into_the_interface(self):
+        # the palette's bottom row sits directly above the interface's first
+        self.assertEqual(self.land("palette-8", "down"), "background")
+        self.assertEqual(self.land("palette-9", "down"), "foreground")
+
+    def test_up_crosses_back_out_of_the_interface(self):
+        self.assertEqual(self.land("background", "up"), "palette-8")
+        self.assertEqual(self.land("foreground", "up"), "palette-9")
+        self.assertEqual(self.land("cursor-color", "up"), "background")
+
+    def test_the_outer_ends_of_the_frame_stay_put(self):
+        self.assertEqual(self.land("palette-0", "up"), "palette-0")
+        self.assertEqual(self.land("palette-0", "left"), "palette-0")
+        self.assertEqual(self.land("selection-foreground", "down"),
+                         "selection-foreground")
+        self.assertEqual(self.land("selection-foreground", "right"),
+                         "selection-foreground")
+
+    def test_a_narrow_palette_row_is_one_key_not_two(self):
+        # 40 columns puts four swatches to a row: down is the cell below
+        # the selection, not the cell two rows down
+        grid = editor.grid_geometry(40)
+        self.assertEqual((grid.palette_cols, grid.named_cols), (4, 1))
+        self.assertEqual(self.land("palette-0", "down", cols=40), "palette-4")
+        self.assertEqual(self.land("palette-3", "down", cols=40), "palette-7")
+        self.assertEqual(self.land("palette-12", "down", cols=40), "background")
+        self.assertEqual(self.land("background", "up", cols=40), "palette-12")
+
+    def test_a_one_column_interface_still_steps_a_row(self):
+        # two interface cells need 68 columns; below that there is one to a
+        # row — the list order — and down is the only way along it
+        self.assertEqual(editor.grid_geometry(80).named_cols, 2)
+        self.assertEqual(editor.grid_geometry(60).named_cols, 1)
+        self.assertEqual(self.land("background", "down", cols=60), "foreground")
+        self.assertEqual(self.land("background", "down", "down", cols=60),
+                         "cursor-color")
+        self.assertEqual(self.land("background", "right", cols=60),
+                         "background")        # one cell to a row: no across
+
+    def test_the_frame_and_the_keys_agree_on_the_grid(self):
+        for cols in (80, 60, 40):
+            grid = editor.grid_geometry(cols)
+            self.assertEqual(set(self.swatch_rows(cols)),
+                             {grid.palette_cols}, cols)
+            # the `>` the frame draws lands on the slot the arrows reach
+            above = self.land("background", "up", cols=cols)
+            self.assertNotEqual(above, "palette-0")
+            self.assertNotIn(self.mark(above), self.marked("palette-0", cols))
+            self.assertIn(self.mark(above), self.marked(above, cols))
+
+    def test_the_key_surface_moves_by_the_frame_geometry(self):
+        # apply_key, not move_slot: the arrows as the loop actually feeds them
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None)
+        st.grid = editor.grid_geometry(80)
+        st.sel = SLOTS.index("background")
+        for key, expected in (("down", "cursor-color"),
+                              ("down", "selection-background"),
+                              ("right", "selection-foreground"),
+                              ("up", "cursor-text"),
+                              ("up", "foreground")):
+            editor.apply_key(key, st)
+            self.assertEqual(SLOTS[st.sel], expected)
+        self.assertFalse(st.dirty())        # navigation writes nothing
 
 
 class Backup(unittest.TestCase):

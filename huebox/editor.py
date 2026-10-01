@@ -16,9 +16,10 @@ import os
 import shutil
 import signal
 import sys
+from typing import NamedTuple
 
-from .color import (MISSING, NAMED, SLOTS, hex_to_rgb, hsv_to_rgb, is_hex,
-                    normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
+from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
+                    is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
 from .render import (BOLD, DIM, RESET, bg, clip, example_lines, fg, pack,
                      sample_lines)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
@@ -33,7 +34,7 @@ ADJUST = {
     "H": ("s", -1), "L": ("s", +1),
 }
 MULT_STEPS = [1, 5, 20]
-MOVE = {"up": -8, "down": 8, "left": -1, "right": 1}
+ARROWS = ("up", "down", "left", "right")
 QUIT_KEYS = ("esc", "Q", "\x03")
 SAVE_KEY = "\x13"
 ENTER_KEYS = ("\r", "\n")
@@ -57,6 +58,76 @@ SAMPLE_FLOOR = 4                     # the code block: header + three lines
 # what the frame keeps free for the widgets before it touches a widget:
 # the strip whole, the sample at its floor, and a row of air under it
 WIDGET_BUDGET = EXAMPLES_ROWS + SAMPLE_FLOOR + 1
+
+# a state starts at the width `term_size()` falls back to; the draw loop
+# replaces it with the real geometry on every frame (§4.3)
+FALLBACK_COLS = 80
+# a palette swatch, with and without its hex value; the frame drops the hex
+# before it drops a swatch, and gives up cells before width (§15.2)
+CELL_FULL, CELL_MIN = 13, 6
+# the width of one interface cell: `mark name hex`, the name padded to 21
+NAMED_COL_W = 32
+
+
+class Grid(NamedTuple):
+    """The two colour grids as a frame of `cols` columns draws them (§15)."""
+
+    palette_cols: int      # palette swatches per row
+    named_cols: int        # interface cells per row
+    show_hex: bool         # a swatch is wide enough to print its hex value
+
+
+def grid_geometry(cols: int) -> Grid:
+    """The `Grid` a frame `cols` wide draws, and the arrows move in (§4.3).
+
+    One ladder for both (§15.2): the frame renders what this says and the
+    keys step through what this says, so a selection can never walk a row
+    the user cannot see — which is what a fixed slot stride did once the
+    palette dropped to four or two to a row.
+    """
+    cell_full, cell_min = CELL_FULL, CELL_MIN
+    for per_row, cellw in ((8, cell_full), (8, cell_min), (4, cell_full),
+                           (4, cell_min), (2, cell_full), (1, cell_full)):
+        if len("  ") + per_row * cellw <= cols:
+            named = 2 if len("  ") + 2 * NAMED_COL_W + 2 <= cols else 1
+            return Grid(per_row, named, cellw >= cell_full)
+    return Grid(1, 1, True)         # narrower than one cell: one of each
+
+
+def _bottom_row(base: int, size: int, cols: int, column: int) -> int:
+    """A block's last row, for a column that may be wider than the block."""
+    return base + (-(-size // cols) - 1) * cols + min(column, cols - 1)
+
+
+def move_slot(sel: int, key: str, grid: Grid) -> int:
+    """Where an arrow lands, in the grid the frame was drawn in (§4.3).
+
+    Left and right stay in the row; up and down stay in the column. The two
+    blocks are stacked, so a vertical key that runs off a block crosses to
+    the other in the same column — the palette's bottom row is the row
+    directly above the interface's first — while the outer ends of the frame
+    (`palette-0`, `selection-foreground`) simply stay put.
+    """
+    palette = sel < len(PALETTE)
+    base = 0 if palette else len(PALETTE)
+    size = len(PALETTE) if palette else len(NAMED)
+    cols = grid.palette_cols if palette else grid.named_cols
+    row, column = divmod(sel - base, cols)
+
+    if key in ("left", "right"):
+        column += -1 if key == "left" else 1
+        return base + row * cols + column if 0 <= column < cols else sel
+    if key == "up":
+        if row:
+            return base + (row - 1) * cols + column
+        if palette:
+            return sel                       # palette-0 tops the frame
+        return _bottom_row(0, len(PALETTE), grid.palette_cols, column)
+    if row + 1 < -(-size // cols):
+        return base + (row + 1) * cols + column
+    if palette:
+        return len(PALETTE) + min(column, grid.named_cols - 1)
+    return sel                               # the last named slot is the floor
 
 
 class Library:
@@ -184,7 +255,7 @@ def theme_lines(names, index, current, cols, rows, status=""):
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                overlay=None):
+                overlay=None, grid=None):
     cols, rows = term_size()
     sys.stdout.write("\033[H\033[2J")
     if cols < MIN_COLS or rows < MIN_ROWS:
@@ -192,6 +263,9 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         sys.stdout.write(too_small_frame(cols) + "\r\n")
         sys.stdout.flush()
         return
+    if grid is None:
+        grid = grid_geometry(cols)      # §4.3 — what this frame draws, and
+                                        # what the arrows step through
     if overlay is not None:
         # §13.7 — the picker owns the frame while it is up. It shares the
         # editor's minimum size, so the too-small check above already said
@@ -210,12 +284,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     body.append(first)
     body.append("")
 
-    cell_full, cell_min = 13, 6
-    for per_row, cellw in ((8, cell_full), (8, cell_min), (4, cell_full),
-                           (4, cell_min), (2, cell_full), (1, cell_full)):
-        if len("  ") + per_row * cellw <= cols:
-            break
-    show_hex = cellw >= cell_full
+    per_row, show_hex = grid.palette_cols, grid.show_hex
+    cellw = CELL_FULL if show_hex else CELL_MIN
 
     def swatch(index, selected):
         value = slots.get(f"palette-{index}", MISSING)
@@ -225,14 +295,14 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 f"{BOLD if selected else ''}{label.ljust(cellw)}{RESET}")
 
     body.append(f"  {BOLD}palette{RESET}")
-    for start in range(0, 16, per_row):
+    for start in range(0, len(PALETTE), per_row):
         body.append(("  " + "".join(
             swatch(i, sel == i) for i in range(start, start + per_row)
-            if i < 16)).rstrip())
+            if i < len(PALETTE))).rstrip())
     body.append(PALETTE_LEGEND)
     body.append("")
 
-    per = 2 if len("  ") + 2 * 32 + 2 <= cols else 1
+    per = grid.named_cols
     body.append(f"  {BOLD}interface{RESET}")
     for start in range(0, len(NAMED), per):
         cells = []
@@ -331,7 +401,9 @@ class EditorState:
     direct-mode session), `overlay` the picker's rows while it is up, and
     `library` the injected seam the picker asks for themes. Each of those
     can change mid-session, which is why the writer is bound to the state
-    and not to `edit()`'s arguments.
+    and not to `edit()`'s arguments. `grid` is the frame's shape: the
+    editor's draw loop replaces it with the live geometry on every frame,
+    because the arrow keys move through the grid the user can see (§4.3).
     """
 
     def __init__(self, slots, write, prompt_hex=None, backup_path=None,
@@ -357,6 +429,7 @@ class EditorState:
         self.created = None                 # name created via n/N this session
         self.overlay = None                 # [name, ...] while the picker is up
         self.overlay_index = 0
+        self.grid = grid_geometry(FALLBACK_COLS)   # refreshed every frame
 
     def dirty(self) -> bool:
         return self.slots != self.saved
@@ -633,8 +706,8 @@ def apply_key(key, st):
     name = SLOTS[st.sel]
     value = st.slots.get(name)
 
-    if key in MOVE:
-        st.sel = max(0, min(len(SLOTS) - 1, st.sel + MOVE[key]))
+    if key in ARROWS:
+        st.sel = move_slot(st.sel, key, st.grid)
     elif key == "f":
         st.mult = MULT_STEPS[(MULT_STEPS.index(st.mult) + 1) % len(MULT_STEPS)]
         st.status = f"step size x{st.mult}"
@@ -720,9 +793,13 @@ def edit(fmt, path, slots, write, backup=True, theme=None, report=None,
         except (OSError, ValueError, TypeError):
             pass                      # no winch here; the flag never fires
         while True:
+            # §15.2 — one geometry per frame, read by the frame and by the
+            # keys: what is drawn and what the arrows step through cannot
+            # disagree, and a resize moves the selection with the layout
+            st.grid = grid_geometry(term_size()[0])
             draw_editor(st.fmt, session_path(st), st.slots, st.sel, st.undo,
                         st.status, st.mult, head=head_label(st),
-                        overlay=st.picker_frame())
+                        overlay=st.picker_frame(), grid=st.grid)
             key = read_key(fd)
             if key == "resize":
                 continue        # no key consumed: the loop just redraws

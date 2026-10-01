@@ -86,7 +86,7 @@ Run `huebox edit` and drive it with the keyboard.
 
 | Key | Action |
 | --- | --- |
-| arrows | move between slots |
+| arrows | move between slots — along a row, or up/down a row, in the grid on screen |
 | `q` / `w` | hue −/+ |
 | `a` / `s` | saturation −/+ |
 | `z` / `x` | lightness −/+ |
