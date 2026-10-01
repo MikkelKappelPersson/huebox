@@ -42,6 +42,35 @@ def width(line):
     return len(ANSI.sub("", line))
 
 
+def example_rows(body):
+    """How many of the strip's three rows this frame drew."""
+    return sum(1 for line in body if re.match(
+        r"^  (background|selection-background|cursor-color)/", line))
+
+
+def _code_rows(body):
+    start = next((i for i, line in enumerate(body) if "live code" in line), None)
+    if start is None:
+        return []
+    out = []
+    for line in body[start + 1:]:
+        if not line.startswith("    "):        # the block is over
+            break
+        out.append(line)
+    return out
+
+
+def code_lines(body):
+    """How many rows of the code sample this frame drew."""
+    return len(_code_rows(body))
+
+
+def code_block(body):
+    """The code sample's own lines, plain: no header row, no blank ones."""
+    return [ANSI.sub("", line).strip() for line in _code_rows(body)
+            if line.strip()]
+
+
 class TooSmall(unittest.TestCase):
     def test_hint_text_and_centering(self):
         self.assertEqual(editor.too_small_frame(120).strip(), HINT)
@@ -123,15 +152,56 @@ class NormalFrame(unittest.TestCase):
         self.assertLess(body.index(next(l for l in body if "examples" in l)),
                         body.index(next(l for l in body if "live code" in l)))
 
-    def test_examples_and_sample_shrink_together(self):
-        # short terminal: the strip takes the leftover rows, the sample
-        # follows only when there is room left for both
-        short = ANSI.sub("", "\r\n".join(lines(frame(60, 24))))
-        self.assertIn("examples", short)
-        self.assertNotIn("live code", short)
-        tall = ANSI.sub("", "\r\n".join(lines(frame(60, 30))))
-        self.assertIn("live code", tall)
-        self.assertIn("examples", tall)
+    def test_examples_and_the_block_share_the_leftover_rows(self):
+        # §15 — the strip gives up rows before the code block loses a line,
+        # and both survive at every size spec §15.4 tests
+        for cols, rows, strip, code in ((100, 30, 3, 7), (80, 24, 3, 4),
+                                        (60, 24, 3, 4)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(frame(cols, rows))
+                self.assertEqual(example_rows(body), strip)
+                self.assertEqual(code_lines(body), code)
+
+    def test_the_block_outlives_the_strip(self):
+        # the sample is the widget the editor exists to show (§9), so where
+        # the two cannot both fit the strip gives up rows first — and goes
+        # before the block does, including at the sizes where the block
+        # used to vanish entirely
+        for cols, rows, strip, code in ((80, 20, 3, 3), (80, 18, 1, 3),
+                                        (80, 16, 0, 3), (60, 20, 0, 4)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(frame(cols, rows))
+                self.assertEqual(example_rows(body), strip)
+                self.assertEqual(code_lines(body), code)
+
+    def test_a_truncated_block_drops_its_least_useful_lines(self):
+        # a short frame spends rows on code: the leading comment, the
+        # closing brace and the blank inside the block go first
+        block = code_block(lines(frame(80, 24)))
+        self.assertTrue(block[0].startswith("const huebox"))
+        self.assertNotIn("}", block)
+        self.assertFalse(any("live preview" in line for line in block))
+
+    def test_the_frame_sheds_decoration_before_a_widget(self):
+        # §15 — the palette legend is a courtesy (the grid is numbered), so
+        # a tight frame spends it, and the blank separators after it, before
+        # it spends a widget
+        legend = ANSI.sub("", editor.PALETTE_LEGEND)
+        tall = [ANSI.sub("", line) for line in lines(frame(80, 30))]
+        self.assertIn(legend, tall)
+        tight = [ANSI.sub("", line) for line in lines(frame(80, 24))]
+        self.assertNotIn(legend, tight)
+        for keep in ("palette", "interface", "AaBbCc", "examples", "live code"):
+            self.assertTrue(any(keep in line for line in tight), keep)
+
+    def test_no_size_overflows_its_rows(self):
+        for cols, rows in ((120, 44), (100, 40), (100, 30), (80, 30), (80, 28),
+                           (80, 24), (80, 22), (80, 20), (80, 18), (80, 16),
+                           (80, 14), (60, 24), (60, 20), (60, 16), (60, 14)):
+            with self.subTest(size=(cols, rows)):
+                body = lines(frame(cols, rows))
+                self.assertLessEqual(len(body), rows)
+                self.assertTrue(all(width(line) <= cols for line in body))
 
 
 class EditLoop(unittest.TestCase):

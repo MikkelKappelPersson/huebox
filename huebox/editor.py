@@ -45,6 +45,19 @@ DIRTY_MARK = "●"
 THEME_HINTS = ["arrows move", "Enter open", "n new from buffer",
                "N save as new", "t / Esc back"]
 
+# §15 — what a short terminal spends, in order. The frame sheds its
+# decoration (the palette legend, then the blank separators nearest the
+# widgets) before it sheds a widget, and the two live widgets share what is
+# left: the strip gives up rows before the code sample loses a line, because
+# the sample is the widget the editor exists to show (§9).
+PALETTE_LEGEND = f"  {DIM}0-7 base   8-15 bright{RESET}"
+EXAMPLES_ROWS = 4                    # the strip whole: header + three rows
+EXAMPLES_FLOOR = 2                   # header + one row; below this it goes
+SAMPLE_FLOOR = 4                     # the code block: header + three lines
+# what the frame keeps free for the widgets before it touches a widget:
+# the strip whole, the sample at its floor, and a row of air under it
+WIDGET_BUDGET = EXAMPLES_ROWS + SAMPLE_FLOOR + 1
+
 
 class Library:
     """The three things the picker may ask of the theme library (§13.7).
@@ -216,7 +229,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         body.append(("  " + "".join(
             swatch(i, sel == i) for i in range(start, start + per_row)
             if i < 16)).rstrip())
-    body.append(f"  {DIM}0-7 base   8-15 bright{RESET}")
+    body.append(PALETTE_LEGEND)
     body.append("")
 
     per = 2 if len("  ") + 2 * 32 + 2 <= cols else 1
@@ -251,26 +264,51 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     if status:
         tail.append(f"  {BOLD}{status}{RESET}")
 
-    # §14.1 — the examples strip and the code sample share the leftover
-    # rows: examples sit above the sample, both shrink as the terminal does.
+    # §14.1 / §15 — the examples strip and the code sample share the
+    # leftover rows, each with a floor, and the frame spends its decoration
+    # before it spends a widget.
+    spare = rows - len(body) - len(tail)
+    while spare < WIDGET_BUDGET:
+        decoration = ([i for i, line in enumerate(body)
+                       if line == PALETTE_LEGEND]
+                      or [i for i, line in enumerate(body) if not line])
+        if not decoration:
+            break                   # nothing left to spend; the widgets go
+        # the legend is a courtesy (the grid is numbered), so the blanks
+        # are the decoration proper — nearest the widgets first, leaving
+        # the air at the top of the frame
+        del body[decoration[-1]]
+        spare += 1
+
     extra = []
 
     def room_left():
-        return rows - len(body) - len(tail) - len(extra)
+        return spare - len(extra)
 
-    if room_left() >= 4:          # header + three rows, no trailing blank
+    examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
+    if examples >= EXAMPLES_FLOOR:
         extra.append(f"  {BOLD}examples{RESET} "
                      f"{DIM}(live buffer: background / selection / cursor){RESET}")
-        extra.extend(example_lines(slots, cols - 2))
-    if room_left() >= 3:          # header + at least one sample line
-        rendered = sample_lines(slots)
-        shown = min(len(rendered), room_left() - 2)
-        if shown >= 1:
+        extra.extend(example_lines(slots, cols - 2)[:examples - 1])
+    if room_left() >= 2:             # header plus at least one line
+        code = [line for line, _ in sample_lines(slots)]
+        if code and not code[-1].strip():
+            code.pop()               # the lex's trailing newline, not a line
+        # a truncated block drops its least informative lines rather than
+        # stopping mid-program: the leading comment (the label above already
+        # says what the block is), the closing brace, and the blank inside
+        # it — in a short frame a row that shows nothing is the most
+        # expensive row there is
+        code = (code if room_left() - 1 >= len(code)
+                else [line for line in code[1:-1] if line.strip()])
+        take = min(len(code), max(1, room_left() - 1))   # -1 for the header
+        if take:
             extra.append(f"  {BOLD}live code{RESET} "
                          f"{DIM}(truecolor, no reload needed){RESET}")
             extra.extend("    " + line.replace(RESET, RESET + "    ")
-                         for line, _ in rendered[:shown])
-            extra.append("")
+                         for line in code[:take])
+            if room_left() - take >= 2:  # rows to spare: the separator
+                extra.append("")
 
     out = body + extra + tail
     if len(out) > rows:

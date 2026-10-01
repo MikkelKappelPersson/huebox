@@ -751,6 +751,34 @@ is no small-size story.
 6. Tests: layout cases at several sizes including below-minimum (§10 grows
    one line: `pack`/`clip`/overlay rendering at 100x30, 80x24, 60x16, 40x10).
 
+**What a short frame spends, in order.** `rows` is a budget and the two live
+widgets of §14.1 — the examples strip and the code sample — are what flex
+inside it. The order is the contract, not the sizes:
+
+1. **The frame sheds decoration before it sheds a widget.** The `0-7 base
+   8-15 bright` legend goes first (the grid is numbered anyway), then the
+   blank separators, nearest the widgets first, so the top of the frame keeps
+   its air.
+2. **The strip gives up rows before the block gives up a line.** The strip is
+   whole at `EXAMPLES_ROWS` (header + three rows), shrinks to `EXAMPLES_FLOOR`
+   (header + one row), and below that it goes; the block keeps `SAMPLE_FLOOR`
+   (header + three lines) because it is the widget the editor exists to show
+   (§9). Where the two cannot both fit, the strip is what goes.
+3. **A truncated block drops its least useful lines**: the leading comment
+   (the label above already says what the block is), the blank inside it, and
+   the closing brace. In a short frame a row that shows nothing is the most
+   expensive row there is.
+4. **The blank after the block is the last row given up**, after the code
+   itself.
+5. **Below the floors the widgets go**, and the frame is the palette grid, the
+   interface rows, the selected readout and the hints. A tall frame is never
+   padded out to `rows`.
+
+The constants live beside the editor's other layout constants
+(`EXAMPLES_ROWS`, `EXAMPLES_FLOOR`, `SAMPLE_FLOOR` in `editor.py`), the ladder
+is tested as exact numbers at 100x30, 80x24, 60x24 and the short end (80x20,
+80x18, 80x16, 60x20), and no size from 80x14 up overflows its rows.
+
 ## 16. Rollout order
 
 0. §17 project structure + AGENTS.md — the split lands before anything else.
