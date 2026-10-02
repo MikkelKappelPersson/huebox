@@ -117,9 +117,14 @@ Edits live in an in-memory buffer: nothing is written until you press
 `Ctrl+S`. The editor *renders* from that buffer, so everything on screen —
 palette, interface, code sample, and the background / selection / cursor
 examples — is live and truecolor before the file changes (a frame with room to
-spare also shows a git diff of the sample). Quit with unsaved changes and
-huebox asks for a second `Esc` first; `r` throws the buffer away and goes
-back to your last save.
+spare also shows a git diff of the sample). The frame's own text is drawn
+from the buffer too: the `huebox` wordmark at the top wears the six bright
+hues one letter each, a key in the hint line is bright (`arrows`), the label
+beside it is teal (**move**), the furniture — a path, a hex, a count — is
+muted, and a section header is the theme's own foreground in bold. Edit
+`palette-11` and both the escape in the sample and the keys change colour on
+the same frame. Quit with unsaved changes and huebox asks for a second `Esc`
+first; `r` throws the buffer away and goes back to your last save.
 
 The header names what you are editing: `ember ● ghostty` for a theme (the `●`
 marks unsaved buffer changes) or `direct:/path/to/config` in a legacy

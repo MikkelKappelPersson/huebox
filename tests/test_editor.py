@@ -15,7 +15,7 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
 from huebox.color import NAMED, SLOTS  # noqa: E402
-from huebox.render import fg  # noqa: E402
+from huebox.render import BOLD, RESET, fg  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -46,7 +46,8 @@ def width(line):
 def example_rows(body):
     """How many of the strip's three rows this frame drew."""
     return sum(1 for line in body if re.match(
-        r"^  (background|selection-background|cursor-color)/", line))
+        r"^  (background|selection-background|cursor-color)/",
+        ANSI.sub("", line)))
 
 
 def _code_rows(body):
@@ -305,6 +306,64 @@ class NormalFrame(unittest.TestCase):
                                            (110, 36, (False, False))):
             with self.subTest(size=(cols, rows)):
                 self.assertEqual(blanks(cols, rows), (above, below))
+
+    def test_the_frame_chrome_is_drawn_from_the_buffer(self):
+        # §8.1 — the frame says itself in the buffer's own colours: keys in
+        # palette-11, their labels in palette-14, the furniture (path, hex,
+        # counters, legend) in palette-8, so editing one of them repaints
+        # the chrome on the same frame as everything else
+        amber, teal, grey = "#e0c06c", "#6cc0c0", "#d0d0d8"
+        base = dict(FULL_SLOTS, **{"palette-11": amber, "palette-14": teal,
+                                   "palette-8": grey})
+
+        def row(**slots):
+            body = lines(frame(100, 30, slots=dict(base, **slots)))
+            return next(l for l in body if needle in ANSI.sub("", l))
+
+        needle = "arrows"
+        hints = row()
+        self.assertIn(fg(amber), hints)            # the key
+        self.assertIn(fg(teal), hints)             # its label
+        self.assertNotEqual(hints, row(**{"palette-11": "#ff00ff"}))
+
+        needle = "0-7 base"
+        legend = row()
+        self.assertIn(fg(grey), legend)
+        self.assertNotEqual(legend, row(**{"palette-8": "#ff00ff"}))
+
+        # a header, by contrast, wears the theme's own foreground and
+        # nothing else — moving a palette slot must leave it alone
+        needle = "palette"
+        head = row()
+        self.assertIn(f"{BOLD}{fg(base['foreground'])}palette{RESET}", head)
+        for slot in ("palette-11", "palette-14", "palette-8"):
+            self.assertEqual(head, row(**{slot: "#ff00ff"}))
+
+        # the wordmark is the one ornament, and it is live: one letter, one
+        # colour, and moving a slot that spells it moves the frame
+        needle = "huebox"
+        mark = row()
+        for slot in ("palette-9", "palette-10", "palette-11", "palette-12",
+                     "palette-13", "palette-14"):
+            self.assertIn(fg(base[slot]), mark, slot)
+        self.assertNotEqual(mark, row(**{"palette-9": "#ff00ff"}))
+
+    def test_a_fold_never_splits_a_key_from_its_label(self):
+        # the hint row is painted a token at a time; the fold lands between
+        # whole hints, so no row ends with a key looking orphaned
+        whole = {"arrows move", "q/w hue", "a/s sat", "z/x light", "f x5",
+                 "i hex", "^S save", "u undo(1)", "r revert", "t themes",
+                 "N as new", "Esc quit"}
+        for cols in (120, 100, 80, 60, 40):
+            with self.subTest(cols=cols):
+                rows = [ANSI.sub("", line).strip()
+                        for line in lines(frame(cols, 24, mult=5,
+                                                 undo=[("#fff", 0)]))]
+                hints = [row for row in rows if row
+                         and all(part in whole for part in row.split("  "))]
+                self.assertTrue(hints)
+                for row in hints:
+                    self.assertLessEqual(width(row) + 2, cols)
 
     def test_a_tall_frame_spends_its_spare_rows_on_the_diff(self):
         # the other end of the same ladder: decoration stays, and what the

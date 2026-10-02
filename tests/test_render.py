@@ -10,11 +10,14 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 import huebox  # noqa: E402
-from huebox.render import (CALL_SLOT, CURSOR_CHAR, DIFF_ADDED,  # noqa: E402
+from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
+                           CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, LABEL_WIDTH,
                            PAIR_MIN_COLS, PAIR_WIDTH, SELECTED_TEXT,
-                           TOKEN_SLOTS, _sample, bg, fg, pair_label)
+                           TOKEN_SLOTS, WORDMARK, WORDMARK_SLOTS, _sample, bg,
+                           chrome, fg, hint_line, key_hint, pack, pair_label,
+                           title, visible, wordmark)
 from huebox.render import RESET  # noqa: E402
 
 
@@ -159,6 +162,107 @@ class Geometry(unittest.TestCase):
                                      f"width {width} > {cols}")
 
 
+class Typography(unittest.TestCase):
+    """The frame's own vocabulary: keys, labels, muted furniture (§8.1)."""
+
+    HINTS = [("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"),
+             ("z/x", "light"), ("f", "x5"), ("i", "hex"), ("^S", "save"),
+             ("u", "undo(1)"), ("r", "revert"), ("t", "themes"),
+             ("N", "as new"), ("Esc", "quit")]
+    AMBER, TEAL, GREY = "#e0c06c", "#6cc0c0", "#d0d0d8"
+
+    def slots(self):
+        words = dict(zip(("palette-9", "palette-10", "palette-11",
+                          "palette-12", "palette-13", "palette-14"),
+                         ("#e06c6c", "#6cc06c", "#e0c06c", "#6c9ce0",
+                          "#e06c9c", "#6cc0c0")))
+        words.update({"palette-8": self.GREY, "foreground": "#e6e6ea",
+                      "background": "#101014"})
+        return words
+
+    def test_visible_counts_columns_and_not_escape_bytes(self):
+        # what `clip` cuts at and `pack` folds at: one number, both ways
+        self.assertEqual(visible(""), 0)
+        self.assertEqual(visible("abc"), 3)
+        self.assertEqual(visible("一二"), 4)              # wide glyphs are two
+        self.assertEqual(visible(f"{fg('#ff8800')}abc{RESET}"), 3)
+        self.assertEqual(visible("  " + chrome("move", CHROME_LABEL, {})), 6)
+
+    def test_pack_folds_painted_items_by_their_columns(self):
+        # the frame's hints are painted, so folding on raw string length
+        # would count every escape as columns and cut the row short
+        items = [key_hint(self.slots(), key, what) for key, what in self.HINTS]
+        self.assertGreater(len(items[0]), len("arrows move"))  # longer painted
+        for cols in (120, 80, 60, 40, 24):
+            with self.subTest(cols=cols):
+                for row in pack(items, cols, sep="  "):
+                    self.assertLessEqual(visible(row), cols)
+
+    def test_a_header_is_the_themes_own_foreground(self):
+        # §8.1 — a header takes no colour of its own: `foreground` is the
+        # one colour the user chose for text, and a header that wore a
+        # palette slot would compete with the widget it introduces
+        slots = self.slots()
+        slots["foreground"] = "#eeeeee"
+        self.assertEqual(title("palette", slots),
+                         f"{BOLD}{fg('#eeeeee')}palette{RESET}")
+        self.assertEqual(title("examples", slots, "(live buffer: ...)"),
+                         f"{BOLD}{fg('#eeeeee')}examples{RESET} "
+                         f"{fg(self.GREY)}(live buffer: ...){RESET}")
+
+    def test_the_wordmark_is_one_letter_one_colour(self):
+        # the frame's only ornament, at the top where it is read once: six
+        # letters, the six bright hues, in palette order
+        slots = self.slots()
+        painted = [fg(slots[slot]) for slot in WORDMARK_SLOTS]
+        self.assertEqual(len(WORDMARK), len(WORDMARK_SLOTS))
+        self.assertEqual(wordmark(slots),
+                         "".join(f"{BOLD}{colour}{letter}{RESET}"
+                                 for letter, colour in zip(WORDMARK, painted)))
+        # and it is live: the wordmark follows the buffer like the rest
+        moved = dict(slots, **{WORDMARK_SLOTS[0]: "#ff00ff"})
+        self.assertIn(fg("#ff00ff"), wordmark(moved))
+        self.assertNotEqual(wordmark(slots), wordmark(moved))
+
+    def test_a_key_is_bright_and_its_label_is_teal(self):
+        # the key is what the finger has to find; the label explains it
+        hint = key_hint(self.slots(), "arrows", "move")
+        self.assertEqual(hint, f"{fg(self.AMBER)}arrows{RESET} "
+                               f"{fg(self.TEAL)}move{RESET}")
+
+    def test_the_chrome_slots_are_the_ones_the_sample_already_spends(self):
+        # §8 — no slot is spent twice over: the frame's three colours are
+        # read out of the sample's own vocabulary, so editing one repaints
+        # syntax and chrome on the same frame
+        spent = {slot for slot, _ in _sample()}
+        for slot in (CHROME_KEY, CHROME_LABEL, CHROME_MUTED):
+            self.assertIn(slot, spent, slot)
+
+    def test_chrome_is_a_painted_run_from_the_buffer(self):
+        slots = self.slots()
+        self.assertEqual(chrome("hi", CHROME_MUTED, slots),
+                         f"{fg(self.GREY)}hi{RESET}")
+        self.assertEqual(chrome("hi", CHROME_MUTED, slots, bold=True),
+                         f"{BOLD}{fg(self.GREY)}hi{RESET}")
+        # a slot the buffer has not got paints MISSING in place, never a
+        # colour of its own
+        self.assertEqual(chrome("hi", "palette-99", slots),
+                         f"{fg(huebox.MISSING)}hi{RESET}")
+
+    def test_a_fold_never_splits_a_key_from_its_label(self):
+        # the hint line is painted a token at a time; the fold lands
+        # between whole hints, so no row ends with a key looking orphaned
+        whole = {f"{key} {what}" for key, what in self.HINTS}
+        for cols in (120, 100, 80, 60, 40, 30):
+            with self.subTest(cols=cols):
+                rows = hint_line(self.slots(), self.HINTS, cols)
+                self.assertTrue(rows)
+                for row in rows:
+                    self.assertLessEqual(visible(row), cols)
+                    for part in _plain(row).split("  "):
+                        self.assertIn(part.strip(), whole)
+
+
 class Examples(unittest.TestCase):
     """The live examples strip (§14.1) and the live-everything property."""
 
@@ -257,6 +361,22 @@ class Examples(unittest.TestCase):
                       row)
         # the rest of the sentence stays on the theme background
         self.assertIn(f"{bg('#101014')}{fg('#e6e6ea')} brown fox", row)
+
+    def test_the_pair_names_are_the_themes_own_text_colour(self):
+        # §8.1 — the label names the row but takes no colour of its own: it
+        # is the theme's foreground, so the sentence it introduces stays the
+        # loudest thing on the row
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        slots.update({"background": "#101014", "foreground": "#e6e6ea",
+                      "selection-background": "#2a2a34",
+                      "selection-foreground": "#f0f0f8",
+                      "cursor-color": "#e6e6ea", "cursor-text": "#101014"})
+        text = fg(slots["foreground"])
+        for row, label in zip(self.rows(slots, 100), (
+                "background/foreground",
+                "selection-background/foreground",
+                "cursor-color/text")):
+            self.assertTrue(row.startswith("  " + text + label), row[:60])
 
     def test_the_row_fill_is_the_background_not_missing(self):
         # the fill is a resolved value: looking it up again as a slot name

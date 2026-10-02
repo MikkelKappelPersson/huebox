@@ -345,6 +345,40 @@ reads.
 below them the editor renders one centered `terminal too small — need WxH`
 line instead of a garbled frame. Settled in phase 5, when the picker landed.
 
+### 8.1 Frame typography — the frame says itself in the theme
+
+The frame's own text is drawn from the buffer like everything else (§14.1), so
+no colour in it comes from a terminal attribute the theme cannot change. Three
+roles, three slots, all of them slots the code sample already spends, so the
+bright half is read twice in one frame — once as syntax, once as chrome:
+
+| role | slot | carries |
+| --- | --- | --- |
+| key | `palette-11` | `arrows`, `q/w`, `^S`, `Esc` — the half the reader is hunting for, so it wears the brightest thing in the line |
+| label | `palette-14` | the label beside a key: `arrows` **move** |
+| muted | `palette-8` | the furniture: a path, a hex, hue/sat/val, a counter, a parenthetical, the `0-7 base` legend |
+
+**A header is not a role.** `palette`, `interface`, `selected`, `examples`,
+`live diff`, `live code` and `themes` wear the theme's own `foreground` in
+bold, and no palette slot moves them: `foreground` is the one colour the user
+chose for text, and a header that took a colour of its own would compete with
+the widget it introduces. The status line is bold and nothing else is, because
+it is the one sentence in the frame that must be read first.
+
+**The wordmark is the one ornament.** `huebox`, six letters, the six bright
+hues in palette order (`palette-9` … `palette-14`), bold, at the top where it
+is read once per frame — the header line and the static preview alike. It is
+the only rainbow huebox draws, and it is live like everything else: editing
+`palette-11` recolours the *u*.
+
+**Hints are `(key, what)` pairs, not strings.** The hint line paints a key and
+its label separately, so `pack` folds between *whole hints* and never between a
+key and the label it belongs to — which is why `pack` measures display columns
+with the escapes left out (`visible()`), the same width `clip` cuts at. Folding
+on raw string length would count every colour as columns and cut the row short
+of the edge. Pairing changes no width: the painted hint is the same text as the
+plain string it replaced, so no frame grows or loses a row to it.
+
 > Planned: the example area becomes a full live gallery (§14) and the layout
 > follows terminal resizes (§15).
 
@@ -914,7 +948,9 @@ is no small-size story.
    and is handed to the arrow keys along with the draw (§4.3.1), so the
    selection and the layout are one calculation, not two that can drift.
 3. `pack()` / `clip()` remain the only width-sensitive primitives; every new
-   widget (examples strip, theme overlay) must go through them.
+   widget (examples strip, theme overlay) must go through them. Both measure
+   display columns with SGR escapes left out (`visible()`, §8.1), so a widget
+   may hand `pack` painted items and the fold still lands between them.
 4. Below a minimum size, render a centered
    `terminal too small — need WxH` screen instead of garbling.
    **`MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in `tui.py`

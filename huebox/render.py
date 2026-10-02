@@ -9,6 +9,7 @@ no colour survives a frame.
 from __future__ import annotations
 
 import unicodedata
+from itertools import cycle
 
 from pygments import lex
 from pygments.lexers import get_lexer_by_name
@@ -18,7 +19,9 @@ from .color import MISSING, NAMED, hex_to_rgb, readable_fg
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
-DIM = "\033[2m"
+ESCAPE_END = "mABCDEFGHJKSTfmnsulh"   # SGR and friends: the CSI final byte
+# No DIM: §8.1 says the frame's own text is drawn from the buffer, so no
+# terminal attribute a theme cannot change appears in it.
 
 
 def fg(value: str) -> str:
@@ -40,7 +43,7 @@ def clip(text: str, cols: int) -> str:
         ch = text[i]
         if ch == "\033":
             j = i + 1
-            while j < n and text[j] not in "mABCDEFGHJKSTfmnsulh":
+            while j < n and text[j] not in ESCAPE_END:
                 j += 1
             out.append(text[i:j + 1])
             i = j + 1
@@ -54,13 +57,41 @@ def clip(text: str, cols: int) -> str:
     return "".join(out) + RESET if seen >= cols else "".join(out)
 
 
+def visible(text: str) -> int:
+    """The display columns `text` occupies — the width `clip` cuts at.
+
+    An SGR escape costs nothing and a wide glyph costs two, exactly as in
+    `clip`: `pack` folds with it and `clip` truncates with it, so a line
+    measured by one and cut by the other cannot disagree.
+    """
+    seen, i, n = 0, 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\033":
+            j = i + 1
+            while j < n and text[j] not in ESCAPE_END:
+                j += 1
+            i = j + 1
+            continue
+        if not unicodedata.combining(ch):
+            seen += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        i += 1
+    return seen
+
+
 def pack(items, cols: int, sep: str = "   ") -> list[str]:
-    """Greedily pack short items into lines that fit `cols`."""
+    """Greedily pack short items into lines that fit `cols`.
+
+    Widths are display columns with the escapes left out (`visible`), so a
+    caller may hand `pack` *painted* items — the frame's key hints are —
+    and the fold still lands between items. Folding on raw string length
+    would count every colour as columns and cut the line short of the edge.
+    """
     lines: list[str] = []
     current = ""
     for item in items:
         candidate = item if not current else current + sep + item
-        if len(candidate) > cols and current:
+        if visible(candidate) > cols and current:
             lines.append(current)
             current = item
         else:
@@ -68,6 +99,81 @@ def pack(items, cols: int, sep: str = "   ") -> list[str]:
     if current:
         lines.append(current)
     return lines
+
+
+# --------------------------------------------------------------------------
+# frame typography (§8.1)
+# --------------------------------------------------------------------------
+
+# The frame's own vocabulary, read out of the live buffer like everything
+# else: a key is what you press, a label is what it does, and muted text is
+# the furniture around them — a path, a hex, a count. Not one of the three
+# is a slot the code sample does not already spend (§8), so the bright half
+# is read twice in a frame: once as syntax, once as chrome.
+CHROME_KEY = "palette-11"      # `arrows`, `Ctrl+S`: the half you look for
+CHROME_LABEL = "palette-14"    # the label beside a key: `arrows` **move**
+CHROME_MUTED = "palette-8"     # a path, a hex, hue/sat/val, a counter
+
+# Headers are the exception: a header wears the theme's own `foreground`, in
+# bold, and nothing else. A header that took a palette colour would compete
+# with the widget it introduces, and `foreground` is the one colour the user
+# chose for text. The one place huebox decorates is the wordmark: one
+# letter, one colour, the six bright hues in order.
+WORDMARK = "huebox"
+WORDMARK_SLOTS = ("palette-9", "palette-10", "palette-11", "palette-12",
+                  "palette-13", "palette-14")
+
+
+def chrome(text: str, slot: str, slots, bold: bool = False) -> str:
+    """One run of frame text, painted from a slot in the live buffer.
+
+    Everything the frame says about itself comes through here, so a chrome
+    slot the buffer moves repaints the chrome on the same frame as
+    everything else (§14.1) — and nothing in the frame wears a terminal
+    attribute the theme cannot change.
+    """
+    return f"{BOLD if bold else ''}{fg(slots.get(slot, MISSING))}{text}{RESET}"
+
+
+def wordmark(slots, text: str = WORDMARK) -> str:
+    """The `huebox` wordmark: one letter in one colour, in palette order.
+
+    The frame's only ornament, and deliberately at the top where it is read
+    once: six letters, the six bright hues, cycled so a longer word still
+    colours. Bold, because it is the loudest thing huebox draws — the theme
+    it is drawing is somebody else's.
+    """
+    painted = (chrome(letter, slot, slots, bold=True)
+               for letter, slot in zip(text, cycle(WORDMARK_SLOTS)))
+    return "".join(painted)
+
+
+def title(word: str, slots, note: str = "") -> str:
+    """A frame header: the word in the theme's foreground, its aside muted.
+
+    `note` is the parenthetical beside it — `(live buffer: …)`, `(git-style:
+    …)` — which is commentary, so it recedes.
+    """
+    head = chrome(word, "foreground", slots, bold=True)
+    return f"{head} {chrome(note, CHROME_MUTED, slots)}" if note else head
+
+
+def key_hint(slots, key: str, what: str) -> str:
+    """`arrows move` for a hint line: the key bright, its label beside it.
+
+    The key is the half the reader is hunting for — it is what the finger
+    has to find — so it wears the brightest thing in the line and the label
+    reads as its explanation. `pack` folds between whole hints, never
+    between a key and the label it belongs to.
+    """
+    return (f"{chrome(key, CHROME_KEY, slots)} "
+            f"{chrome(what, CHROME_LABEL, slots)}")
+
+
+def hint_line(slots, hints, cols: int, sep: str = "  ") -> list[str]:
+    """Hint rows for `hints` as `(key, what)` pairs, folded to `cols`."""
+    return pack([key_hint(slots, key, what) for key, what in hints],
+                cols, sep=sep)
 
 
 # --------------------------------------------------------------------------
@@ -277,8 +383,13 @@ def example_lines(slots, cols=None):
     out = []
     for name, pair, segments in rows:
         label = pair_label(*pair) if pairs else name
-        head = f"  {label:<{label_width}} "
-        room = None if cols is None else cols - len(head)
+        # the pair names are the row's own subject, in the theme's text
+        # colour: no label colour of their own, so the sentence they
+        # introduce stays the loudest thing on the row (§8.1). The padding
+        # rides inside the painted run and the row's width is measured with
+        # `visible`, escapes and all.
+        head = "  " + chrome(f"{label:<{label_width}} ", "foreground", slots)
+        room = None if cols is None else cols - visible(head)
         plain = "".join(chunk for chunk, _, _ in segments)
         if room is not None:
             # pack keeps whole words: fold instead of cutting mid-word
@@ -351,8 +462,10 @@ def render_preview(fmt, path, slots, cols=None, rows=None) -> str:
     # cli always passes the live width; 96 stays the piped default.
     cols = cols or 96
     lines = []
-    lines.append(f"{BOLD}huebox{RESET}  {BOLD}{fmt}{RESET}"
-                 f"{'  ' + DIM + path + RESET if path and len(path) < cols else ''}")
+    subject = wordmark(slots) + "  " + title(fmt, slots)
+    if path and len(path) < cols:
+        subject += "  " + chrome(path, CHROME_MUTED, slots)
+    lines.append(subject)
     lines.append("")
 
     cell_full, cell_min = 13, 6
@@ -370,7 +483,7 @@ def render_preview(fmt, path, slots, cols=None, rows=None) -> str:
             cells.append(f"{bg(value)}{fg(readable_fg(value))}"
                          f"{label.ljust(cellw)}{RESET}")
         lines.append((indent + "".join(cells)).rstrip())
-    lines.append(f"{DIM}0-7 base   8-15 bright{RESET}")
+    lines.append(chrome("0-7 base   8-15 bright", CHROME_MUTED, slots))
     lines.append("")
 
     pad = max(8, min(21, cols - 13))
@@ -384,6 +497,7 @@ def render_preview(fmt, path, slots, cols=None, rows=None) -> str:
                          f" {key[:pad]:<{pad}} {value} {RESET}")
         lines.append((indent + "  ".join(cells)).rstrip())
     lines.append("")
-    lines.append(f"  {DIM}edit interactively:  huebox edit{RESET}")
+    lines.append("  " + chrome("edit interactively:  huebox edit",
+                               CHROME_MUTED, slots))
     lines.append("")
     return "\n".join(clip(line, cols) for line in lines)

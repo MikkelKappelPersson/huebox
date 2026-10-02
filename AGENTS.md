@@ -22,7 +22,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty` (TOML); registry in `__init__` | §6 |
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads and the pointer writer, `config_holds_colours`, `resolve()` | §7 |
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
-| `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip, live diff | §8, §14 |
+| `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
@@ -85,6 +85,12 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   layout derives from `term_size()` every frame (§15). Below
   `MIN_COLS`×`MIN_ROWS` (in `tui.py`) the editor draws the too-small hint and
   nothing else.
+- **The frame's own text is chrome, not a terminal attribute.** Every string
+  the frame says about itself — a key, a label, a header, a path — is painted
+  from the buffer through `render.chrome()` / `title()` / `wordmark()` (§8.1),
+  never with `DIM`, so the live-everything property (§14.1) covers the frame's
+  wording too. Headers wear `foreground`; only the wordmark and the hint keys
+  take a palette slot.
 - **Tests stay green:** `python3 -m unittest discover -s tests`. Mirror the
   module under test (`tests/test_<module>.py`); new behaviour needs a case,
   a new format needs round-trip plus byte-identical no-op cases. Run it with

@@ -20,8 +20,9 @@ from typing import NamedTuple
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
-from .render import (BOLD, DIM, RESET, bg, clip, diff_lines, example_lines,
-                     fg, pack, sample_lines)
+from .render import (BOLD, CHROME_MUTED, RESET, bg, chrome, clip,
+                     diff_lines, example_lines, fg, hint_line, sample_lines,
+                     title, wordmark)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
                   term_size)
 
@@ -43,8 +44,11 @@ ENTER_KEYS = ("\r", "\n")
 # it shares the editor's minimum size and header width instead of adding a
 # box of its own. `●` is the spec's own dirty mark, not an ASCII stand-in.
 DIRTY_MARK = "●"
-THEME_HINTS = ["arrows move", "Enter use", "n new from buffer",
-               "N save as new", "t / Esc back"]
+# the picker footer as `(key, what)` pairs — the frame paints the key and
+# its label separately (§8.1), and `pack` never folds between a key and
+# the label it belongs to
+THEME_HINTS = [("arrows", "move"), ("Enter", "use"), ("n", "new from buffer"),
+               ("N", "save as new"), ("t / Esc", "back")]
 
 # §15 — what a short terminal spends, in order. The frame sheds its
 # decoration (the palette legend, then the blank separators nearest the
@@ -52,7 +56,7 @@ THEME_HINTS = ["arrows move", "Enter use", "n new from buffer",
 # is left: the strip gives up rows first, then the diff, and the sample's
 # tail goes before either, because the sample is the widget the editor
 # exists to show (§9).
-PALETTE_LEGEND = f"  {DIM}0-7 base   8-15 bright{RESET}"
+PALETTE_LEGEND = "  0-7 base   8-15 bright"
 EXAMPLES_ROWS = 4                    # the strip whole: header + three rows
 EXAMPLES_FLOOR = 2                   # header + one row; below this it goes
 DIFF_ROWS = 6                        # the diff whole: header + hunk + two pairs
@@ -209,18 +213,21 @@ def session_path(st) -> str:
     return st.path if st.theme is not None else ""
 
 
-def _theme_row(name: str, selected: bool, current: bool) -> str:
+def _theme_row(name: str, selected: bool, current: bool, slots: dict) -> str:
     """One picker row: `> name`, `*` on the library's current theme.
 
     Both marks share the two columns in front of the name, so the names
-    line up and `>* name` reads as "selected, and the current one".
+    line up and `>* name` reads as "selected, and the current one". The
+    marks are chrome (§8.1): the `>` in the label colour because it is the
+    row you are on, the `*` muted because it is a fact about the library.
     """
-    mark = ">" if selected else ""
-    flag = "*" if current else ""
-    return f"  {BOLD if selected else ''}{mark}{flag} {name}{RESET}"
+    mark = chrome(">", "foreground", slots, bold=True) if selected else ""
+    flag = chrome("*", CHROME_MUTED, slots) if current else ""
+    painted = chrome(name, "foreground", slots, bold=selected)
+    return f"  {mark}{flag} {painted}"
 
 
-def theme_lines(names, index, current, cols, rows, status=""):
+def theme_lines(names, index, current, cols, rows, status="", slots=None):
     """The theme picker as a frame of lines (§13.7).
 
     Pure, like the editor frame: rows are the library's names, the session's
@@ -233,14 +240,16 @@ def theme_lines(names, index, current, cols, rows, status=""):
     never wraps. The status line is the last row and is never the row that
     gets cut, exactly as in the editor frame.
     """
-    out = [f"  {BOLD}huebox{RESET}  {BOLD}themes{RESET}", ""]
-    footer = [f"  {DIM}{line}{RESET}"
-              for line in pack(THEME_HINTS, cols - 2, sep="  ")]
+    slots = slots or {}
+    out = ["  " + wordmark(slots) + "  " + title("themes", slots), ""]
+    footer = ["  " + line
+              for line in hint_line(slots, THEME_HINTS, cols - 2)]
     if status:
         footer.append(f"  {BOLD}{status}{RESET}")
 
     if not names:
-        out.append(f"  {DIM}no themes yet - N makes one from this buffer{RESET}")
+        out.append("  " + chrome("no themes yet - N makes one from"
+                                 " this buffer", CHROME_MUTED, slots))
     else:
         index = max(0, min(index, len(names) - 1))
         # two rows of the budget: the "x-y of n" counter and the blank
@@ -249,10 +258,11 @@ def theme_lines(names, index, current, cols, rows, status=""):
         start = max(0, min(index - room + 1, len(names) - room))
         for row in range(start, min(len(names), start + room)):
             name = names[row]
-            out.append(_theme_row(name, row == index, name == current))
+            out.append(_theme_row(name, row == index, name == current, slots))
         if start or len(names) > start + room:
-            out.append(f"  {DIM}{start + 1}-{min(len(names), start + room)}"
-                       f" of {len(names)}{RESET}")
+            out.append("  " + chrome(f"{start + 1}-"
+                                     f"{min(len(names), start + room)} "
+                                     f"of {len(names)}", CHROME_MUTED, slots))
     out.append("")
     out.extend(footer)
     if len(out) > rows:                    # belt and braces: keep the footer
@@ -278,15 +288,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # what to do when there is no room for either.
         names, index, current = overlay
         sys.stdout.write("\r\n".join(
-            theme_lines(names, index, current, cols, rows, status)) + "\r\n")
+            theme_lines(names, index, current, cols, rows, status, slots))
+            + "\r\n")
         sys.stdout.flush()
         return
     body = []
 
     label = fmt if head is None else head
-    first = f"  {BOLD}huebox{RESET}  {BOLD}{label}{RESET}"
+    first = "  " + wordmark(slots) + "  " + chrome(label, "foreground", slots,
+                                                    bold=True)
     if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
-        first += f"  {DIM}{path}{RESET}"
+        first += "  " + chrome(path, CHROME_MUTED, slots)
     body.append(first)
     body.append("")
 
@@ -300,16 +312,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         return (f"{bg(value)}{fg(readable_fg(value))}"
                 f"{BOLD if selected else ''}{label.ljust(cellw)}{RESET}")
 
-    body.append(f"  {BOLD}palette{RESET}")
+    body.append("  " + title("palette", slots))
     for start in range(0, len(PALETTE), per_row):
         body.append(("  " + "".join(
             swatch(i, sel == i) for i in range(start, start + per_row)
             if i < len(PALETTE))).rstrip())
-    body.append(PALETTE_LEGEND)
+    legend = chrome(PALETTE_LEGEND, CHROME_MUTED, slots)
+    body.append(legend)
     body.append("")
 
     per = grid.named_cols
-    body.append(f"  {BOLD}interface{RESET}")
+    body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
         cells = []
         for key in NAMED[start:start + per]:
@@ -325,18 +338,28 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     h, s, v = rgb_to_hsv(hex_to_rgb(value))
-    body.append(f"  {BOLD}selected{RESET}  {key}  {value}   {DIM}"
-                f"hue {h * 360:5.1f}  sat {s * 100:4.1f}%  val {v * 100:4.1f}%{RESET}")
+    # the slot's own name and hex are the point of the line, the three
+    # numbers are the reading of it: the theme's text colour for both, and
+    # muted for the hex and the hsv beside it (§8.1)
+    body.append("  " + title("selected", slots)
+                + "  " + chrome(key, "foreground", slots)
+                + "  " + chrome(value, CHROME_MUTED, slots) + "   "
+                + chrome(f"hue {h * 360:5.1f}  sat {s * 100:4.1f}%"
+                         f"  val {v * 100:4.1f}%", CHROME_MUTED, slots))
     body.append(f"    {fg(value)}AaBbCc 0123 {RESET}")
     body.append("")
 
-    tail = [f"  {DIM}{line}{RESET}" for line in pack(
-        ["arrows move", "q/w hue", "a/s sat", "z/x light", f"f x{mult}",
-         "i hex", "^S save", f"u undo({len(undo)})", "r revert", "t themes",
-         "N as new", "Esc quit"],
+    # §8.1 — the hints are `(key, what)` pairs: the key is the bright half,
+    # its label the quiet one. Same widths as the plain strings they
+    # replaced, so this row count is unchanged at every terminal size.
+    tail = ["  " + line for line in hint_line(slots, [
+        ("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"), ("z/x", "light"),
+        ("f", f"x{mult}"), ("i", "hex"), ("^S", "save"),
+        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"),
+        ("N", "as new"), ("Esc", "quit")],
         # two spaces, not three: the picker added two keys to this line and
         # one more row here would come out of the examples strip's budget
-        cols - 2, sep="  ")]
+        cols - 2)]
     if status:
         tail.append(f"  {BOLD}{status}{RESET}")
 
@@ -345,8 +368,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # before it spends a widget.
     spare = rows - len(body) - len(tail)
     while spare < WIDGET_BUDGET:
-        decoration = ([i for i, line in enumerate(body)
-                       if line == PALETTE_LEGEND]
+        decoration = ([i for i, line in enumerate(body) if line == legend]
                       or [i for i, line in enumerate(body) if not line])
         if not decoration:
             break                   # nothing left to spend; the widgets go
@@ -363,8 +385,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
     if examples >= EXAMPLES_FLOOR:
-        extra.append(f"  {BOLD}examples{RESET} "
-                     f"{DIM}(live buffer: background / selection / cursor){RESET}")
+        extra.append("  " + title("examples", slots,
+                             "(live buffer: background / selection / cursor)"))
         extra.extend(example_lines(slots, cols - 2)[:examples - 1])
     # §15 — the diff is the last widget to get a row and the first to give
     # one back: it grows out of what the sample did not need, so where the
@@ -396,14 +418,14 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             if rows_left >= DIFF_FLOOR - 1:
                 if lead:
                     extra.append("")
-                diff = [f"  {BOLD}live diff{RESET} "
-                        f"{DIM}(git-style: + added, - removed){RESET}"]
+                diff = ["  " + title("live diff", slots,
+                           "(git-style: + added, - removed)")]
                 diff.extend(diff_lines(slots, cols - 2)[:rows_left])
                 if spare_rows - lead - rows_left - 1 >= 1:   # a row to spare
                     diff.append("")   # the separator is a row of its own
             extra.extend(diff)      # the hunk draws above the sample
-            extra.append(f"  {BOLD}live code{RESET} "
-                         f"{DIM}(truecolor, no reload needed){RESET}")
+            extra.append("  " + title("live code", slots,
+                                  "(truecolor, no reload needed)"))
             extra.extend("    " + line.replace(RESET, RESET + "    ")
                          for line in code[:take])
             if room_left() - take >= 2:  # rows to spare: the separator
