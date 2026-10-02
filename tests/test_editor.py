@@ -948,7 +948,7 @@ class PickerKeys(PickerCase):
         self.assertEqual(st.overlay_index, 2)
         self.assertEqual(st.sel, 0)                # slot selection is untouched
 
-    def test_enter_opens_the_theme_and_resets_the_session(self):
+    def test_enter_opens_the_theme_saves_it_and_resets_the_session(self):
         st = self.picker_state()
         editor.apply_key("down", st)               # a selection to lose
         editor.apply_key("w", st)                  # and an edit to lose
@@ -965,10 +965,12 @@ class PickerKeys(PickerCase):
         self.assertEqual(st.sel, 0)
         self.assertFalse(st.armed)                 # P2 review: no inherited arm
         self.assertIsNone(st.overlay)
-        self.assertEqual(st.status, "opened frost")
+        # the switch is the save: the theme is what the terminal gets
+        self.assertEqual(self.writes,
+                         [("frost", "/themes/frost.toml", st.slots)])
+        self.assertEqual(st.status, "saved frost → ghostty")
         self.assertEqual(self.library.calls,
                          [("load", "frost")])
-        self.assertEqual(self.writes, [])          # opening writes nothing
 
     def test_a_dirty_switch_is_blocked_with_the_exact_status(self):
         st = self.picker_state()
@@ -1219,7 +1221,7 @@ class OverlayFrame(unittest.TestCase):
         self.assertIn("* ember", body)             # the library's current
         self.assertIn("ash", body)
         self.assertIn("> ash", body)               # and the selection
-        self.assertIn("Enter open", body)
+        self.assertIn("Enter use", body)
 
     def test_every_line_holds_the_width_and_the_frame_the_height(self):
         for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):

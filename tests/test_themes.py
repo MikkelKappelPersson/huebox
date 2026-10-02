@@ -10,6 +10,7 @@ subprocess sees a temp home in the detection order.
 
 import io
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -94,7 +95,13 @@ class LibraryHome(unittest.TestCase):
         return self.write(path, text)
 
     def run_cli(self, *args):
-        """`python -m huebox` with a home that has no terminal in it."""
+        """`python -m huebox` with a home that has no terminal in it.
+
+        `--no-reload` is not optional here: the reload reaches for the
+        *machine's* ghostty process, and a test has no business reloading
+        the terminal it is running inside. The reload is tested against a
+        mocked `/proc` instead (`TestReload`).
+        """
         env = {key: value for key, value in os.environ.items()
            if not any(mark in key for mark in
                       ("GHOSTTY", "KITTY", "ALACRITTY", "WEZTERM",
@@ -102,7 +109,8 @@ class LibraryHome(unittest.TestCase):
         env["TERM_PROGRAM"] = ""           # probes must see no terminal
         env["XDG_CONFIG_HOME"] = self.root
         env["HOME"] = self.root
-        return subprocess.run([sys.executable, "-m", "huebox", *args],
+        return subprocess.run([sys.executable, "-m", "huebox", *args,
+                               "--no-reload"],
                               capture_output=True, text=True, cwd=REPO,
                               env=env)
 
@@ -586,12 +594,13 @@ class Push(LibraryHome):
 
 
 class GhosttyNative(LibraryHome):
-    """§13.6 phase 2 — a Ghostty theme file of ours plus one `theme =` line.
+    """§13.6 — a Ghostty theme file of ours plus one `theme =` line.
 
-    The flag is opt-in (decision 22), so everything the phase-1 path
-    guarantees has to keep holding here too: a theme file only in
-    Ghostty's own themes dir, a config that moves exactly one line, and
-    not one word of the buffer's spelling invented.
+    The export is the default where the config is organised by theme
+    (decision 26), so everything the in-place path guarantees has to keep
+    holding here too: a theme file only in Ghostty's own themes dir, a
+    config that moves exactly one line, and not one word of the buffer's
+    spelling invented.
     """
 
     def setUp(self):
@@ -720,12 +729,17 @@ class GhosttyNative(LibraryHome):
         self.assertIn('background = "#010203"', self.read(alacritty))
         self.assertFalse(os.path.exists(self.native))
 
-    def test_a_native_push_needs_a_theme_name(self):
-        with self.assertRaises(themes.ThemeError) as caught:
-            themes.push(FULL, to="ghostty", path=self.config,
-                        ghostty_native=True)
-        self.assertIn("needs a theme name", str(caught.exception))
-        self.assertEqual(self.read(self.config), ghostty_text())
+    def test_a_push_with_no_theme_name_edits_the_config_in_place(self):
+        # §13.6: a name is what an export is *called*, so a push without
+        # one (a direct session) writes the colours where they live
+        result = themes.push(dict(FULL, background="#010203"),
+                             to="ghostty", path=self.config,
+                             ghostty_native=True)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.config),))
+        self.assertIn("background = #010203", self.read(self.config))
+        self.assertFalse(os.path.exists(self.native))
+        self.assertNotIn("theme =", self.read(self.config))
 
     def test_a_config_with_no_colours_is_still_not_a_target(self):
         blank = self.write(os.path.join(self.root, "blank.ghostty"),
@@ -745,6 +759,194 @@ class GhosttyNative(LibraryHome):
         self.assertEqual(result, themes.PushResult((), (), False))
         self.assertEqual(self.read(self.config), before)
         self.assertFalse(os.path.exists(self.native))
+
+
+class ThemeOrganisedGhostty(LibraryHome):
+    """A ghostty config that points at a theme file — the common shape.
+
+    §13.6 as it now stands: the config is organised by theme, so a save is
+    exported under the theme's own name and the pointer is repointed. The
+    file the pointer used to name is left exactly as it was, which is the
+    whole point — a theme's colours never land in another theme's file.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.themedir = os.path.join(self.root, "ghostty", "themes")
+        os.makedirs(self.themedir, exist_ok=True)
+        self.old = self.write(os.path.join(self.themedir, "Nightspice"),
+                              ghostty_text())
+        self.config = self.write(
+            os.path.join(self.root, "ghostty", "config.ghostty"),
+            "# mine\nfont-size = 12\ntheme = Nightspice\n")
+        self.old_before = self.read(self.old)
+
+    def resolve_here(self):
+        """This test's config home, candidates included.
+
+        The candidate table is built at import time, so an in-process test
+        points it at the temporary home by hand; the colours a real run
+        would find are the same ones this finds.
+        """
+        return mock.patch.dict(themes.FORMATS["ghostty"],
+                               {"defaults": [self.config]})
+
+    def push(self, slots, **kwargs):
+        kwargs.setdefault("to", "ghostty")
+        with self.resolve_here():
+            return themes.push(slots, **kwargs)
+
+    def test_a_save_exports_its_own_theme_file_and_repoints(self):
+        edited = dict(FULL, background="#010203")
+        result = self.push(edited, name="test")
+        self.assertFalse(result.failed)
+        exported = os.path.join(self.themedir, "test")
+        self.assertEqual(result.pushed, (("ghostty", exported),))
+        self.assertEqual(themes.read_terminal("ghostty", exported), edited)
+        self.assertIn("theme = test", self.read(self.config))
+        # the file the pointer used to name is untouched, byte for byte
+        self.assertEqual(self.read(self.old), self.old_before)
+        self.assertIn(f"ghostty: exported {exported}", "\n".join(result.lines))
+
+    def test_a_save_of_the_theme_the_config_already_uses_stays_put(self):
+        # the case that used to work by accident: same name, so the export
+        # lands on the file the config already points at
+        edited = dict(FULL, background="#010203")
+        result = self.push(edited, name="Nightspice")
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.old),))
+        self.assertEqual(themes.read_terminal("ghostty", self.old), edited)
+        self.assertIn("theme = Nightspice unchanged",
+                      "\n".join(result.lines))
+
+    def test_in_place_is_refused_when_the_file_is_another_themes(self):
+        # the invariant, not a default: even asked to, huebox will not
+        # write theme `test` into the file that belongs to `Nightspice`
+        edited = dict(FULL, background="#010203")
+        result = self.push(edited, name="test", ghostty_in_place=True)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertEqual(self.read(self.old), self.old_before)
+        report = "\n".join(result.lines)
+        self.assertIn("refusing to write theme 'test'", report)
+        self.assertIn("drop --ghostty-in-place", report)
+
+    def test_in_place_is_allowed_when_the_push_changes_nothing(self):
+        # nothing would be written, so nothing can be crossed: the report
+        # is an ordinary push and the file keeps its mtime (§6.2 rule 4)
+        stamp = os.path.getmtime(self.old)
+        result = self.push(FULL, name="test", ghostty_in_place=True)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.old),))
+        self.assertEqual(os.path.getmtime(self.old), stamp)
+
+    def test_in_place_is_allowed_for_a_config_with_inline_colours(self):
+        # no theme name in play at all, so the colours are edited where
+        # they live and the config's layout is none of huebox's business
+        inline = self.write(os.path.join(self.root, "inline.ghostty"),
+                            ghostty_text())
+        with self.resolve_here():
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty", path=inline, name="test")
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", inline),))
+        self.assertIn("background = #010203", self.read(inline))
+        self.assertNotIn("theme =", self.read(inline))
+
+    def test_in_place_never_touches_the_pointer(self):
+        result = self.push(dict(FULL, background="#010203"),
+                           name="Nightspice", ghostty_in_place=True)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.old),))
+        self.assertIn("theme = Nightspice", self.read(self.config))
+
+    def test_the_export_says_when_inline_colours_are_shadowed(self):
+        inline = self.write(os.path.join(self.root, "inline.ghostty"),
+                            ghostty_text())
+        with self.resolve_here():
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty", path=inline, name="test",
+                                 ghostty_native=True)
+        self.assertFalse(result.failed)
+        self.assertIn("are now shadowed by", "\n".join(result.lines))
+        self.assertIn(f"background = {FULL['background']}", self.read(inline))
+        self.assertIn("theme = test", self.read(inline))
+
+    def test_a_dangling_pointer_is_repaired_by_the_save(self):
+        # §7.3 with the one exception that matters: a `theme =` naming a
+        # file that is not there is a broken chain, not a colourless
+        # config - Ghostty calls it a configuration error on reload, and
+        # the export is the only thing that puts the colours back
+        os.unlink(self.old)
+        result = self.push(dict(FULL, background="#010203"), name="Nightspice")
+        self.assertFalse(result.failed)
+        self.assertEqual(themes.read_terminal("ghostty", self.old),
+                         dict(FULL, background="#010203"))
+        self.assertIn("theme = Nightspice", self.read(self.config))
+        self.assertIn("which was not on disk", "\n".join(result.lines))
+
+    def test_a_dangling_pointer_saves_any_theme_not_just_the_named_one(self):
+        os.unlink(self.old)
+        result = self.push(dict(FULL, background="#010203"), name="test")
+        self.assertFalse(result.failed)
+        exported = os.path.join(self.themedir, "test")
+        self.assertEqual(result.pushed, (("ghostty", exported),))
+        self.assertIn("theme = test", self.read(self.config))
+
+    def test_in_place_cannot_repair_a_dangling_pointer(self):
+        # the colours have nowhere to live, so there is nothing for the
+        # in-place write to write - and the report names the missing file
+        # and the way out, instead of the bare "no colours found"
+        os.unlink(self.old)
+        result = self.push(dict(FULL, background="#010203"), name="test",
+                           ghostty_in_place=True)
+        self.assertTrue(result.failed)
+        self.assertFalse(os.path.exists(self.old))
+        report = "\n".join(result.lines)
+        self.assertIn("points at theme 'Nightspice', which is not on disk",
+                      report)
+        self.assertIn("drop --ghostty-in-place", report)
+
+    def test_a_direct_session_says_what_a_dangling_pointer_needs(self):
+        # no theme name to export under, so the save cannot repair it -
+        # the note says what would
+        os.unlink(self.old)
+        result = self.push(dict(FULL, background="#010203"))
+        self.assertTrue(result.failed)
+        self.assertIn("save the buffer as a theme (N)",
+                      "\n".join(result.lines))
+        self.assertFalse(os.path.exists(self.old))
+
+    def test_another_format_does_not_reach_for_ghostty(self):
+        # the repair is ghostty's, and only for a ghostty target: a kitty
+        # that is not there is still a kitty that is not there
+        blank = self.write(os.path.join(self.root, "kitty.conf"),
+                           "font_family  monospace\n")
+        result = self.push(dict(FULL, background="#010203"), to="kitty",
+                           path=blank, name="test")
+        self.assertTrue(result.failed)
+        self.assertIn("no colours in", "\n".join(result.lines))
+        self.assertIn("theme = Nightspice", self.read(self.config))
+
+    def test_a_dangling_pointer_is_repaired_end_to_end(self):
+        # the reported state, through the CLI and no flags at all: the
+        # config points at a theme that is not there, and `use` puts the
+        # colours back in a file of the theme's own name
+        threedir = os.path.join(self.root, "ghostty", "themes")
+        os.makedirs(threedir, exist_ok=True)
+        config = self.xdg("ghostty/config.ghostty",
+                          "# mine\nfont-size = 12\ntheme = test\n")
+        self.assertFalse(os.path.exists(os.path.join(threedir, "test")))
+        themes.create("Nightspice", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "Nightspice")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        exported = os.path.join(threedir, "Nightspice")
+        self.assertIn(f"ghostty: exported {exported}", out.stderr)
+        self.assertIn("which was not on disk", out.stderr)
+        self.assertIn("theme = Nightspice", self.read(config))
+        self.assertNotIn("theme = test", self.read(config))
+        self.assertEqual(themes.read_terminal("ghostty", exported),
+                         dict(FULL, background="#010203"))
 
 
 class FakeTTY:
@@ -957,6 +1159,31 @@ class GhosttyNativeOnSave(_PushSession):
         self.assertIn("saved ember (truth only)", out)
         self.assertIn("--no-push", err)
 
+    def test_ctrl_s_exports_by_default_when_the_config_is_on_a_theme(self):
+        # the reported bug, in the editor: a config on `frost`, a session
+        # editing `ember`, and no flag anywhere - the save must not put
+        # ember's colours in frost's file
+        threedir = os.path.join(self.root, "ghostty", "themes")
+        os.makedirs(threedir, exist_ok=True)
+        frost = self.write(os.path.join(threedir, "frost"), ghostty_text())
+        config = self.write(os.path.join(self.root, "pointed.ghostty"),
+                            "# mine\ntheme = frost\n")
+        before = self.read(frost)
+        spec = cli.PushSpec(("ghostty",), None, config, False)
+        with mock.patch.dict(themes.FORMATS["ghostty"],
+                             {"defaults": [config]}):
+            status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+                                            spec)
+        self.assertEqual(status, 0)
+        saved = themes.load("ember")          # truth first, still
+        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        exported = os.path.join(threedir, "ember")
+        self.assertEqual(themes.read_terminal("ghostty", exported), saved)
+        self.assertEqual(self.read(frost), before)      # not one byte moved
+        self.assertIn("theme = ember", self.read(config))
+        self.assertIn(f"huebox: ghostty: exported {exported}", err)
+        self.assertIn("saved ember → ghostty", out)
+
 
 class Picker(LibraryHome):
     """The picker and save-as-new against a real library (§13.7)."""
@@ -1023,6 +1250,18 @@ class Picker(LibraryHome):
         overlay = next(d["overlay"] for d in drawn if d["overlay"])
         self.assertEqual(overlay, (["ember", "frost"], 0, "ember"))
         self.assertEqual(overlay[0][overlay[1]], "ember")
+
+    def test_opening_a_theme_pushes_it_without_waiting_for_a_save(self):
+        # §13.7: choosing a theme is choosing it for the terminal too, so
+        # the switch runs the save path and the terminal is already on it
+        status, drawn, out, err = self.session(["t", "down", "\r", "esc"])
+        self.assertEqual(status, 0)
+        self.assertIn("saved frost → ghostty", out)
+        self.assertIn("huebox: ghostty: pushed to", err)
+        # frost's colours, not the ones the session started on
+        self.assertIn(f"palette = 0={themes.load('frost')['palette-0']}",
+                      self.read(self.config))
+        self.assertNotIn("●", drawn[-1]["head"])          # nothing to save
 
     def test_opening_another_theme_switches_the_buffer_and_the_save(self):
         # the whole point: the subject can change mid-session, so Ctrl+S
@@ -1132,6 +1371,137 @@ class Picker(LibraryHome):
                             for status in (d["status"] for d in drawn)))
 
 
+class TestReload(LibraryHome):
+    """§13.6 - a push that succeeds ends with the terminal showing it.
+
+    The reload is best effort and never load-bearing: a terminal that is
+    not there leaves the report with the advice line, and a save that
+    failed is not reloaded at all.
+    """
+
+    def test_ghostty_is_asked_with_the_signal_its_own_app_handles(self):
+        # ghostty 1.3 has no CLI reload action; its application reloads
+        # on SIGUSR2, which is what ctrl+shift+, ends up doing anyway
+        with mock.patch.object(themes, "ghostty_app_pid", return_value=4242), \
+                mock.patch.object(themes.os, "kill") as kill:
+            self.assertEqual(themes.reload_terminal("ghostty"),
+                             "ghostty: reloaded (config re-read, pid 4242)")
+        kill.assert_called_once_with(4242, signal.SIGUSR2)
+
+    def test_a_ghostty_that_is_not_running_is_simply_not_reloaded(self):
+        with mock.patch.object(themes, "ghostty_app_pid", return_value=None), \
+                mock.patch.object(themes.os, "kill") as kill:
+            self.assertEqual(themes.reload_terminal("ghostty"), "")
+        kill.assert_not_called()
+
+    def test_a_signal_that_lands_nowhere_is_not_a_failure(self):
+        with mock.patch.object(themes, "ghostty_app_pid", return_value=9), \
+                mock.patch.object(themes.os, "kill",
+                                  side_effect=ProcessLookupError):
+            self.assertEqual(themes.reload_terminal("ghostty"), "")
+
+    def test_the_application_is_found_and_not_a_surface(self):
+        # a build with per-window processes has more than one `ghostty`
+        # in /proc; only the single-instance application is signalled
+        def proc(tmp, entries):
+            root = os.path.join(tmp, "proc")
+            for pid, comm, cmdline in entries:
+                os.makedirs(os.path.join(root, pid))
+                with open(os.path.join(root, pid, "comm"), "w",
+                          encoding="utf-8") as handle:
+                    handle.write(comm)
+                with open(os.path.join(root, pid, "cmdline"), "wb") as handle:
+                    handle.write(cmdline.encode())
+            return root
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = proc(tmp, [
+                ("7", "ghostty\n",
+                 "/usr/bin/ghostty\x00--gtk-single-instance=true\x00"),
+                ("11", "ghostty\n",
+                 "/usr/bin/ghostty\x00--initial-window=false\x00"),
+                ("12", "bash\n", "bash\x00"),
+            ])
+            with mock.patch.object(themes, "_PROC", root, create=True):
+                self.assertEqual(themes.ghostty_app_pid(), 7)
+
+    def test_kitty_is_asked_through_its_own_remote_control(self):
+        done = subprocess.CompletedProcess(["kitty"], 0)
+        with mock.patch.object(themes.subprocess, "run",
+                               return_value=done) as run:
+            self.assertEqual(themes.reload_terminal("kitty"),
+                             "kitty: reloaded (kitty @ load-config)")
+        command = run.call_args[0][0]
+        self.assertEqual(command, ["kitty", "@", "load-config"])
+        # and it never touches the terminal's tty: a reload that stole a
+        # keystroke or printed into the editor's frame is worse than none
+        for stream in ("stdin", "stdout", "stderr"):
+            self.assertIs(run.call_args[1][stream], subprocess.DEVNULL)
+
+    def test_a_reload_that_fails_leaves_the_advice_line(self):
+        for result, problem in ((subprocess.CompletedProcess(["kitty"], 1),
+                                 None),
+                                (None, FileNotFoundError("kitty"))):
+            with self.subTest(result=result, problem=problem):
+                side = problem or None
+                with mock.patch.object(themes.subprocess, "run",
+                                       return_value=result, side_effect=side):
+                    self.assertEqual(themes.reload_terminal("kitty"), "")
+
+    def test_a_format_with_no_interface_is_never_asked(self):
+        with mock.patch.object(themes.subprocess, "run") as run:
+            self.assertEqual(themes.reload_terminal("alacritty"), "")
+        run.assert_not_called()
+
+    def test_a_successful_push_reloads_only_what_it_pushed(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        edited = dict(FULL, background="#010203")
+        with mock.patch.object(themes, "reload_terminal",
+                               return_value="ghostty: reloaded") as reload:
+            result = themes.push(edited, to="ghostty", path=config,
+                                 name="ember", reload=True)
+        reload.assert_called_once_with("ghostty")
+        self.assertEqual(result.reloaded, ("ghostty",))
+        self.assertIn("ghostty: reloaded", result.lines)
+
+    def test_a_failed_push_does_not_reload_the_terminal(self):
+        blank = self.write(os.path.join(self.root, "blank.ghostty"),
+                           "font-size = 12\n")
+        with mock.patch.object(themes, "reload_terminal") as reload:
+            result = themes.push(FULL, to="ghostty", path=blank, name="ember",
+                                 reload=True)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.reloaded, ())
+        reload.assert_not_called()
+
+    def test_a_programmatic_push_does_not_reach_for_a_signal(self):
+        # the default is inert: only a command line that says so reloads
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        with mock.patch.object(themes, "reload_terminal") as reload:
+            result = themes.push(dict(FULL, background="#010203"),
+                                 to="ghostty", path=config, name="ember")
+        self.assertEqual(result.reloaded, ())
+        reload.assert_not_called()
+
+    def test_the_command_line_reloads_by_default_and_no_reload_opts_out(self):
+        config = self.xdg("ghostty/config.ghostty", ghostty_text())
+        themes.create("ember", dict(FULL, background="#010203"))
+        base = ["use", "ember", "--to", "ghostty", "--config", config]
+        for argv, wanted in ((base, True), (base + ["--no-reload"], False)):
+            with self.subTest(reload=wanted):
+                err = io.StringIO()
+                with mock.patch.object(themes, "reload_terminal",
+                                       return_value="ghostty: reloaded") as reload, \
+                        mock.patch.object(sys, "stdout", io.StringIO()), \
+                        mock.patch.object(sys, "stderr", err):
+                    self.assertEqual(cli.main(argv), 0, err.getvalue())
+                self.assertEqual(reload.called, wanted)
+                # and the report says which, rather than the advice line
+                self.assertEqual("reloaded" in err.getvalue(), wanted)
+                self.assertEqual("reload your terminal" in err.getvalue(),
+                                 not wanted)
+
+
 class Ramp(unittest.TestCase):
     """The fallback palette `new` seeds from (spec §13.8 question 3)."""
 
@@ -1159,7 +1529,7 @@ class Cli(LibraryHome):
         self.assertIn("background=#808080", out.stdout)
 
     def test_use_with_ghostty_native_exports_and_points(self):
-        # §13.6 phase 2 end to end: a theme file in ghostty's own dir and
+        # §13.6 end to end: a theme file in ghostty's own dir and
         # one new line in the config, which keeps every colour it had
         config = self.xdg("ghostty/config.ghostty", ghostty_text())
         native = os.path.join(self.root, "ghostty", "themes", "ember")
@@ -1181,18 +1551,72 @@ class Cli(LibraryHome):
         found = self.run_cli("show")
         self.assertIn("#010203", found.stdout)
 
-    def test_ghostty_native_without_a_push_is_refused_before_any_write(self):
+    def test_ghostty_native_without_a_push_still_writes_nothing(self):
+        # `--no-push` is the answer for "do not touch the terminal", and
+        # an export is a push like any other: honouring one costs no flag
+        # conflict, so the save writes truth and stops there
         config = self.xdg("ghostty/config.ghostty", ghostty_text())
         themes.create("ember", dict(FULL, background="#010203"))
         before, stamp = self.read(config), os.path.getmtime(config)
         out = self.run_cli("use", "ember", "--to", "ghostty",
                            "--config", config, "--ghostty-native", "--no-push")
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("needs a push", out.stderr)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("no push requested", out.stderr)
         self.assertEqual(self.read(config), before)
         self.assertEqual(os.path.getmtime(config), stamp)
         self.assertFalse(os.path.exists(os.path.join(
             self.root, "ghostty", "themes", "ember")))
+
+    def test_the_two_ghostty_flags_are_refused_together(self):
+        out = self.run_cli("use", "ember", "--ghostty-native",
+                           "--ghostty-in-place")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("opposite things", out.stderr)
+
+    def test_use_writes_a_theme_under_its_own_name_not_the_current_one(self):
+        # §13.6 end to end, and the bug this rule exists for: the config
+        # is on `Nightspice`, the theme being used is `test`, and the two
+        # files stay two files - the pointer moves, Nightspice does not
+        threedir = os.path.join(self.root, "ghostty", "themes")
+        os.makedirs(threedir, exist_ok=True)
+        nightspice = self.write(os.path.join(threedir, "Nightspice"),
+                                ghostty_text())
+        before = self.read(nightspice)
+        config = self.xdg("ghostty/config.ghostty",
+                          "# mine\nfont-size = 12\ntheme = Nightspice\n")
+        themes.create("test", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "test", "--to", "ghostty")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        exported = os.path.join(threedir, "test")
+        self.assertIn(f"ghostty: exported {exported}", out.stderr)
+        self.assertIn(f"ghostty: theme = test rewritten in {config}",
+                      out.stderr)
+        self.assertEqual(themes.read_terminal("ghostty", exported),
+                         dict(FULL, background="#010203"))
+        self.assertEqual(self.read(nightspice), before)   # untouched
+        self.assertIn("theme = test", self.read(config))
+        # the terminal now reads `test` through the pointer
+        self.assertIn("#010203", self.run_cli("show").stdout)
+
+    def test_in_place_will_not_cross_two_themes_names(self):
+        # the same run with the opt-out still refuses: `test`'s colours
+        # are never `Nightspice`'s file, on purpose or not
+        threedir = os.path.join(self.root, "ghostty", "themes")
+        os.makedirs(threedir, exist_ok=True)
+        nightspice = self.write(os.path.join(threedir, "Nightspice"),
+                                ghostty_text())
+        before = self.read(nightspice)
+        self.xdg("ghostty/config.ghostty",
+                 "# mine\nfont-size = 12\ntheme = Nightspice\n")
+        themes.create("test", dict(FULL, background="#010203"))
+        out = self.run_cli("use", "test", "--to", "ghostty",
+                           "--ghostty-in-place")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("refusing to write theme 'test'", out.stderr)
+        self.assertEqual(self.read(nightspice), before)
+        self.assertIn("theme = Nightspice",
+                      self.read(os.path.join(self.root, "ghostty",
+                                             "config.ghostty")))
 
     def test_edit_accepts_the_flag_and_a_pipe_pushes_nothing(self):
         config = self.xdg("ghostty/config.ghostty", ghostty_text())

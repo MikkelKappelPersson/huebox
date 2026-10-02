@@ -1,9 +1,9 @@
 """Finding the terminal you are in and the config holding its colours (§7).
 
 Finding a config is only half of it: `ensure_theme_pointer` writes the one
-line that decides *which* file a Ghostty config reads (§13.6 phase 2), and
-does so with the same line-level discipline every other write to somebody
-else's file follows (§6.2).
+line that decides *which* file a Ghostty config reads (§13.6), and does so
+with the same line-level discipline every other write to somebody else's
+file follows (§6.2).
 """
 
 from __future__ import annotations
@@ -159,8 +159,8 @@ def ghostty_main_config(path: str = None) -> str:
     """The Ghostty config itself, with `theme =` and includes *not* followed.
 
     `_resolve_for` answers "which file holds the colours", which is the
-    wrong question for phase 2: a native export writes its own theme file
-    and needs the config that decides which file is read. That is the first
+    wrong question for an export: it writes its own theme file and needs
+    the config that decides which file is read. That is the first
     candidate path that exists — or the explicit `--config` the user named,
     which is the file they mean by definition.
     """
@@ -172,14 +172,13 @@ def ghostty_main_config(path: str = None) -> str:
     return None
 
 
-def _ghostty_theme_file(config_path: str):
-    """Follow `theme = Name` to the file that actually holds the colours.
+def ghostty_theme_name(config_path: str):
+    """The theme `config_path`'s last `theme =` line names, or `None`.
 
-    Ghostty keeps colours in a separate theme file far more often than
-    inline, so the main config on its own usually has nothing to edit.
-    The value is read with the same rule `ensure_theme_pointer` writes
-    with, so a trailing comment cannot make the two disagree about which
-    theme a config is on.
+    The name a config is *on*, with no opinion about whether the file
+    behind it exists — that is the whole question `push` asks to decide
+    where a save belongs (§13.6). A config with no such line, or one
+    whose line is commented out, is on no theme and the answer is `None`.
     """
     name = None
     try:
@@ -194,6 +193,19 @@ def _ghostty_theme_file(config_path: str):
         match = THEME_LINE.match(line)
         if match:
             name = _theme_value(match)
+    return name or None
+
+
+def _ghostty_theme_file(config_path: str):
+    """Follow `theme = Name` to the file that actually holds the colours.
+
+    Ghostty keeps colours in a separate theme file far more often than
+    inline, so the main config on its own usually has nothing to edit.
+    The value is read with the same rule `ensure_theme_pointer` writes
+    with, so a trailing comment cannot make the two disagree about which
+    theme a config is on.
+    """
+    name = ghostty_theme_name(config_path)
     if not name:
         return None
     user = os.path.join(ghostty_themes_dir(), name)
@@ -210,7 +222,7 @@ def _ghostty_theme_file(config_path: str):
 
 
 def ensure_theme_pointer(config_path: str, name: str) -> str:
-    """Point `config_path` at the Ghostty theme file `name` (§13.6 phase 2).
+    """Point `config_path` at the Ghostty theme file `name` (§13.6).
 
     A Ghostty theme file is a full config of its own (plan appendix A), so
     the theme huebox exports is picked up by the `theme =` line in the main

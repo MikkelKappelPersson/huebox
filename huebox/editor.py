@@ -43,7 +43,7 @@ ENTER_KEYS = ("\r", "\n")
 # it shares the editor's minimum size and header width instead of adding a
 # box of its own. `●` is the spec's own dirty mark, not an ASCII stand-in.
 DIRTY_MARK = "●"
-THEME_HINTS = ["arrows move", "Enter open", "n new from buffer",
+THEME_HINTS = ["arrows move", "Enter use", "n new from buffer",
                "N save as new", "t / Esc back"]
 
 # §15 — what a short terminal spends, in order. The frame sheds its
@@ -629,7 +629,16 @@ def _open_overlay(st) -> None:
 
 
 def _open_selected(st) -> None:
-    """Enter in the picker: load the selected theme into the buffer."""
+    """Enter in the picker: open the selected theme, and make it live.
+
+    Choosing a theme is choosing it for the terminal too (§13.6), so the
+    switch runs the ordinary save path: the truth file is written, the
+    theme is pushed and the terminal is asked to re-read its config. The
+    status line says which target took it, and the push report lands after
+    the session like every other one. `Ctrl+S` still saves the *buffer*;
+    after a switch there is simply nothing left to press, because the theme
+    you picked is already what the terminal is showing.
+    """
     if st.dirty():
         st.status = "save (Ctrl+S) or revert (r) first"      # decision 12
         return
@@ -641,7 +650,7 @@ def _open_selected(st) -> None:
     slots, path = loaded
     _adopt(st, name, slots, path)
     st.overlay = None
-    st.status = f"opened {name}"
+    save_state(st)
 
 
 def _picker_new(st) -> None:

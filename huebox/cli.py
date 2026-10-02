@@ -13,8 +13,10 @@ A name argument means "a theme in ~/.config/huebox"; without one the v1
 terminal config is the subject. Saving or using a theme writes the truth
 file first and pushes it to the terminal second (§13.6, decision 7) - a push
 that fails is reported and exits 1, and the truth file stays written.
-`--ghostty-native` asks the ghostty target for the terminal's own theme
-file instead of an in-place config edit (§13.6 phase 2, decision 22).
+A ghostty target whose config is organised by theme is pushed as the
+terminal's own theme file, `~/.config/ghostty/themes/<name>`, with the
+`theme =` pointer repointed at it; a theme's colours never land in a file
+that belongs to another theme (§13.6, decision 26).
 """
 
 from __future__ import annotations
@@ -39,11 +41,16 @@ ACTIONS = ("show", "edit", "new", "list", "use", "import")
 
 #: Where a save pushes, from `--to` / `--format` / `--config` / `--no-push`
 #: (§13.6). An empty `to` means "the terminal you are in", which only
-#: `resolve()` can answer. `ghostty_native` switches the ghostty target to
-#: the phase-2 path: a theme file in `~/.config/ghostty/themes` plus a
-#: `theme =` pointer, opt-in (decision 22).
-PushSpec = namedtuple("PushSpec", "to fmt path no_push ghostty_native",
-                      defaults=(False,))
+#: `resolve()` can answer. `ghostty_native` forces the ghostty export — a
+#: theme file in `~/.config/ghostty/themes` plus a `theme =` pointer —
+#: and `ghostty_in_place` forbids it; with neither, the config decides
+#: (decision 26). `reload` asks the terminals that took a push to re-read
+#: their config, so a save ends live. It is `False` here so a `PushSpec`
+#: built in a test or a library call is inert unless it says otherwise.
+PushSpec = namedtuple("PushSpec",
+                      "to fmt path no_push ghostty_native ghostty_in_place "
+                      "reload",
+                      defaults=(False, False, False))
 
 #: The two lines that are advice rather than report. Both are about the
 #: terminal, not the theme, so they belong to the caller that knows what it
@@ -80,9 +87,19 @@ def main(argv=None) -> int:
                         help="write the theme file only, leave the terminal "
                              "config alone")
     parser.add_argument("--ghostty-native", action="store_true",
-                        help="push to Ghostty as a theme file: write "
+                        help="always push ghostty as a theme file: write "
                              "~/.config/ghostty/themes/<name> and point the "
-                             "config at it (ghostty targets only)")
+                             "config at it, even where the colours are "
+                             "inline (the default when the config already "
+                             "uses theme =)")
+    parser.add_argument("--ghostty-in-place", action="store_true",
+                        help="never export a ghostty theme file: edit the "
+                             "file the colours already live in, the way "
+                             "kitty and alacritty are always pushed")
+    parser.add_argument("--no-reload", dest="reload", action="store_false",
+                        help="do not ask the terminal to re-read its config "
+                             "after a push; the report keeps saying which key "
+                             "to press")
     parser.add_argument("--dump", action="store_true",
                         help="print the resolved colours as key=value and exit")
     parser.add_argument("--formats", action="store_true",
@@ -188,17 +205,17 @@ def _push_spec(args) -> PushSpec:
     if to and args.config and len(to) > 1:
         raise themes.ThemeError("--config pushes one format; --to names "
                                 "several - drop --config or keep a single --to")
-    if args.ghostty_native and args.no_push:
-        raise themes.ThemeError("--ghostty-native needs a push; --no-push "
-                                "asks for none")
+    if args.ghostty_native and args.ghostty_in_place:
+        raise themes.ThemeError("--ghostty-native and --ghostty-in-place "
+                                 "ask for opposite things - pick one")
     return PushSpec(tuple(to), args.format, args.config, args.no_push,
-                    args.ghostty_native)
+                    args.ghostty_native, args.ghostty_in_place, args.reload)
 
 
 def _push_lines(result) -> list:
     """A push report plus the one line of advice a written config needs."""
     lines = list(result.lines)
-    if result.pushed:
+    if result.pushed and not result.reloaded:
         lines.append(RELOAD_HINT)
     return lines
 
@@ -336,7 +353,9 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
             report.append(NO_PUSH_LINE)
             return f"saved {theme} (truth only)"
         result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path,
-                             ghostty_native=spec.ghostty_native, name=theme)
+                             ghostty_native=spec.ghostty_native, name=theme,
+                             ghostty_in_place=spec.ghostty_in_place,
+                             reload=spec.reload)
         report.extend(_push_lines(result))
         if result.failed:
             failed.append(result)
@@ -519,7 +538,9 @@ def _cmd_use(args, spec: PushSpec) -> int:
     for warning in warnings:                 # what it could not read (§13.2)
         _warn(warning)
     result = themes.push(slots, to=spec.to, fmt=spec.fmt, path=spec.path,
-                         ghostty_native=spec.ghostty_native, name=name)
+                         ghostty_native=spec.ghostty_native, name=name,
+                         ghostty_in_place=spec.ghostty_in_place,
+                         reload=spec.reload)
     for line in _push_lines(result):
         _warn(line)
     return 1 if result.failed else 0

@@ -18,9 +18,11 @@ no restarting.
   huebox import <name>  snapshot the detected terminal into a theme
 
 Flags on top of the v1 set: `--to ghostty,kitty` chooses push targets,
-`--no-push` writes the theme file only, `--ghostty-native` pushes to Ghostty's
-own theme file, `--force` replaces a theme `new` / `import` would not overwrite,
-`--from <fmt>` names the terminal to read from.
+`--no-push` writes the theme file only, `--no-reload` leaves the terminal's
+own reload to you, `--ghostty-in-place` keeps a Ghostty
+push in the file the colours already live in, `--force` replaces a theme
+`new` / `import` would not overwrite, `--from <fmt>` names the terminal to
+read from.
 ```
 
 ## Install
@@ -41,12 +43,25 @@ and every colour in the sample comes from the theme's own palette.
 the truth: `huebox import dusk` snapshots a terminal into a theme,
 `huebox edit dusk` works on it, and every save or `huebox use dusk` pushes it
 back to the terminal you are in. `t` inside the editor switches themes, `N`
-turns a direct-config session into a library one, and `--ghostty-native` joins
-Ghostty's own theme-file layout. Editing is staged too: keystrokes live in a
+turns a direct-config session into a library one, and a Ghostty config that
+keeps its colours in a theme file is pushed there rather than into whatever
+file it happens to point at. Editing is staged too: keystrokes live in a
 buffer, `Ctrl+S` is the only write.
 
-Three changes you might notice on upgrade:
+Five changes you might notice on upgrade:
 
+- A push now ends with your terminal reloading its config, so the colours
+  are live when the command finishes, and opening a theme in the picker
+  (`t`, `Enter`) saves and pushes it instead of only loading it into the
+  buffer. `--no-reload` turns the reload off.
+- If your Ghostty config has a `theme =` line, saving a huebox theme now
+  writes that theme's own file under `~/.config/ghostty/themes/` and swaps
+  that one line, where before it spliced the colours into whichever theme
+  file the config pointed at — so saving a theme named `test` used to
+  rewrite `Nightspice`. A `theme =` naming a file that is missing is now
+  repaired by the save rather than refused. Configs with inline colours are
+  edited in place as before; `--ghostty-in-place` restores the old
+  behaviour where it is safe to, and refuses it where it is not.
 - kitty's config-path override is `KITTY_CONFIG_DIRECTORY`, which is what
   kitty itself reads. The old `KITTY_CONFIG_DIR` spelling still works for one
   more release, and is probed second.
@@ -142,17 +157,18 @@ drawn only out of rows the sample did not need, so it never costs it a line.
 A config is only ever edited line by line, so a colour the config does not
 define is reported (`not carried by this config: cursor-text, …`) and left
 alone — huebox will not invent a line in your terminal's config. A Ghostty
-theme file is the one file huebox writes whole, and only because the user
-asked for it with `--ghostty-native`.
+theme file is the one file huebox writes whole, and only because it is
+named after the theme it holds.
 
 ### Ghostty themes
 
-Ghostty keeps its colours in theme files, and a push can join it there
-instead of editing whatever file the colours sit in today. Opt in with
-`--ghostty-native`:
+Ghostty keeps its colours in theme files, and a save joins it there whenever
+your config is already organised that way — when it has a `theme =` line,
+huebox writes the theme under *its own* name and repoints your config at
+it:
 
 ```sh
-huebox use dusk --to ghostty --ghostty-native     # or edit dusk + Ctrl+S
+huebox use dusk --to ghostty          # or edit dusk + Ctrl+S
 ```
 
 That writes `~/.config/ghostty/themes/dusk` — 22 colours, in Ghostty's own
@@ -160,17 +176,29 @@ That writes `~/.config/ghostty/themes/dusk` — 22 colours, in Ghostty's own
 your main config at it with a single `theme =` line: an existing one keeps
 its spacing, its quotes and its comment and only the value changes, a config
 without one gets the line appended, and every other byte of the file is left
-exactly as it was. Your previous theme file is not touched. The themes
-directory is shared with Ghostty's built-ins, so an export overwrites a
-same-name file there (the report tells you when it did).
+exactly as it was. **Your previous theme file is not touched.** A theme's
+colours never land in a file that belongs to another theme, which is the
+whole reason the save goes through a file at all: saving `dusk` while your
+config is on `Nightspice` gives you a `dusk` file and moves one line, where
+before it would have rewritten `Nightspice` under a name that was no longer
+true. The themes directory is shared with Ghostty's built-ins, so an export
+overwrites a same-name file there (the report tells you when it did).
 
-It is opt-in because that `theme =` line is a layout choice in *your* main
-config, not a colour: without the flag huebox keeps updating the file your
-colours already live in, which is the safer default. The flag applies to the
-ghostty target only — `--to ghostty,kitty` exports for Ghostty and pushes
-kitty the ordinary way — and it cannot be combined with `--no-push`. The
-two modes also compose: after a native push, a plain push follows the
-pointer and updates that theme file in place.
+If your config holds its colours inline — or in a `config-file` include —
+there is no theme name in play, so huebox edits the file the colours are
+already in and leaves your layout alone. Two flags say it out loud:
+`--ghostty-native` forces the export even there (adding the `theme =` line
+for you), `--ghostty-in-place` forces the edit; asking for both is refused.
+The forced export is the one case that can leave a colour behind a theme
+file, and the report says so when it does. Both apply to the ghostty target
+only — `--to ghostty,kitty` exports for Ghostty and pushes kitty the
+ordinary way — and `--no-push` wins over either.
+
+A `theme =` line pointing at a file that is not there (Ghostty calls that
+a configuration error on reload) is treated as a broken config, not a
+colourless one: `huebox use <name>` writes the file, fixes the pointer, and
+tells you the file was missing. Nothing is overwritten to do it — the file
+did not exist.
 
 ## Supported terminals
 

@@ -21,7 +21,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/color.py` | 22-slot model, hex/rgb/hsv maths, luminance | §5 |
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty` (TOML); registry in `__init__` | §6 |
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads and the pointer writer, `config_holds_colours`, `resolve()` | §7 |
-| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, Ghostty native export, `RAMP` | §13, §13.6 |
+| `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack`, samples, static preview, examples strip, live diff | §8, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
 | `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
@@ -56,10 +56,14 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   freely — canonical layout, written to a `.tmp` and renamed over the file,
   never partially written; anything under Ghostty/kitty/Alacritty config
   follows §6.2, which includes the push: it reuses `FORMATS[fmt]["write"]`,
-  never invents a key, and never re-serialises. A `--ghostty-native` export
-  is the one deliberate exception, and it is a whole file *we* name inside
-  Ghostty's theme dir, opted into; the user's config still gets exactly one
-  line, the `theme =` pointer.
+  never invents a key, and never re-serialises. Two deliberate exceptions,
+  both files huebox names after a theme and owns: the Ghostty export
+  (`export_ghostty_native`), which a save uses by default whenever the
+  config is organised by theme, and the one `theme =` pointer line
+  `ensure_theme_pointer` moves. The rule under both is that a theme's
+  colours never land in a file that belongs to another theme — so a save
+  either writes a file named after the theme or edits a file no theme is
+  named after, and `_foreign_theme` refuses the crossing.
 - **Truth first, never rollback.** A save writes `themes.save()` and only
   then pushes; a push that fails is a report plus exit 1 and leaves the
   theme file exactly as written (spec decision 7).
@@ -67,8 +71,11 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   every frame; disk changes happen on Ctrl+S only (§14).
 - **The editor asks, it never reaches.** Nothing in the draw loop may write
   to stdout outside a frame, prompt inside raw mode, or import a module the
-  dependency rule forbids. Anything the picker cannot say in one status line
-  is collected by `cli` and printed after the session, on stderr (§13.7).
+  dependency rule forbids. A save *is* the ask: the injected callback is
+  where the terminal is written and asked to reload, all of it behind the
+  editor's back and reported afterwards. Anything the picker cannot say in
+  one status line is collected by `cli` and printed after the session, on
+  stderr (§13.7).
 - **3.9-compatible code.** No `match`, no `tomllib` (3.11+ — the TOML subset
   parser stays hand-rolled), no runtime `X | Y` (keep
   `from __future__ import annotations` in every file).

@@ -234,7 +234,7 @@ is not a fifth path: it is drawn and read inside the same loop. `tests/
 test_editor.py::RawMode` asserts the whole list by pairing every exit with
 the enter whose state it restores.
 
-## P6 — Ghostty native export (§13.6 phase 2, plan phase 6)
+## P6 — Ghostty native export (§13.6, plan phase 6)
 
 - [x] `themes.py`: `export_ghostty_native(name, slots)` →
       `$XDG_CONFIG_HOME/ghostty/themes/<name>` via write_flat + GHOSTTY_RULES
@@ -244,21 +244,43 @@ the enter whose state it restores.
 - [x] `detect.py`: `ghostty_main_config()` (the file that *holds* the
       pointer) + `config_holds_colours()` (§7.3 asked of a chain), because
       the pointer target is deliberately not the file `resolve()` follows
-- [x] `cli.py`: `--ghostty-native` opt-in flag wiring (default decided here:
-      plan proposes opt-in) — `PushSpec.ghostty_native` with a `False`
-      default, `push(..., ghostty_native, name)`
+- [x] `cli.py`: `--ghostty-native` flag wiring — `PushSpec.ghostty_native`
+      with a `False` default, `push(..., ghostty_native, name)`
 - [x] tests: exported round-trip, pointer rewrite byte-exact except theme
       line, append case (with/without trailing newline), CRLF, kitty and
       alacritty unaffected, illegal name, CLI `use`/`edit` end to end
 - [x] spec: close open question 2 with the decision; decision log entry
+- [x] **P6b (decision 26)**: the export becomes the default for a config
+      that is organised by theme. `detect.ghostty_theme_name()` (the
+      pointer's value, with no "does the file exist" step) against the
+      resolved target decides the path; `--ghostty-native` forces the
+      export, `--ghostty-in-place` forces the edit and the two are refused
+      together; `themes._foreign_theme()` refuses an in-place write into
+      another theme's file, so the invariant holds under every flag
+      combination; the report says when an export shadows a config's own
+      inline colours; `--no-push` wins over both flags
+- [x] P6b tests: a save under a theme-config exports its own file, repoints
+      the config and leaves the old theme file byte-identical; a save of the
+      theme already in use stays on its own file; in-place is refused when
+      the file is another theme's, allowed when the push changes nothing,
+      and allowed for inline colours; the refusal and the end-to-end `use`
+      hold through the CLI; a dangling `theme =` is repaired end to end and
+      still refused with an actionable line under `--ghostty-in-place` or
+      with no name; another format's missing config does not reach for
+      ghostty; a test home of its own for the CLI subprocess suite, which
+      was reading the real `~/.config`
 
-Notes: the decision is **opt-in** (decision 22) — phase 2 adds a `theme =`
-line to the user's *main* config, which is a layout choice about somebody
-else's file and not something asking to push a theme should do silently.
-The flag is ghostty-scoped: `--to ghostty,kitty` exports for ghostty and
-pushes kitty the phase-1 way, `--no-push` with the flag is refused before
-any write, and a legacy direct session (no theme, so no name to export
-under) writes the config and says why in the post-session `notes` list.
+Notes: the decision is **the export by default where the config is
+organised by theme** (decision 26, superseding decision 22's opt-in) —
+writing one theme's colours into another theme's file is the failure mode
+that matters, and one `theme =` swap is visible, reversible and reported.
+A `theme =` naming a file that is missing is a broken chain, not a
+colourless config, so a save with a theme name repairs it: export the
+theme, repoint the config, and say the file was missing. The export is
+ghostty-scoped: `--to ghostty,kitty` exports for ghostty and pushes kitty
+the phase-1 way, and a legacy direct session (no theme, so no name to
+export under) writes the config and says why in the post-session `notes`
+list.
 
 Two seams the plan's bullets did not name, both forced by §7.
 `ghostty_main_config()` exists because the pointer belongs in the file that
@@ -286,6 +308,29 @@ falling through to the shipped-theme copy.
 P7 note: the export goes through `write_flat`, so it still leaks the
 `ResourceWarning` the `with open` sweep is meant to kill — the sweep should
 cover `formats/base.py`, not only the files this phase touched.
+
+## P6c — the reload, and a theme switch that is a save (decision 27)
+
+- [x] `themes.py`: `reload_terminal(fmt)` — ghostty via the `SIGUSR2` its
+      own application handles (`ghostty_app_pid()` walks `/proc` for the
+      `--gtk-single-instance` process, so a build with per-window surfaces
+      is not mis-signalled), kitty via `kitty @ load-config` with all three
+      streams on `DEVNULL` and a timeout; `""` for anything that cannot be
+      told. Best effort by contract: the bytes are on disk before it runs
+- [x] `themes.py`: `PushResult.reloaded`, so the caller knows whether it
+      still owes the "reload your terminal" advice; `push(reload=…)`
+      defaults off, so a programmatic push never reaches for a signal
+- [x] `cli.py`: `--no-reload`; `PushSpec.reload`; both push call sites
+- [x] `editor.py`: `Enter` in the picker runs `save_state()` — opening a
+      theme is a save, so the theme you pick is the one on screen
+- [x] tests: signal vs surface selection, a signal that lands nowhere, the
+      kitty command with its three streams, a format with no interface, a
+      failed push not reloading, the CLI default vs `--no-reload`, and the
+      picker's `Enter` pushing without a `Ctrl+S`. The CLI harness passes
+      `--no-reload` throughout, because the reload reaches for the
+      *machine's* ghostty
+- [x] spec: §13.6 reload, §13.7 Enter, §13.4 current, §4.2 flag, decision
+      27
 
 ## P7 — hygiene + release (plan phase 7)
 
@@ -353,7 +398,7 @@ and pushed (`palette-0` went `#0a0a13` → `#0d0d18` in both the theme file and
 the config, the dot cleared), `Esc` quit with status 0, and a second session
 that saved without changing anything left the config's mtime untouched.
 
-## P8 — the live diff widget (spec §14.4, decision 26)
+## P8 — the live diff widget (spec §14.4, decision 28)
 
 - [x] `render.py`: `diff_lines(slots, cols)` — a git hunk over the zig
       sample, four slots and no lexer (`palette-1` removed, `palette-2`
@@ -364,7 +409,7 @@ that saved without changing anything left the config's mtime untouched.
 - [x] `__init__.py` re-export; tests: `Diff` in `tests/test_render.py` and
       the ladder in `tests/test_editor.py` (whole at 120x40, floor at 110x36,
       absent — with the v1 strip and sample numbers — everywhere below)
-- [x] spec §8 / §14.4 / §15 / §10 / §16 / decision 26, README, AGENTS.md
+- [x] spec §8 / §14.4 / §15 / §10 / §16 / decision 28, README, AGENTS.md
 
 Notes: the question was where a diff belongs — inside the code sample or
 beside it. Inside would have cost the sample half its vocabulary: a zig lexer
@@ -387,4 +432,4 @@ widget the frame cannot show.
 An earlier cut of this phase put the hunk *above* the sample in the spending
 order, which cost the sample four lines at 100x30 and three at 80x24. Same
 widget, same slots, one line of allocation apart — which is why the ladder is
-a decision (26) and not an implementation detail.
+a decision (28) and not an implementation detail.

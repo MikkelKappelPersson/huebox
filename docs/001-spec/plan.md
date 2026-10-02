@@ -306,10 +306,19 @@ with every save because a switch has to retarget `Ctrl+S` mid-session. `n` and
 cover every theme the editor ever writes. Loading a theme also resets the arm,
 the undo log and the selection (§13.7, P2 review).
 
-## Phase 6 — Ghostty native export (§13.6 phase 2)
+## Phase 6 — Ghostty native export (§13.6)
 
-Behind an opt-in flag (open question 2 leans opt-in; default decided at
-review): `--ghostty-native`.
+The export path itself is unchanged from the plan: `--ghostty-native` and
+everything under it. What changed after release is **which path a save takes
+by default** (decision 26, superseding decision 22): the export is the
+default for a config that is organised by theme, `--ghostty-native` now
+forces it where the colours are inline, and `--ghostty-in-place` forces the
+edit. The plan's reasoning for opt-in was that phase 1 "only edits the file
+that already holds the colours", and that was the load-bearing claim to
+break: with `theme = Nightspice` in the config, the file that holds the
+colours *is* Nightspice's, so saving a theme called `test` re-badged it in
+place. One `theme =` swap is a visible, reversible, reported line; a silent
+re-badging of somebody else's theme file is not.
 
 As built (decision 22: **opt-in**, phase 1 unchanged as the default):
 
@@ -348,7 +357,10 @@ As built (decision 22: **opt-in**, phase 1 unchanged as the default):
   constructions in the suite still work). `--ghostty-native --no-push` is
   refused before anything is written, and a legacy direct session has no
   name to export under — it writes the config and says so in the
-  post-session `notes` list, never inside the frame.
+  post-session `notes` list, never inside the frame. (Both of those changed
+  with decision 26: `--no-push` now simply wins, and the refusal to export
+  without a name became an in-place write, which is what such a session
+  always did.)
 - Tests: exported file round-trips via `read_flat`; pointer rewrite
   preserves the config byte-for-byte except the theme line; append case
   (config without `theme =`, with and without a trailing newline);

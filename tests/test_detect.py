@@ -1,6 +1,6 @@
 """Detection tests: --config format inference (§7.1, plan 3), the env
 probes and candidate paths (§7.2, plan appendix A), `config-file`
-includes (§7.4) and the `theme =` pointer (§13.6 phase 2 -
+includes (§7.4) and the `theme =` pointer (§13.6 -
 `ensure_theme_pointer`)."""
 
 import os
@@ -234,7 +234,7 @@ class InferFormat(unittest.TestCase):
 
 
 class ThemePointer(unittest.TestCase):
-    """§13.6 phase 2 - one line of a user's config, swapped or appended.
+    """§13.6 - one line of a user's config, swapped or appended.
 
     §6.2 holds here too, and this is where it is sharpest: every line
     except the one the feature is *about* survives byte for byte. Each
@@ -289,6 +289,38 @@ class ThemePointer(unittest.TestCase):
         self.assertEqual(ensure_theme_pointer(self.config, "dusk"),
                          "rewritten")
         self.assertEqual(self.read(self.config), "theme = dusk\n")
+
+    def test_the_name_is_read_whether_or_not_the_file_exists(self):
+        # §13.6: the name a config is *on* is the question a push asks to
+        # decide where a save belongs, so it must answer for a theme file
+        # that is not there yet
+        self.assertEqual(detect.ghostty_theme_name(self.config), "ember")
+        self.assertEqual(detect.ghostty_theme_name(
+            self.write("dangling.ghostty", "theme = GhosttyDark\n")),
+            "GhosttyDark")
+        self.assertIsNone(detect.ghostty_theme_name(
+            self.write("inline.ghostty", "background = #101014\n")))
+        self.assertIsNone(detect.ghostty_theme_name(
+            self.write("commented.ghostty", "# theme = ember\n")))
+        self.assertIsNone(detect.ghostty_theme_name(
+            self.write("empty.ghostty", "theme =\n")))
+        self.assertIsNone(detect.ghostty_theme_name(
+            os.path.join(self.tmp.name, "ghostty", "missing.ghostty")))
+        # and the comment is a comment on the way in, not part of the name
+        self.assertEqual(detect.ghostty_theme_name(
+            self.write("comment.ghostty", "theme = ember  # mine\n")),
+            "ember")
+
+    def test_the_last_theme_line_wins(self):
+        # the same rule the writer uses, so the reader and the pointer
+        # cannot disagree about which file a config is on
+        self.write("twice.ghostty", "theme = first\ntheme = second\n")
+        self.assertEqual(
+            detect.ghostty_theme_name(
+                self.write("mixed.ghostty",
+                           "theme = first\n# theme = skipped\n"
+                           'theme = "second"\n')),
+            "second")
 
     def test_a_bare_value_with_spaces_is_followed_and_rewritten(self):
         # P6 review critical: Ghostty's built-ins have space names, and v1
@@ -398,8 +430,8 @@ class ThemePointer(unittest.TestCase):
         self.assertFalse(detect.config_holds_colours("ghostty", path))
 
     def test_the_main_config_is_not_the_theme_file_it_points_at(self):
-        # §13.6 phase 2 writes the pointer, so it needs the file that holds
-        # the `theme =` line - not the file that line resolves to
+        # §13.6's export writes the pointer, so it needs the file that
+        # holds the `theme =` line - not the file that line resolves to
         theme = self.write(os.path.join("themes", "ember"),
                            "background = #101014\n")
         self.assertNotEqual(detect.ghostty_main_config(), theme)

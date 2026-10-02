@@ -17,8 +17,20 @@ REPO = os.path.dirname(_HERE)
 
 class Cli(unittest.TestCase):
     def _run(self, *args):
-        return subprocess.run([sys.executable, "-m", "huebox", *args],
-                              capture_output=True, text=True, cwd=REPO)
+        # an isolated config home: without it the subprocess reads the
+        # real ~/.config/ghostty and the real theme library, so these
+        # tests pass or fail depending on the machine they run on
+        with tempfile.TemporaryDirectory() as home:
+            env = {key: value for key, value in os.environ.items()
+                   if not any(mark in key for mark in
+                              ("GHOSTTY", "KITTY", "ALACRITTY", "WEZTERM",
+                               "TERM_PROGRAM"))}
+            env["HOME"] = home
+            env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+            os.makedirs(env["XDG_CONFIG_HOME"], exist_ok=True)
+            return subprocess.run([sys.executable, "-m", "huebox", *args],
+                                  capture_output=True, text=True, cwd=REPO,
+                                  env=env)
 
     def test_formats_listing(self):
         out = self._run("--formats")

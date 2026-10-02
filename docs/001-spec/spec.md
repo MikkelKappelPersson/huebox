@@ -65,7 +65,9 @@ naming.
 | `-f`, `--format` | Force a format instead of detecting one. One of the `--formats` values |
 | `-c`, `--config` | Use an explicit config path instead of the detected one |
 | `--to` | Push targets for a theme save or `use`: a comma list of formats (§13.6). Default: the terminal you are in |
-| `--ghostty-native` | Push to Ghostty as a native theme file and point its config at it (§13.6 phase 2). Ghostty targets only, never with `--no-push` |
+| `--ghostty-native` | Always push Ghostty as a native theme file and point its config at it (§13.6). Adds the `theme =` line where there is none. Ghostty targets only |
+| `--ghostty-in-place` | Never export a Ghostty theme file: edit the file the colours already live in, as kitty and alacritty always are (§13.6) |
+| `--no-reload` | Do not ask the terminal to re-read its config after a push; the report keeps naming the key to press (§13.6) |
 | `--no-push` | Write the theme file only; the terminal config is not touched (§13.6) |
 | `--version` | Print `huebox <semver>` and exit |
 | `--help` | argparse default |
@@ -88,7 +90,7 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `i` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
 | `u` / `r` | undo / revert to the last save |
-| `t` | theme picker — arrows, `Enter` opens, `n` new from the buffer, `Esc` back (§13.7) |
+| `t` | theme picker — arrows, `Enter` opens **and pushes it**, `n` new from the buffer, `Esc` back (§13.7) |
 | `N` | save the buffer as a new theme, then save it like any other (§13.7) |
 | `Esc` | quit — twice if the buffer is dirty |
 
@@ -262,7 +264,11 @@ refreshed, and whether it is ever overwritten.
    was a huebox invention and is probed second as a **deprecated** spelling for
    one release after 0.2 (decision 23); it is removed with the next minor bump.
 3. **Only offer a terminal whose config actually contains colours.** A stale
-   `ALACRITTY_SOCKET` must never hijack a working Ghostty config.
+   `ALACRITTY_SOCKET` must never hijack a working Ghostty config. The one
+   state that is not "no colours" is a `theme =` line naming a file that is
+   not on disk: that chain is broken rather than colourless, Ghostty reports
+   it as a configuration error on reload, and a save may repair it by
+   exporting the theme it points at (§13.6).
 4. Ghostty `config-file` includes and `theme = Name` are followed to the file
    that actually holds the colours; that file is what gets written. Both are
    read the way Ghostty reads them: the value may be quoted or bare, a bare
@@ -270,12 +276,14 @@ refreshed, and whether it is ever overwritten.
    directory. A trailing comment on either line is a comment, not part of the
    path.
 
-**The other direction.** Reading a config follows `theme =`; a
-`--ghostty-native` push *writes* it. `ghostty_main_config()` is the file
-that holds the pointer line (the first Ghostty candidate that exists, or the
-explicit `--config`), which is deliberately not the file `resolve()` returns,
-and `ensure_theme_pointer()` changes that one line and nothing else
-(§13.6 phase 2). Because of the split, "does this config have colours" is
+**The other direction.** Reading a config follows `theme =`; an export
+*writes* it. `ghostty_main_config()` is the file that holds the pointer line
+(the first Ghostty candidate that exists, or the explicit `--config`), which
+is deliberately not the file `resolve()` returns, and
+`ghostty_theme_name()` is the same reader without the "does that file exist"
+step — the one question a push asks to decide where a save belongs (§13.6).
+`ensure_theme_pointer()` changes that one line and nothing else.
+Because of the split, "does this config have colours" is
 asked of the *chain* — `config_holds_colours()` follows the same includes and
 `theme =` a detection would — so a main config that holds nothing but a
 pointer is still a terminal, while one that points at nothing is not (§7.3).
@@ -379,7 +387,7 @@ indirection, inline Alacritty tables, malformed hex input, and a read-only or
 unwritable config.
 
 > Closed at 0.2: includes (§7.4, quoted / bare / commented / `?`-relative and
-> the missing-file case), `theme =` indirection (§13.6 phase 2), inline
+> the missing-file case), `theme =` indirection (§13.6), inline
 > Alacritty tables, a malformed theme file (binary garbage loads as
 > MISSING with a warning) and an unwritable config (a write that raises is
 > reported and fails the push; truth is never rolled back). Still thin:
@@ -436,11 +444,13 @@ Append-only. Newest last. One line per decision, with the reason.
 | 19 | The picker takes over the frame while it is open, instead of insetting a box over the editor | One frame means one layout budget, and the picker's own footer folds through `pack` — a centred box would have needed a wider floor than §15.4 promises for no extra information |
 | 20 | `n` / `N` adopt the new theme as the session's subject, and `N` then runs the ordinary save | One writer, one save pipeline: a theme made in the editor is pushed like any other (§13.6), and the status bar names the theme the next `Ctrl+S` will write |
 | 21 | An already-taken name is confirmed in text (`y` overwrites, another name is used), never with a modal | Same reasoning as decision 10: no modal inside raw mode, and the answer is a word rather than a keystroke that could land on the wrong widget |
-| 22 | Ghostty native export is opt-in (`--ghostty-native`), not the default push | Phase 1 only edits the file that already holds the colours; phase 2 adds a `theme =` line to the user's *main* config — a layout choice about somebody else's file, which nobody asked for by asking to push a theme. The flag says it out loud, and phase 1 stays the promise for everyone who never passes it |
+| 22 | ~~Ghostty native export is opt-in (`--ghostty-native`), not the default push~~ — **superseded by decision 26** | The reasoning said phase 1 only ever edits the file that already holds the colours, so it cannot cross a theme's name. That was the load-bearing claim and it was false: the file that holds the colours is *another theme's* file whenever the config is organised by theme, and a save that puts one theme's colours under another theme's name is worse than a `theme =` line nobody asked for |
 | 23 | Env probes follow upstream's documented spellings: `KITTY_CONFIG_DIRECTORY` (primary), `KITTY_CONFIG_DIR` kept second as deprecated for one release; alacritty's invented `ALACRITTY_CONFIG_DIR` / `ALACRITTY_CONFIG` removed | An override named after a variable the terminal does not read is a wrong answer, not a helpful one (plan appendix A). Dropping the alacritty pair outright would have been a silent regression for anyone who set it, so they are removed loudly instead; keeping the kitty one deprecated costs nothing and saves a real user |
 | 24 | A no-op write skips the write instead of writing identical bytes | §6.2 rule 4 is about the file, not the bytes: rewriting it bumps the mtime, which is exactly what a backup job, a config manager or an open editor watches. The writers now decide "did anything change?" before opening the file |
 | 25 | Several configs at once resolve to the first that resolves, in probe order; nothing prompts | A picker is not an editor: huebox's subject is the terminal you are in, and the user who wants a different one has `--format` and `--config`. An ambiguous `--config` was already an error (§7.1), so the coin toss was only ever on the no-flag path |
-| 26 | The git diff is its own live widget, not a second language inside the code sample, and it is drawn only out of rows the sample did not need | The sample's job is to spend the zig lexer's whole vocabulary (§8); a diff has no lexer, so folding one in would cost the sample half of what it demonstrates. Standing alone it spends the two slots nothing else could — the red and green — and it fills spare rows rather than taking them: the sample is the widget the editor exists to show, and a frame too short for both is exactly the frame that was there before the diff existed |
+| 26 | A Ghostty save is exported as that theme's own file whenever the config is organised by theme; the invariant is *a theme's colours never land in a file that belongs to another theme*, and `--ghostty-in-place` cannot break it. A `theme =` naming a file that is missing is a broken chain, so a save repairs it by exporting that theme | Decision 22 assumed the in-place path was name-blind but harmless. It is neither: with `theme = Nightspice` in the config, saving theme `test` wrote `test`'s colours into `themes/Nightspice`, so the terminal changed and the theme's name became a lie, and the next save of the real Nightspice overwrote it. The one line a `theme =` swap moves is visible, reversible and reported; silently re-badging somebody else's theme file is not. Where the colours are inline or in an include there is no theme name in play, so the edit stays in place and nobody's layout changes. The dangling case follows from the same reasoning: a pointer to a file that is not there is not a colourless config, it is a config in the state Ghostty itself calls an error |
+| 27 | A push that succeeded ends with the terminal reloading its config, and opening a theme in the picker is a save — so choosing a theme is choosing it for the terminal too | A push that has to be followed by a keypress is a half-finished action: the user asked for the colours to change, and the report saying "now press ctrl+shift+," is huebox telling them to finish its work. The reload is last, best effort and never load-bearing, and each terminal is asked through the interface it actually has (ghostty: the `SIGUSR2` its own application handles; kitty: `kitty @ load-config`), so there is nothing to configure. Opening a theme in the picker already writes `state.toml` — "opening is choosing" (§13.4) — so the push belongs in the same gesture; a theme you picked and then had to press `Ctrl+S` for was a half-picked theme |
+| 28 | The git diff is its own live widget, not a second language inside the code sample, and it is drawn only out of rows the sample did not need | The sample's job is to spend the zig lexer's whole vocabulary (§8); a diff has no lexer, so folding one in would cost the sample half of what it demonstrates. Standing alone it spends the two slots nothing else could — the red and green — and it fills spare rows rather than taking them: the sample is the widget the editor exists to show, and a frame too short for both is exactly the frame that was there before the diff existed |
 
 ---
 
@@ -561,15 +571,26 @@ plus exit 1, never a rolled-back truth.
 - Keys absent from the target config are updated-if-present; missing keys are
   reported as "not carried by this config". Push never inserts keys — that
   would break the line-level contract (open question 1).
-- Phase 1 pushes through the resolved path: inline config, include, or the
-  Ghostty `theme =` file — wherever the colours live today.
-- Phase 2, Ghostty only: emit a native `~/.config/ghostty/themes/<name>`
-  (same flat syntax, same writer) and point the main config at it — replace
-  the `theme =` value or append the line. Other theme files are left
-  untouched. **Opt-in** (`--ghostty-native`, decision 22): phase 1 stays the
-  default because the pointer rewrites a line of the user's *main* config —
-  a layout choice, not a colour, and one nobody asked for by asking to push
-  a theme.
+- The **in-place write** pushes through the resolved path — inline config,
+  include, or a Ghostty `theme =` file — splicing the 22 slots with that
+  format's own line-level writer.
+- The **export**, Ghostty only: emit `~/.config/ghostty/themes/<name>` (same
+  flat syntax, same writer) and point the main config at it — replace the
+  `theme =` value or append the line. Other theme files are left untouched.
+- **Which of the two a Ghostty save uses is the config's own answer**
+  (decision 26). When the config is organised by theme — its `theme =` line
+  names the file the colours live in — the save is exported under the theme's
+  own name and the pointer is repointed, because a theme's colours in
+  another theme's file is the one write huebox must never make. When the
+  colours are inline or in an include, no theme name is in play, so they are
+  edited where they are and the config's layout is left alone.
+- `--ghostty-native` forces the export even where the colours are inline
+  (adding the pointer), `--ghostty-in-place` forces the edit, and the two
+  together are refused as contradictory. Neither flag changes the
+  invariant: a refused crossing is a report and exit 1, the truth file
+  still stands, and the other themes' files are untouched.
+- kitty and Alacritty have no theme-file indirection, so they are always
+  pushed in place.
 
 As built: a push returns report lines, not an exit code, and the caller
 routes them. The editor prints them on stderr after the session (never
@@ -579,7 +600,37 @@ target failed. A push never rolls the truth file back, so a failed push
 leaves a saved theme and a failing exit code — fix the target and press
 `Ctrl+S` again.
 
-Phase 2 as built (`--ghostty-native`):
+**The reload.** A push that succeeded asks each terminal it reached to
+re-read its config, so a save ends with the terminal already showing the
+colours (decision 27). It is the last step, it is best effort, and it can
+never fail a save: the bytes are on disk before it is attempted.
+
+- **`reload_terminal(fmt)`** returns the report line, or `""` for a
+  terminal that cannot be told. Ghostty has no CLI reload action in 1.3
+  (`+reload_config` is a *keybind* action and the desktop file offers only
+  `new-window`), so it is asked with the signal its own application
+  handles: `ghostty_app_pid()` walks `/proc` for a process named `ghostty`
+  whose command line carries `--gtk-single-instance` — the application,
+  which owns the handler and tells its surfaces — and that process gets
+  `SIGUSR2`, the same re-read `ctrl+shift+,` performs. A build with
+  per-window surfaces is safe: they are not signalled. kitty is asked
+  through its own remote control, `kitty @ load-config`, with all three
+  streams on `DEVNULL` (a reload that stole a keystroke or printed into
+  the editor's frame would be worse than no reload) and a five second
+  timeout.
+- **A terminal that cannot be told** — a format with no interface, a
+  process that is not running, a signal that lands nowhere, a command that
+  is not installed or exits non-zero — returns `""` and the report keeps
+  the advice line (`reload your terminal to see it`). The formats that
+  *were* reloaded come back in `PushResult.reloaded`, which is how the
+  caller knows whether to add that advice at all; a target that failed is
+  not in `pushed` and so is never reloaded.
+- **`--no-reload`** turns the whole step off, and `push(reload=…)`
+  defaults to off so a programmatic call never reaches for a signal or a
+  subprocess nobody asked about. Only a command line that leaves the flag
+  alone reloads.
+
+The export as built:
 
 - **`export_ghostty_native(name, slots)`** writes
   `$XDG_CONFIG_HOME/ghostty/themes/<name>` — all 22 slots, palette-then-named,
@@ -603,28 +654,64 @@ Phase 2 as built (`--ghostty-native`):
   config with no colours of its own is still a legitimate target; a config
   with no colours *anywhere* in its chain is still refused (§7.3), and so is
   a machine with no Ghostty config to point at.
-- **Scope**: the flag is ghostty-scoped. `--to ghostty,kitty` exports for
-  ghostty and pushes kitty the ordinary way; `--no-push` with the flag is
-  refused before anything is written; a native push with no theme name (a
-  legacy direct session) writes the config and says so in a post-session
-  note. The export is a whole file of ours, so there is no "not carried by
-  this config" report on that path — all 22 keys are there by construction.
+- **Which path is taken** is `ghostty_theme_name(main)` against the file in
+  front of the push: the colours belong to a theme when that file is the
+  theme the pointer names — the usual case, since `resolve()` follows the
+  pointer — or the config that carries the pointer, which is what `--config`
+  on a main config hands back verbatim (§7.1) even though its colours are
+  behind the pointer. No name to export under (a legacy direct session) or
+  no pointer at all means the in-place write, which is what those sessions
+  did anyway.
+- **Nothing is deleted to make room for a theme.** A main config that
+  carried colours of its own keeps them, and because the pointer is
+  appended at the end the theme file is the last word on colours for as
+  long as it is there; the report says those colours are now shadowed, so a
+  colour cannot disappear quietly.
+- **A dangling `theme =` is a target, not a refusal.** When the main
+  config's pointer names a file that is not on disk and the chain has no
+  other colours, a save with a theme name exports that theme and repoints
+  the config: the file did not exist, so nothing is overwritten, and the
+  report says the file was missing. Without a name to export under, or
+  under `--ghostty-in-place`, the push is refused — but it names the
+  missing theme and what would fix it instead of the bare "no colours
+  found". The repair is ghostty's and only for a ghostty target; another
+  format's missing config is still that format's missing config.
+- **Scope**: the export is ghostty-scoped. `--to ghostty,kitty` exports for
+  ghostty and pushes kitty the ordinary way; `--no-push` is honoured with
+  every flag combination, because it asks for no push at all rather than for
+  a contradictory one. The export is a whole file of ours, so there is no
+  "not carried by this config" report on that path — all 22 keys are there
+  by construction.
 - Other theme files are untouched: the one the config pointed at before the
-  push stays exactly as it was. The themes directory itself is shared with
-  Ghostty's own themes, though — an export overwrites any same-name file
-  there (the report says `over an existing file` when it did), and a
-  same-named file is why `valid_name` guards the name before anything is
-  written.
-- **The two modes compose.** After a native push, `resolve()` follows the
-  pointer to the exported file, so an ordinary phase-1 push updates *that*
-  file in place — the two paths never fight over which one wins.
+  push stays exactly as it was, which is the invariant decision 26 is about.
+  The themes directory itself is shared with Ghostty's own themes, though —
+  an export overwrites any same-name file there (the report says
+  `over an existing file` when it did), and a same-named file is why
+  `valid_name` guards the name before anything is written.
+- **The two paths stay one story.** After an export, `resolve()` follows
+  the pointer to the exported file, so a later save of *that* theme is the
+  same export again (its name is the file's name) and a save of any other
+  theme is a new file plus one pointer line. Nothing about a config's
+  history changes which path a save takes — only the pointer does, and the
+  pointer is what huebox keeps correct.
 
 ### 13.7 TUI theme switching
 
 - `t` opens a theme overlay: arrows + Enter to open, `n` for new (name via
   the same prompt trick as `i`), `Esc` back.
+- **Enter is a save, not a peek** (decision 27): opening a theme runs the
+  ordinary save path, so the truth file is written, the theme is pushed and
+  the terminal is reloaded. Opening already wrote `state.toml` (§13.4), so
+  the picker has always meant "this is the theme" — the push is the same
+  gesture finished. The buffer comes up clean, so there is nothing left to
+  press; `Ctrl+S` remains for the buffer's own edits. The status line says
+  what happened (`saved dusk → ghostty`) and the push report lands after
+  the session like any other.
 - `N` in the editor saves the buffer as a new theme (prompts a name) — the
   way out of legacy direct-config sessions.
+- `n` in the picker makes a theme from the buffer and adopts it, and does
+  *not* save: creating is not choosing (decision 20's shape), and the
+  picker stays open on the new row.
 - Switching while dirty is blocked: status reads
   `save (Ctrl+S) or revert (r) first`. No silent loss, no modal.
 - The status bar shows `<theme> <fmt>` (or `direct:<path>` in legacy
@@ -679,11 +766,15 @@ As built:
    — **report-only so far** (decision 18): the config tells huebox which
    keys it has, and huebox never invents a line. Still open whether a
    future phase should offer to add them.
-2. Ghostty native theme-file export: default or opt-in? — **decided: opt-in**
-   (decision 22, `--ghostty-native`). Phase 1 keeps editing the file the
-   colours already live in; phase 2 writes a theme file and adds a `theme =`
-   line to the user's *main* config, which is a layout decision the user
-   should have to make out loud.
+2. Ghostty native theme-file export: default or opt-in? — **decided: the
+   default wherever the config is organised by theme** (decision 26,
+   superseding decision 22). The in-place path is not name-blind but it is
+   not name-safe: it writes a theme's colours into whichever theme file the
+   config points at. So the export is the default there, in-place stays the
+   default for inline colours and includes, and `--ghostty-in-place` is
+   refused rather than obeyed when it would cross two themes' names. The
+   same reasoning makes a dangling `theme =` a repairable target rather than
+   a refusal.
 3. Exact values of the built-in fallback ramp for `new` with no colours
    found — **decided** (decision 16): the `RAMP` dict in `huebox/themes.py`,
    plan 3.3's values unchanged — background `#101014`, foreground `#e6e6ea`,
