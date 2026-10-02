@@ -218,6 +218,7 @@ class NormalFrame(unittest.TestCase):
         # sample: whole where the frame has a pair to spare, at its floor
         # where it has one, and absent everywhere else
         for cols, rows, code, hunk in ((120, 40, 10, 5), (120, 44, 10, 5),
+                                       (112, 40, 10, 5),
                                        (110, 36, 10, editor.DIFF_FLOOR - 1)):
             with self.subTest(size=(cols, rows)):
                 body = lines(frame(cols, rows))
@@ -282,6 +283,28 @@ class NormalFrame(unittest.TestCase):
         self.assertNotIn(legend, tight)
         for keep in ("palette", "interface", "AaBbCc", "examples", "live code"):
             self.assertTrue(any(keep in line for line in tight), keep)
+
+    def test_the_widget_blocks_are_separated_by_a_row_of_air(self):
+        # §15.6 — the blanks around the hunk are decoration, and decoration
+        # is spent out of what the hunk did not ask for: two spare rows get
+        # air above and below, one gets the blank below it (the last row
+        # given up, after the widget it follows), and the floor gets neither
+        def blanks(cols, rows):
+            body = lines(frame(cols, rows))
+            head = next(i for i, line in enumerate(body)
+                        if "live diff" in line)
+            hunk = body.index(_diff_rows(body)[-1])
+            return (not ANSI.sub("", body[head - 1]).strip(),
+                    not ANSI.sub("", body[hunk + 1]).strip())
+
+        for cols, rows, (above, below) in ((120, 44, (True, True)),
+                                           (120, 40, (True, True)),
+                                           (112, 40, (True, True)),
+                                           (120, 38, (False, True)),
+                                           (120, 36, (False, True)),
+                                           (110, 36, (False, False))):
+            with self.subTest(size=(cols, rows)):
+                self.assertEqual(blanks(cols, rows), (above, below))
 
     def test_a_tall_frame_spends_its_spare_rows_on_the_diff(self):
         # the other end of the same ladder: decoration stays, and what the

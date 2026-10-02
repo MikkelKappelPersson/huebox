@@ -258,7 +258,7 @@ class Examples(unittest.TestCase):
         # the rest of the sentence stays on the theme background
         self.assertIn(f"{bg('#101014')}{fg('#e6e6ea')} brown fox", row)
 
-    def test_the_row_fill_is_the_demonstrated_colour_not_missing(self):
+    def test_the_row_fill_is_the_background_not_missing(self):
         # the fill is a resolved value: looking it up again as a slot name
         # would pad every row with the MISSING grey
         slots = {name: "#3f7a3f" for name in huebox.SLOTS}
@@ -267,10 +267,31 @@ class Examples(unittest.TestCase):
                       "selection-foreground": "#f0f0f8",
                       "cursor-color": "#e6e6ea", "cursor-text": "#101014"})
         rows = self.rows(slots, 100)
-        self.assertNotIn(huebox.MISSING, self.plain(rows[0]))
-        self.assertIn(bg("#101014"), rows[0])              # background row
-        self.assertIn(bg("#2a2a34"), rows[1])              # selection row
-        self.assertIn(bg("#101014"), rows[2])              # cursor row tail
+        for row in rows:
+            self.assertNotIn(huebox.MISSING, self.plain(row))
+        # §14.1 — what is left of a row is padded in the buffer's
+        # background: the fill is the row filling the width it was given,
+        # not the demonstrated colour bleeding past the sample
+        pad = 100 - (PAIR_WIDTH + 3) - len(EXAMPLE_PHRASE)
+        for row in rows:
+            self.assertTrue(row.endswith(f"{bg('#101014')}{' ' * pad}{RESET}"),
+                            row[-40:])
+
+    def test_the_selection_run_stops_at_the_last_selected_word(self):
+        # a demonstrated colour is exactly the span that demonstrates it:
+        # the selected run ends with the words, and the rest of the
+        # sentence — and of the frame — is background, so nothing reads as
+        # selected past the text
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        slots.update({"background": "#101014", "foreground": "#e6e6ea",
+                      "selection-background": "#2a2a34",
+                      "selection-foreground": "#f0f0f8",
+                      "cursor-color": "#e6e6ea", "cursor-text": "#101014"})
+        row = self.rows(slots, 100)[1]
+        self.assertEqual(row.count(bg("#2a2a34")), 1)      # the run alone
+        after = row[row.index(SELECTED_TEXT) + len(SELECTED_TEXT):]
+        self.assertNotIn(bg("#2a2a34"), after)
+        self.assertIn(bg("#101014"), after)         # the tail, then the fill
 
     def test_one_slot_change_moves_its_row(self):
         # §14.1 — nothing is cached between calls: the rows that own a slot

@@ -388,11 +388,18 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             # cut frame loses pairs and never shows half of one
             rows_left = min(DIFF_ROWS - 1, max(0, spare_rows - 1))
             rows_left -= (rows_left - 1) % 2
+            # §15 — the blanks that separate the widget blocks are
+            # decoration, and decoration is spent out of what the hunk did
+            # not ask for: one row of air above it, one below it, and never
+            # a hunk row to buy either
+            lead = 1 if spare_rows - rows_left - 1 >= 2 else 0
             if rows_left >= DIFF_FLOOR - 1:
+                if lead:
+                    extra.append("")
                 diff = [f"  {BOLD}live diff{RESET} "
                         f"{DIM}(git-style: + added, - removed){RESET}"]
                 diff.extend(diff_lines(slots, cols - 2)[:rows_left])
-                if spare_rows - rows_left - 1 >= 2:   # rows to spare
+                if spare_rows - lead - rows_left - 1 >= 1:   # a row to spare
                     diff.append("")   # the separator is a row of its own
             extra.extend(diff)      # the hunk draws above the sample
             extra.append(f"  {BOLD}live code{RESET} "

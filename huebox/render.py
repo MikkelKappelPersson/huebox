@@ -237,31 +237,37 @@ def example_lines(slots, cols=None):
     names; a narrow one keeps the plain slot name so the sentence still has
     room to show anything (`PAIR_MIN_COLS`).
     `cols` is the width the caller can spend (optional): the sample text
-    folds to fit through `pack`, the row is finally `clip`ped, so the
-    strip never overflows or wraps badly.
+    folds to fit through `pack`, the row is finally `clip`ped, and the
+    strip never overflows or wraps badly. What is left of each row is
+    padded in the buffer's `background` — the fill is a resolved value,
+    not a slot name, so a missing slot paints MISSING *in place* and never
+    by accident — and the demonstrated colour is exactly the span that
+    demonstrates it: `selection-background` covers the selected words and
+    nothing past them.
     """
     def value(name):
         return slots.get(name, MISSING)
 
-    # (short label, (bg slot, fg slot), fill colour, [(text, bg, fg)])
-    # the fill is a resolved value, not a slot name: it paints the rest of
-    # the row in the colour that row demonstrates (§14.1)
+    # the rest of every row is padded in the buffer's background, never in
+    # the colour the row demonstrates: a demonstrated colour ends where its
+    # own span does, so a selection run stops at the last selected word
+    # instead of running on to the edge of the frame as if it were selected
+    fill = value("background")
+
+    # (short label, (bg slot, fg slot), [(text, bg, fg)])
     rows = [
         ("background", ("background", "foreground"),
-         value("background"),
          [(EXAMPLE_PHRASE, "background", "foreground")]),
         # a selected run of words, in selection-foreground on the
         # selection background, sitting in the sentence like a real one
         ("selection-background",
          ("selection-background", "selection-foreground"),
-         value("selection-background"),
          [(SEL_HEAD, "background", "foreground"),
           (SELECTED_TEXT, "selection-background", "selection-foreground"),
           (SEL_TAIL, "background", "foreground")]),
         # the cursor covers one character and carries it in cursor-text on
         # cursor-color — a block cursor drawn the way the terminal draws it
         ("cursor-color", ("cursor-color", "cursor-text"),
-         value("background"),
          [(CUR_HEAD, "background", "foreground"),
           (CURSOR_CHAR, "cursor-color", "cursor-text"),
           (CUR_TAIL, "background", "foreground")]),
@@ -269,7 +275,7 @@ def example_lines(slots, cols=None):
     pairs = cols is None or cols >= PAIR_MIN_COLS
     label_width = PAIR_WIDTH if pairs else LABEL_WIDTH
     out = []
-    for name, pair, fill, segments in rows:
+    for name, pair, segments in rows:
         label = pair_label(*pair) if pairs else name
         head = f"  {label:<{label_width}} "
         room = None if cols is None else cols - len(head)

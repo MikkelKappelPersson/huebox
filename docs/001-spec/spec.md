@@ -817,9 +817,14 @@ Each row updates per keystroke. Below `PAIR_MIN_COLS` (58 columns: two of
 padding, the 31-column label, a phrase worth showing) the rows fall back to
 the plain slot name — the sentence gets those columns back, because a label
 that crowds out the sample demonstrates nothing. The rest of each row is
-padded in the colour that row demonstrates (background,
-selection-background, background), never in a placeholder: a missing slot
-renders as `MISSING` grey *in place*, and nothing paints MISSING by accident.
+padded in the buffer's `background`, never in a placeholder and never in the
+colour the row demonstrates: a missing slot renders as `MISSING` grey *in
+place*, and nothing paints MISSING by accident. **The demonstrated colour is
+exactly the span that demonstrates it** — `selection-background` covers the
+selected words and stops at the last one, where padding the row out to the
+edge of the frame in that colour would read as a selection running on past
+the text. The three rows are one sentence drawn three times, each with one
+span emphasised; that is the whole comparison.
 
 ### 14.2 Save, quit, undo
 
@@ -954,7 +959,13 @@ are what flex inside it. The order is the contract, not the sizes:
    the closing brace. In a short frame a row that shows nothing is the most
    expensive row there is.
 6. **The blank after a block is the last row given up**, after the widget it
-   follows.
+   follows. The blanks that separate the widget blocks — the one above the
+   hunk and the one under it — are decoration in the same sense: the hunk is
+   drawn first, out of what the sample did not need, and only the rows it
+   left over become air. So a hunk with two spare rows gets both, one spare
+   row gets the blank below it (the row nearest the widget it follows is the
+   last one given up), and a hunk that fills its budget gets neither. No
+   blank is ever bought with a diff row.
 7. **Below the floors the widgets go**, and the frame is the palette grid, the
    interface rows, the selected readout and the hints. A tall frame is never
    padded out to `rows`.
