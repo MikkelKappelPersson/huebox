@@ -21,8 +21,8 @@ from typing import NamedTuple
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
 from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
-                     diff_lines, example_lines, fg, hint_line, hsv_readout,
-                     sample_lines, title, visible, wordmark)
+                     diff_lines, example_lines, fg, hint_line, hsv_numbers,
+                     hsv_readout, sample_lines, title, visible, wordmark)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
                   term_size)
 
@@ -345,8 +345,20 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     subject = ("  " + title("selected", slots)
                + "  " + chrome(key, "foreground", slots)
                + "  " + chrome(value, CHROME_MUTED, slots) + "   ")
-    body.append(subject + hsv_readout(slots, value, cols - visible(subject)))
-    body.append(f"    {fg(value)}AaBbCc 0123 {RESET}")
+    # §8.3 — the reading of the slot's own colour comes in two parts: the
+    # bars, which are the glance, on this row, and the exact numbers — `hue
+    # 207.0  sat 59.4%  val 93.7%`, which are the truth and cost a degree
+    # and a percent of rounding — on the specimen row below. The bars draw
+    # only when the row below can carry the numbers, so the reading is never
+    # on screen twice and never jumps between the two rows as the terminal
+    # narrows. Neither part costs a row (§15).
+    exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+    specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
+    under = len(exact) + 3 <= cols - visible(specimen)
+    body.append(subject + hsv_readout(slots, value, cols - visible(subject),
+                                      numbers=not under))
+    body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
+                            if under else ""))
     body.append("")
 
     # §8.1 — the hints are `(key, what)` pairs: the key is the bright half,

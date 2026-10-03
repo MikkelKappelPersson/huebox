@@ -316,6 +316,16 @@ class HsvReadout(unittest.TestCase):
             bar = flat[start:start + width]
             self.assertEqual(len({cell[0] for cell in bar[:3]}), 1)
 
+    def test_a_caller_that_spells_it_elsewhere_gets_bars_or_nothing(self):
+        # `numbers=False`: the frame puts the exact reading on the row below
+        # and does not want it twice (§8.3)
+        self.assertNotEqual(hsv_readout(self.SLOTS, "#61afef", self.WIDE,
+                                        numbers=False), "")
+        self.assertEqual(hsv_readout(self.SLOTS, "#61afef", 33,
+                                     numbers=False), "")
+        self.assertEqual(hsv_readout(self.SLOTS, "#61afef", self.WIDE),
+                         hsv_readout(self.SLOTS, "#61afef", self.WIDE))
+
     def test_the_ladder_and_never_a_rung_cut_after_the_fact(self):
         self.assertEqual(
             len(self.cells(hsv_readout(self.SLOTS, "#61afef", self.WIDE))),

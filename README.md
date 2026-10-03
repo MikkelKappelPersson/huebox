@@ -134,8 +134,11 @@ saturation and value, saturation and value likewise — with the value printed
 in the middle of its own bar, because the middle cell *is* the value. Press
 `q` and the wheel slides under a number that does not move; press `a`/`s` and
 the saturation window slides too, black on white or white on black as the
-cell underneath needs. Where the terminal is too narrow for the bars, the
-same reading is spelled out (`hue 207.0  sat 59.4%  val 93.7%`). Quit with
+cell underneath needs. The exact reading — `hue 207.0  sat 59.4%  val 93.7%`,
+to the precision you are actually steering with — sits on the row below,
+beside the specimen; the bars are the glance, the numbers are the truth, and
+neither gives up a row for the other. On a terminal too narrow for the bars,
+only the numbers are left. Quit with
 unsaved changes and huebox asks for a second `Esc` first; `r` throws the
 buffer away and goes back to your last save.
 

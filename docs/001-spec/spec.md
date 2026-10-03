@@ -451,13 +451,21 @@ showing under the label that follows it.
 
 The row keeps a ladder, because the row is one row and §15's budget is a
 contract. `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the
-columns, `HSV_COMPACT` (11, 7, 7) where it has nearly enough, the numbers the
-bars replace — `hue 207.0  sat 59.4%  val 93.7%` — where even the compact bars
-do not fit, and no reading at all where the row cannot hold one whole: a
-cut-off number is worse than none, and the hex above it is the value anyway.
-The ladder is measured on the strings this slot produces, so a rung is never
-chosen and then clipped. Nothing here costs a row: the readout replaces a
-string on a row the frame already drew.
+columns, `HSV_COMPACT` (11, 7, 7) where it has nearly enough, and nothing
+where even the compact bars do not fit. The ladder is measured on the strings
+this slot produces, so a rung is never chosen and then clipped. Nothing here
+costs a row: the readout replaces a string on a row the frame already drew.
+
+**The exact reading has its own line, under the bars.** A bar's in-cell value
+is rounded to a degree and a percent, which is the wrong precision for a
+frame you are steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%`
+sits on the specimen row below, in the same muted the labels wear. The two
+readings answer different questions and neither gives up a row for the other:
+the bars are the glance, the numbers are the truth. The bars are drawn only
+while the row below can carry the numbers, so the reading is never on screen
+twice and never moves from one row to the other as the terminal narrows; when
+the row below can no longer hold them the numbers go too, and what is left is
+the hex — which is the value either way.
 
 ## 9. Non-functional requirements
 

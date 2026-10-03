@@ -555,3 +555,28 @@ colour in the hex above it.
 Saturation and value clamp rather than wrap. `#101010` has no saturation to
 speak of, and its window's near end repeats the same cell four times; that is
 the truth of the axis, and inventing colours below zero would not be.
+
+## P12 — both readings: the bars and the exact line (spec §8.3)
+
+- [x] `editor.py`: the exact reading moves to the specimen row below the bars,
+      in the muted the labels wear
+- [x] the bars draw only while the row below can carry the numbers
+      (`hsv_readout(..., numbers=False)`), so the reading is never on screen
+      twice and never jumps between the two rows as the terminal narrows
+- [x] the numbers yield last: below ~50 columns nothing but the hex is left,
+      which is the value either way (§8.3)
+- [x] tests: `numbers=False` in `tests/test_render.py`; `Readout` in
+      `tests/test_editor.py` with both thresholds computed from the constants
+- [x] spec §8.3, README
+
+Notes: the two readings answer different questions and neither should win.
+The bars are a glance — where am I on the wheel — and the numbers are the
+precision you steer with; a bar's in-cell value is rounded to a degree and a
+percent, which is the wrong precision for the person holding `q`.
+
+The one rule that keeps them from fighting is the *condition*: the bars draw
+only while the row below can hold the numbers. Without it a resize could
+print the reading on both rows, or move it from one to the other as the
+terminal narrowed — which reads as a bug even though each frame was right.
+Both thresholds are computed from the strings in the test rather than
+remembered (74 columns for the compact bars, 50 for the numbers).

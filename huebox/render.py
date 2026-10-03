@@ -257,7 +257,7 @@ def _chip(slots, colour, reading, span, width, text, wrap=False) -> str:
 
     The text is drawn cell by cell in `readable_fg` of the cell underneath —
     black or white, whichever stays legible — which is the rule the palette
-    cells\' own labels follow and the reason a value can sit straight on a
+    cells' own labels follow and the reason a value can sit straight on a
     gradient with no box around it. Nothing here paints a foreground of its
     own: every cell answers from the value, so the chip is legible on any
     theme, including the one whose colours are all the same.
@@ -271,8 +271,8 @@ def _chip(slots, colour, reading, span, width, text, wrap=False) -> str:
         for i, cell in enumerate(cells))
 
 
-def hsv_readout(slots, value: str, cols: int) -> str:
-    """The slot\'s hue, saturation and value: bars, or the numbers (§8.3).
+def hsv_readout(slots, value: str, cols: int, numbers: bool = True) -> str:
+    """The slot's hue, saturation and value: bars, or the numbers (§8.3).
 
     Pure like every widget here: every cell of every bar is computed from
     `value` and every colour of chrome from `slots`, on the call, so one
@@ -282,13 +282,19 @@ def hsv_readout(slots, value: str, cols: int) -> str:
     numbers — never a rung chosen and then cut. Nothing here is ever wider
     than `cols`, and the row that carries it is a row the frame already
     spends (§15).
+
+    `numbers=False` asks for the bars or nothing. A caller that spells the
+    reading out elsewhere — the exact line under the bars — does not want it
+    here too, and the frame is the one place that knows which row is which.
     """
     hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
-    numbers = hsv_numbers(hue, sat, val)
+    spelled = hsv_numbers(hue, sat, val)
     width = next((sizes for sizes in (HSV_FULL, HSV_COMPACT)
                   if cols >= HSV_LABELS + sum(sizes)), None)
     if width is None:
-        return numbers if cols >= len(numbers) else ""
+        if not numbers or cols < len(spelled):
+            return ""
+        return spelled
     axes = (("hue", hue, width[0], HSV_HUE_SPAN / 360, True,
              f"{hue * 360:.0f}°", lambda t: hsv_to_rgb(t, sat, val)),
             ("sat", sat, width[1], HSV_AXIS_SPAN, False,

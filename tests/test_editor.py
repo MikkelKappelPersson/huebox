@@ -14,9 +14,11 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
-from huebox.color import NAMED, SLOTS, hex_to_rgb  # noqa: E402
+from huebox.color import (NAMED, SLOTS, hex_to_rgb,  # noqa: E402
+                         rgb_to_hsv)
 from huebox.render import (BOLD, ESCAPE_END, HSV_COMPACT,  # noqa: E402
-                           HSV_FULL, HSV_LABELS, RESET, bg, fg, visible)
+                           HSV_FULL, HSV_LABELS, RESET, bg, fg, hsv_numbers,
+                           visible)
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -224,6 +226,13 @@ class Readout(unittest.TestCase):
     SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
                  **{"palette-4": "#61afef"})
     WIDE, COMPACT = HSV_LABELS + sum(HSV_FULL), HSV_LABELS + sum(HSV_COMPACT)
+    # the narrowest row that can still carry each part, computed from the
+    # strings rather than remembered: the subject on one, the specimen on
+    # the other (§8.3)
+    SUBJECT = len("  selected  palette-4  #61afef   ")
+    SPECIMEN = len("    AaBbCc 0123 ")
+    BARS = SUBJECT + COMPACT
+    EXACT = SPECIMEN + len(hsv_numbers(207 / 360, 0.594, 0.937)) + 3
 
     def selected(self, cols, rows=30, sel=4, slots=None, painted=False):
         body = lines(frame(cols, rows, sel=sel, slots=slots or self.SLOTS))
@@ -237,24 +246,59 @@ class Readout(unittest.TestCase):
                           r"\x1b\[38;2;(\d+);(\d+);(\d+)m(.)",
                           self.selected(cols, slots=slots, painted=True))
 
-    def test_a_wide_row_wears_its_values_and_a_narrow_one_spells_them(self):
+    def specimen(self, cols, rows=30, slots=None, painted=False):
+        row = next(line for line in lines(frame(cols, rows, sel=4,
+                                               slots=slots or self.SLOTS))
+                   if "AaBbCc" in plain(line))
+        return row if painted else plain(row)
+
+    def exact(self, value="#61afef"):
+        return hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+
+    def specimen(self, cols, rows=30, slots=None, painted=False):
+        row = next(line for line in lines(frame(cols, rows, sel=4,
+                                               slots=slots or self.SLOTS))
+                   if "AaBbCc" in plain(line))
+        return row if painted else plain(row)
+
+    def exact(self, value="#61afef"):
+        """The reading as the frame spells it out, below the bars."""
+        return hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+
+    def test_both_readings_are_on_screen_where_the_row_fits(self):
+        # the bars are the glance, the exact numbers are the truth, and
+        # neither of them gives up a row for the other (§8.3)
         wide = self.selected(100)
-        self.assertIn("hue", wide)
-        self.assertIn("sat", wide)
-        self.assertIn("val", wide)
         for value in ("207°", "59%", "94%"):
-            self.assertIn(value, wide)          # inside the bars, not after
-        compact = self.selected(80)
-        self.assertIn("207°", compact)          # smaller bars, same values
-        self.assertIn("hue 207.0", self.selected(70))
-        # too narrow for a whole reading: the hex is the value (§8.3)
-        self.assertNotIn("hue", self.selected(60))
+            self.assertIn(value, wide)              # in the bars
+        self.assertIn("hue", wide)
+        self.assertIn(self.exact(), self.specimen(100))
+        self.assertNotIn(self.exact(), wide)
+
+    def test_the_two_readings_appear_and_yield_in_their_own_time(self):
+        # the numbers never move row: they are under the bars when the bars
+        # are there, and under a bare subject when they are not
+        for cols, bars in ((120, True), (100, True), (90, True), (82, True),
+                           (80, True), (self.BARS, True),
+                           (self.BARS - 1, False), (self.EXACT, False),
+                           (self.EXACT - 1, False)):
+            with self.subTest(size=(cols, 30)):
+                self.assertEqual("207°" in self.selected(cols), bars)
+                self.assertEqual(self.exact() in self.specimen(cols),
+                                 cols >= self.EXACT)
+
+    def test_the_reading_is_never_on_screen_twice(self):
+        for cols in (120, 100, 90, 80, 74, 70, 60, 50):
+            with self.subTest(size=(cols, 30)):
+                body = "".join(plain_rows(frame(cols, 30, sel=4,
+                                                slots=self.SLOTS)))
+                self.assertEqual(body.count(self.exact()), 1)
 
     def test_the_bars_start_where_the_row_has_room_for_them(self):
         # the ladder is measured on the row, so the subject — name and hex —
         # is never the thing that gets cut
         for cols, room in ((120, self.WIDE), (100, self.WIDE),
-                           (80, self.COMPACT), (70, 0)):
+                           (80, self.COMPACT), (70, 0)):  # noqa: E501
             with self.subTest(size=(cols, 30)):
                 text = self.selected(cols)
                 self.assertLessEqual(visible(text), cols)
