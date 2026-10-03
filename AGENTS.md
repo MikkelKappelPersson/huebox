@@ -23,13 +23,13 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads and the pointer writer, `config_holds_colours`, `resolve()` | §7 |
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
-| `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
-| `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
+| `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode | §15 |
+| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session`; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
 | `huebox/app.py` | the Textual shell: the frame as one widget over `render`'s rows, keys, resize | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
-`formats` and `tui` import `color` only; `detect` imports `formats`;
+`formats` imports `color` only, and `tui` imports nothing intra-package; `detect` imports `formats`;
 `themes` imports `color` + `formats` + `detect` (push resolves its target
 through the same `resolve()` the CLI does, and the native export asks
 `detect` for the config holding the `theme =` line); `render` imports
@@ -50,9 +50,20 @@ not that either matched what huebox used to do. Take the buffer as a file
 world through four callables `cli.py` builds: the save callback
 (`write(theme, path, slots)` — handed the subject every time, because a
 picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one
-raw-mode prompt pattern, §4.3), and the `Library` object (list / load /
-create) that backs the theme picker (§13.7). Never import `themes` or
-`detect` into `editor` to save a parameter.
+prompt pattern, §4.3, which the shell satisfies by handing the terminal back
+with `App.suspend()` so the call stays synchronous), and the `Library` object
+(list / load / create) that backs the theme picker (§13.7). Never import
+`themes` or `detect` into `editor` to save a parameter.
+
+**`cli` names its session, and imports the shell late.** `_run_editor` takes a
+`driver` defaulting to `app.run`, which is what lets a test drive a session
+without a compositor (`tests/session.py`) and keeps `_run_editor` about the
+writer and the picker rather than about Textual. The `app` import is inside the
+function: eager, every huebox invocation — `show`, `list`, `--dump` — paid
+Textual's import and the suite got 4x slower on one module, which is how it was
+found. Order in that function matters twice over: the tty test, then the
+`REQUIRES` test, then the import, so a piped session and a missing extra each
+get the line that is actually about them.
 
 ## Guidelines
 

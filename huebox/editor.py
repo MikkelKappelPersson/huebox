@@ -1,5 +1,13 @@
-"""The interactive editor: draw loop, keys, picker, staged buffer
+"""The editing session: buffer, key surface, picker, and what it saves
 (§4.3, §13.7, §14).
+
+This is huebox's behaviour, not its terminal. `EditorState` holds the buffer,
+`apply_key` is the whole key surface, `draw_editor` is the frame, and the
+module's job is to keep them answerable without a terminal attached — which is
+what let 400-odd tests drive a session by feeding it a key list, and what lets
+the Textual shell (`app.py`) be the editor rather than a second implementation
+of it. The migration deleted `edit()`, the raw-mode loop that used to tie all
+three to a real tty; nothing about the behaviour went with it.
 
 Keystrokes mutate an in-memory buffer; nothing reaches disk until Ctrl+S
 (§14.2). The writer is injected by cli so this module never touches the
@@ -14,7 +22,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import sys
 from typing import NamedTuple
 
@@ -22,22 +29,19 @@ from typing import NamedTuple
 #: the session opens so a missing extra is an error line and an exit 1 rather
 #: than a traceback (AGENTS.md).
 #:
-#: Empty while the editor is the stdlib one. The Textual migration's phase 2
-#: makes `huebox/app.py` the editor, so `huebox edit` now needs Textual — but
-#: `cli` still opens `editor.edit`, the stdlib session, until phase 3 hands it
-#: the app. Setting the name here would break `huebox edit` for everyone who
-#: has not installed the extra, for a module the command does not yet use.
-#: Phase 3 sets this, and the deletion of `cli`'s `edit` path is the same
-#: commit, so the two cannot disagree about what `huebox edit` runs.
+#: The editor is `app.py`, so `huebox edit` needs Textual and says so with one
+#: stderr line rather than an ImportError. Naming an extra here is never
+#: speculative: `cli` reads this list, and the commit that adds a name is the
+#: one that makes the command use the module needing it.
 REQUIRES: tuple = ("textual",)
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
-from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
+from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,
+                     bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_numbers,
                      hsv_readout, sample_lines, title, visible, wordmark)
-from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
-                  term_size)
+from .tui import term_size
 
 ADJUST = {
     "q": ("h", -1), "w": ("h", +1),
@@ -851,113 +855,3 @@ def apply_key(key, st):
         _adjust(st, key)
     elif key in ("i", "X"):
         _prompt(st)
-
-
-def edit(fmt, path, slots, write, backup=True, theme=None, report=None,
-         library=None, notes=None):
-    """Run one editor session: staged buffer, save on Ctrl+S (§14.2).
-
-    `write` is the session's one save path, called as
-    `write(theme_name_or_None, path, values)`. The name is in the call
-    because the picker can re-target a save mid-session (§13.7): a writer
-    closed over one name would save the wrong file after a switch. The
-    caller's writer is what decides truth-then-push (§13.6) or the v1
-    direct-config write (§13.4).
-
-    `theme` is the subject the session starts with (`None` in the legacy
-    direct mode), `library` the picker's seam onto the theme store,
-    `report` the list a save fills with what its push did and `notes` the
-    list anything else has to say — the picker cannot print inside raw
-    mode, so both are printed after the frame is done (§13.6).
-
-    `backup` is False for files huebox owns (theme files, §13.2 — no .bak
-    there); a terminal-config session snapshots `<path>.huebox.bak` on its
-    first save.
-    """
-    fd = saved = None
-    previous_winch = None
-
-    def prompt_text(label):
-        """The one prompt pattern: drop out of raw mode, read a line, come
-        back in — hex entry (`i`) and every name prompt of §13.7 use it.
-
-        §4.3: the pair is always closed. `finally` re-enters raw mode even
-        when the read raises, so a cancelled prompt (Ctrl+C, EOF) returns
-        to the editor instead of stranding the session with echo on or
-        off; and `edit()`'s finally owns the exit, restoring whatever
-        termios state the *last* `enter_raw` saved.
-        """
-        nonlocal fd, saved
-        exit_raw(fd, saved)
-        sys.stdout.write("\r\033[2J\033[H")
-        try:
-            return input(label).strip()
-        except (EOFError, KeyboardInterrupt):
-            return None          # Ctrl+C inside a prompt cancels the prompt
-        finally:
-            fd, saved = enter_raw()
-
-    st = EditorState(slots, None, prompt_text, path if backup else None,
-                     theme=theme, fmt=fmt, library=library, path=path)
-    st.prompt_name = prompt_text
-    # bound to the state, not to this call's arguments: both the theme and
-    # the path can change while the session runs (§13.7)
-    st.write = lambda values: write(st.theme, st.path, values)
-
-    fd, saved = enter_raw()
-    try:
-        # §15.1 — resize wakes the loop through a flag, not a redraw callback
-        try:
-            previous_winch = signal.signal(signal.SIGWINCH, _on_winch)
-        except (OSError, ValueError, TypeError):
-            pass                      # no winch here; the flag never fires
-        while True:
-            # §15.2 — one geometry per frame, read by the frame and by the
-            # keys: what is drawn and what the arrows step through cannot
-            # disagree, and a resize moves the selection with the layout
-            st.grid = grid_geometry(term_size()[0])
-            draw_editor(st.fmt, session_path(st), st.slots, st.sel, st.undo,
-                        st.status, st.mult, head=head_label(st),
-                        overlay=st.picker_frame(), grid=st.grid)
-            key = read_key(fd)
-            if key == "resize":
-                continue        # no key consumed: the loop just redraws
-            apply_key(key, st)
-            if st.quit:
-                break
-    finally:
-        # §4.3 — the terminal comes back first, and the SIGWINCH handler is
-        # restored even if restoring the terminal itself fails: nothing may
-        # leave the user with a raw shell or a stale handler (review P1)
-        try:
-            exit_raw(fd, saved)
-        finally:
-            if previous_winch is not None:
-                try:
-                    signal.signal(signal.SIGWINCH, previous_winch)
-                except (OSError, ValueError, TypeError):
-                    pass
-
-    if st.written:
-        if st.theme is not None:
-            print(f"  saved theme {st.theme}  {st.path}")
-            print("")
-        else:
-            print(f"  saved {st.path}")
-            if st.backup_made:
-                print(f"  backup of the pre-save state: {st.backup_path}.huebox.bak")
-            print("  reload your terminal to see the change\n")
-    elif st.dirty():
-        print("  nothing saved - the buffer was discarded\n")
-    elif st.created:
-        print(f"  created theme {st.created}  {st.path}")
-        print("  Ctrl+S saves it to the terminal\n")
-    else:
-        print("  no changes\n")
-
-    # §13.6 / §13.7 — the push report and the picker's complaints are
-    # stderr, after the frame is done and never inside the raw-mode loop,
-    # where they would scroll through the editor. The wording is the
-    # caller's: it knows what it pushed and what it could not read.
-    for line in list(report or []) + list(notes or []):
-        print(f"huebox: {line}", file=sys.stderr)

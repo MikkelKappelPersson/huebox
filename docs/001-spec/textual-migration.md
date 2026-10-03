@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–3 (mostly) landed, scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–3 landed, scroll defect fixed, no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -605,9 +605,20 @@ renames.
    report is `editor.report_session` so the wording stayed huebox's.
    `_run_editor` names its `driver`, which is what lets the wiring suites drive
    the session without a compositor.
-   **Left:** `tui.py`'s raw-mode and key-reading half, and `editor.edit`, are now
-   unreachable and still on disk. Deleting them is the rest of this phase and
-   wants its own commit, where the diff is a deletion rather than a move.
+   **Landed (the rest).** `tui.py` is `term_size` and nothing else: `read_key`,
+   `enter_raw`/`exit_raw`, the SIGWINCH flag and the minimum size went with the
+   code that used them, because Textual owns input, resize and raw mode and a
+   second copy would be a second source of truth. `MIN_COLS`/`MIN_ROWS` moved to
+   `render.py`, which keeps the purity that makes §14.1 testable at four sizes
+   without a tty. `editor.edit` — the raw-mode loop — is deleted; its
+   `report_session` half survived as a function so the wording of what a user
+   reads on exit is still huebox's.
+   The suites that drove it use `tests/session.py`, the same loop without the
+   raw-mode half, since a key *list* needs no terminal. `test_editor`'s
+   `RawMode` class is gone: it asserted an `enter_raw`/`exit_raw` pairing that
+   no longer exists, and what replaces it (`TestTerminalHygiene`) asserts the
+   promise that survives — a prompt hands the terminal back and cancels
+   cleanly.
 4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
    mouse changes input, not output.
 5. Phase B: decomposition, one widget per commit, I1 + I2 before each next.

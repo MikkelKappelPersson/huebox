@@ -175,3 +175,79 @@ class TestFrameRowsMatchTheWriter(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@needs_app
+class TerminalHygiene(unittest.TestCase):
+    """§4.3 — the promise the user actually sees, asserted where it now lives.
+
+    The old `RawMode` suite asserted one `enter_raw`/`exit_raw` pair per session,
+    that each prompt closed and reopened it, and that the handler was restored
+    in a `finally`. All of it went with the code that had it. What is left, and
+    what these assert, is the part huebox still owns: that a prompt hands the
+    terminal back so `input()` can work at all, and that cancelling one returns
+    to the editor instead of ending the session.
+    """
+
+    def test_a_prompt_hands_the_terminal_back(self):
+        # `App.suspend()` is what makes `input()` work at all under a
+        # compositor: the app stops reading input and emitting output, and the
+        # terminal is restored to what it was before the app started. Without
+        # it the prompt would type into a frame nobody is listening to.
+        editor = huebox_app.Editor()
+        with mock.patch.object(huebox_app.Editor, "suspend",
+                               mock.MagicMock()) as suspend, \
+                mock.patch("builtins.input", return_value="ff0000"):
+            editor.prompt_text("  new hex: ")
+        suspend.assert_called_once()
+
+    def test_a_cancelled_prompt_returns_none_rather_than_raising(self):
+        for error in (EOFError, KeyboardInterrupt):
+            with self.subTest(error=error.__name__):
+                editor = huebox_app.Editor()
+                with mock.patch.object(huebox_app.Editor, "suspend",
+                                       mock.MagicMock()), \
+                        mock.patch("builtins.input", side_effect=error):
+                    self.assertIsNone(editor.prompt_text("  hex: "))
+
+    def test_a_prompt_returns_what_was_typed(self):
+        editor = huebox_app.Editor()
+        with mock.patch.object(huebox_app.Editor, "suspend",
+                               mock.MagicMock()), \
+                mock.patch("builtins.input", return_value="  #ff0000  "):
+            self.assertEqual(editor.prompt_text("  hex: "), "#ff0000")
+
+
+@needs_app
+class KeyVocabulary(unittest.TestCase):
+    """The only seam between Textual's key names and huebox's.
+
+    `apply_key` was written against huebox's own reader and expects `esc`,
+    `\x03`, `\x13`. Getting this wrong would mean the quit key and the save key
+    silently did nothing — the kind of bug that reads as "the migration broke
+    shortcuts" with nothing in the logs.
+    """
+
+    def test_the_names_textual_speaks_are_the_names_apply_key_wants(self):
+        from huebox import editor
+
+        for textual_name, huebox_name in (("escape", "esc"),
+                                          ("ctrl+c", "\x03"),
+                                          ("ctrl+s", editor.SAVE_KEY)):
+            with self.subTest(key=textual_name):
+                self.assertEqual(huebox_app.translate(textual_name),
+                                 huebox_name)
+                self.assertIn(huebox_name,
+                              editor.QUIT_KEYS + (editor.SAVE_KEY,),
+                              "translate maps to a key apply_key does not "
+                              "handle — a silent no-op keypress")
+
+    def test_an_ordinary_character_passes_through(self):
+        for key in ("q", "w", "u", "f", "i", "N"):
+            self.assertEqual(huebox_app.translate(key), key)
+
+    def test_nothing_is_bound_away_from_apply_key(self):
+
+        self.assertEqual(huebox_app.Editor.BINDINGS, [],
+                         "a Textual binding swallows a key apply_key wants")
+        self.assertFalse(huebox_app.Editor.ENABLE_COMMAND_PALETTE)

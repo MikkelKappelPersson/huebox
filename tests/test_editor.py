@@ -13,6 +13,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
+import session  # noqa: E402
 from huebox import editor  # noqa: E402
 from huebox.color import (NAMED, SLOTS, hex_to_rgb,  # noqa: E402
                          rgb_to_hsv)
@@ -689,16 +690,9 @@ class EditLoop(unittest.TestCase):
         target = path or os.path.join(self.tmp.name, "kitty.conf")
         with open(target, "w", encoding="utf-8") as handle:
             handle.write("# colours\n")
-        with mock.patch.object(editor, "enter_raw", return_value=(7, None)),\
-                mock.patch.object(editor, "exit_raw"),\
-                mock.patch.object(editor, "draw_editor",
-                                  side_effect=note_handler),\
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)),\
-                mock.patch.object(editor, "term_size",
-                                  return_value=(cols or 80, 24)),\
-                mock.patch.object(sys, "stdout", io.StringIO()):
-            editor.edit("kitty", target, dict(slots or FULL_SLOTS), record)
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            session.drive(stream, "kitty", target, dict(slots or FULL_SLOTS),
+                          record, size=((cols or 80), 24), draw=note_handler)
         return writes, draws, handlers, target
 
     def setUp(self):
@@ -706,12 +700,14 @@ class EditLoop(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def test_resize_redraws_without_consuming_a_key_or_writing(self):
-        before = signal.getsignal(signal.SIGWINCH)
-        writes, draws, handlers, _ = self.run_session(["resize", "f", "esc"])
+        # A resize still redraws and still eats no key — the guarantee §15.1
+        # describes. The SIGWINCH handler half of this test went with
+        # `_on_winch`: Textual delivers a `Resize` event and owns the signal, so
+        # asserting huebox installed a handler would assert something the
+        # migration deliberately removed.
+        writes, draws, _handlers, _ = self.run_session(["resize", "f", "esc"])
         self.assertEqual(writes, [])        # §14.2: nothing but Ctrl+S writes
         self.assertEqual(len(draws), 3)      # the resize redrew, ate no key
-        self.assertEqual(handlers, [editor._on_winch] * 3)
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
         self.assertFalse(os.path.exists(
             os.path.join(self.tmp.name, "kitty.conf.huebox.bak")))
 
@@ -1165,18 +1161,13 @@ class ThemeSession(unittest.TestCase):
         writes = []
         stream = iter(keys)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(editor, "enter_raw", return_value=(7, None)),\
-                mock.patch.object(editor, "exit_raw"),\
-                mock.patch.object(editor, "term_size",
-                                  return_value=(100, 30)),\
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)),\
-                mock.patch.object(sys, "stdout", out),\
+        with mock.patch.object(sys, "stdout", out),\
                 mock.patch.object(sys, "stderr", err):
-            editor.edit("ghostty", self.theme, dict(FULL_SLOTS),
-                        lambda name, path, values: writes.append(
-                            (name, path, dict(values))),
-                        backup=False, theme="ember", report=report)
+            session.drive(stream, "ghostty", self.theme, dict(FULL_SLOTS),
+                          lambda name, path, values: writes.append(
+                              (name, path, dict(values))),
+                          backup=False, theme="ember", report=report,
+                          size=(100, 30))
         return writes, out.getvalue(), err.getvalue()
 
     def test_saving_writes_the_truth_file_and_nothing_else(self):
@@ -1663,126 +1654,3 @@ class OverlayFrame(unittest.TestCase):
                 self.assertIn(HINT, out)
                 self.assertNotIn("theme-", out)
                 self.assertNotIn("Enter open", out)
-
-
-class RawMode(unittest.TestCase):
-    """§4.3 — one enter/exit pair per raw session, prompts included.
-
-    The paths that leave raw mode are: the quit (clean or armed), each
-    prompt (hex entry and the picker's name prompts), and any exception out
-    of the loop. Every one of them has to come back to a sane terminal.
-    """
-
-    def run_session(self, keys, answers=(), input_error=None, edit_kwargs=None,
-                    keys_side_effect=None, exit_error=None):
-        events = []
-        entered = []
-
-        def enter_raw():
-            state = (10 + len(entered), f"termios-{len(entered)}")
-            entered.append(state)
-            events.append(("enter", state))
-            return state
-
-        def exit_raw(fd, saved):
-            events.append(("exit", (fd, saved)))
-            if exit_error is not None:
-                raise exit_error
-
-        def fake_input(label):
-            events.append(("prompt", label))
-            if input_error is not None:
-                raise input_error
-            return answers.pop(0) if answers else ""
-
-        stream = iter(keys)
-        with mock.patch.object(editor, "enter_raw", enter_raw), \
-                mock.patch.object(editor, "exit_raw", exit_raw), \
-                mock.patch.object(editor, "draw_editor"), \
-                mock.patch.object(editor, "read_key",
-                                  side_effect=keys_side_effect
-                                  or (lambda fd: next(stream))), \
-                mock.patch("builtins.input", fake_input), \
-                mock.patch.object(sys, "stdout", io.StringIO()), \
-                mock.patch.object(sys, "stderr", io.StringIO()):
-            editor.edit("ghostty", "/tmp/huebox.conf", dict(FULL_SLOTS),
-                        lambda name, path, values: "saved",
-                        **(edit_kwargs or {}))
-        return events
-
-    def pairs(self, events):
-        """Every exit paired with the enter whose state it restores."""
-        out, live = [], None
-        for kind, payload in events:
-            if kind == "enter":
-                live = payload
-            elif kind == "exit":
-                out.append((live, payload))
-                live = None
-        return out
-
-    def test_a_session_without_prompts_enters_once_and_exits_once(self):
-        events = self.run_session(["f", "esc"])
-        self.assertEqual(events, [("enter", (10, "termios-0")),
-                                  ("exit", (10, "termios-0"))])
-
-    def test_a_dirty_quit_exits_the_same_way(self):
-        events = self.run_session(["w", "esc", "esc"])
-        self.assertEqual(len(self.pairs(events)), 1)
-        self.assertEqual(events[-1], ("exit", (10, "termios-0")))
-
-    def test_each_prompt_closes_and_reopens_the_pair(self):
-        library = FakeLibrary().build()
-        events = self.run_session(
-            ["i", "N", "esc"], answers=["#abcdef", "dusk"],
-            edit_kwargs={"theme": "ember", "backup": False,
-                         "library": library})
-        self.assertEqual([kind for kind, _ in events],
-                         ["enter", "exit", "prompt", "enter", "exit", "prompt",
-                          "enter", "exit"])
-        # every exit restores exactly the state its own enter saved
-        self.assertEqual(self.pairs(events),
-                         [((10, "termios-0"), (10, "termios-0")),
-                          ((11, "termios-1"), (11, "termios-1")),
-                          ((12, "termios-2"), (12, "termios-2"))])
-
-    def test_the_closing_exit_uses_the_last_enter_state(self):
-        # the loop's finally restores the termios state of the *current*
-        # raw session, not the one from before a prompt (§4.3)
-        library = FakeLibrary().build()
-        events = self.run_session(
-            ["i", SAVE, "esc"], answers=["#abcdef"],
-            edit_kwargs={"theme": "ember", "backup": False,
-                         "library": library})
-        self.assertEqual(events[-1], ("exit", (11, "termios-1")))
-
-    def test_a_cancelled_prompt_still_closes_the_pair(self):
-        for problem in (EOFError(""), KeyboardInterrupt()):
-            with self.subTest(problem=type(problem).__name__):
-                library = FakeLibrary().build()
-                events = self.run_session(
-                    ["i", "N", "esc"], input_error=problem,
-                    edit_kwargs={"theme": "ember", "backup": False,
-                                 "library": library})
-                self.assertEqual([kind for kind, _ in events],
-                                 ["enter", "exit", "prompt", "enter", "exit",
-                                  "prompt", "enter", "exit"])
-                self.assertEqual(self.pairs(events)[-1],
-                                 ((12, "termios-2"), (12, "termios-2")))
-
-    def test_an_exception_out_of_the_loop_still_exits_raw(self):
-        before = signal.getsignal(signal.SIGWINCH)
-        with self.assertRaises(RuntimeError):
-            self.run_session(["x"], keys_side_effect=["x", RuntimeError("boom")])
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
-
-    def test_the_winch_handler_survives_a_failing_termios_restore(self):
-        # nothing may leave the user with a raw shell *or* a stale handler
-        before = signal.getsignal(signal.SIGWINCH)
-        with self.assertRaises(OSError):
-            self.run_session(["esc"], exit_error=OSError("tty"))
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
