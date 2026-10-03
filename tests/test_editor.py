@@ -44,7 +44,17 @@ def plain(line):
 
 
 def lines(text):
-    return text.split("\r\n")[:-1]        # the frame ends with a newline
+    """The frame's rows.
+
+    The frame ends with a newline only when it does **not** fill the screen:
+    written on the bottom row that newline scrolls the frame away, losing the
+    wordmark row (§4.8 of the migration spec, fixed in `draw_editor`). So the
+    trailing element is dropped when it is empty, not unconditionally.
+    """
+    rows = text.split("\r\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    return rows
 
 
 def plain_rows(text):

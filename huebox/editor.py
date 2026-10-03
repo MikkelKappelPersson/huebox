@@ -454,8 +454,15 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # §8.2 — every row stands on the buffer's own background, so the frame
     # *is* the theme: the floor, the air between widgets and the column after
     # the last hint all read `background` out of the live buffer
+    #
+    # The trailing CRLF is withheld when the frame fills the screen. Written on
+    # the bottom row it scrolls the terminal: the frame loses its top row (at
+    # 80x24 the `huebox` wordmark) and the terminal's own line appears below.
+    # `out` never exceeds `rows`, so `len(out) == rows` is the only scrolling
+    # case; a row short of the bottom makes the newline harmless and it stays,
+    # keeping the cursor off the frame's last line.
     sys.stdout.write("\r\n".join(backdrop(line, slots, cols) for line in out)
-                     + "\r\n")
+                     + ("\r\n" if len(out) < rows else ""))
     sys.stdout.flush()
 
 

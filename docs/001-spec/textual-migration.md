@@ -1,7 +1,7 @@
 # huebox — Textual migration
 
-Status: **phases 0–1 landed, no TODOs open** · Plans spec: `spec.md` §5, §8.2,
-§14.1, §15, §9, §10 · Conventions: `AGENTS.md`
+Status: **phases 0–1 landed, scroll defect fixed, no TODOs open** · Plans spec:
+`spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
 `docs/002-spec/` only when the colour model or the file contract changes in a
@@ -20,9 +20,11 @@ against **8.2.8**, not recalled: the 168 tokens (§6.2), the `get_css_variables`
 override (§6.2), the eight environment variables that can rewrite its output
 (§6.4), the phase-A mechanism reproduced end to end through a real compositor
 and a real VT emulator (§5.5), and the 256-colour degradation confirmed with
-numbers (§4.5). Two findings changed the document: the colour system is read
-from the environment at import time and cannot be corrected in-process, and
-huebox has a pre-existing one-line scroll defect that the harness found (§4.8).
+numbers (§4.5). Three findings changed the document: the colour system is read
+from the environment at import time and cannot be corrected in-process; huebox
+had a pre-existing one-line scroll defect that cost it the wordmark row at 80x24
+(§4.8, now fixed); and the frame's height turned out to be content-dependent,
+not the formula the harness had fitted to the broken frame.
 
 ---
 
@@ -225,17 +227,16 @@ Stated plainly, so it is not over-trusted:
 
 ### 4.7 The measured baseline
 
-Phase 0 records these from today's editor, so a later regression is a diff
-against a known value rather than a sense that something looks off. Recorded at
-`fd9439a`, `sel=0`, via `pyte` 0.8.2. **Frame height is `min(rows - 1, 39)`**,
-and the renderer does not always emit as many rows as it paints:
+Phase 0 records these from the editor, so a later regression is a diff against
+a known value rather than a sense that something looks off. Recorded after the
+§4.8 fix, via `pyte` 0.8.2, `sel=0`:
 
-| Size | Frame rows | Rows emitted | `bg == 'default'` in frame | Colours: `distinct` / `dark` / `missing` |
-| --- | --- | --- | --- | --- |
-| 100x30 | 0–28 (29) | 29 | **0** | 50 / 55 / 17 |
-| 80x24 | 0–22 (23) | 24 | **0** | 19 / 24 / 2 |
-| 60x16 | 0–14 (15) | 15 | **0** | 19 / 24 / 2 |
-| 40x12 | 0–10 (11) | 12 | **0** | 18 / 20 / 2 |
+| Size | Frame rows | `bg == 'default'` in frame | Colours: `distinct` / `dark` / `missing` |
+| --- | --- | --- | --- |
+| 100x30 | 0–28 (29) | **0** | 50 / 55 / 17 |
+| 80x24 | 0–23 (24) | **0** | 19 / 24 / 2 |
+| 60x16 | 0–14 (15) | **0** | 19 / 24 / 2 |
+| 40x12 | 0–11 (12) | **0** | 18 / 20 / 2 |
 
 Three things to read off it. The `0` column is the load-bearing one: §8.2 says
 no column of the frame shows the terminal's background, and here it is a number
@@ -245,47 +246,69 @@ so a closure check written from the smallest fixture alone would be checking
 almost nothing. And `missing` collapses to 2 colours at three of the four
 sizes, which is the trap working as intended: one grey, plus Pygments.
 
+**Frame height is not a function of the terminal size.** 80x24 fills all 24
+rows; 60x16 stops at 15. It is `len(body + extra + tail)` after the layout has
+decided what fits, so it depends on the content as much as the room. An earlier
+version of this document put `min(rows - 1, 39)` in the spec and the harness
+carried a function by that name — and both were wrong at four of six sizes,
+because the formula had been fitted to a frame that had already lost a row to
+the §4.8 scroll. The height is now read from the reference's own output, and
+the test asserts *no rows lost* rather than a formula.
+
 Goldens are flat per-cell records, ~44 KB each and 524 KB in total for all
 twelve. Run-length encoding was tried and dropped: measured against the real
 frame it compressed nothing, because a row is full of SGR 0s and so no two
 neighbouring cells ever share all four fields.
 
-### 4.8 A defect the harness found in huebox, not in Textual
+### 4.8 A defect the harness found in huebox, not in Textual — fixed
 
-Phase 0's goldens are off by one row at 80x24, and the harness turned out to be
-right and the frame wrong.
+Phase 0's goldens came out off by one row at 80x24, and the harness turned out
+to be right and the frame wrong.
 
-At any size where the renderer emits as many rows as the terminal has, the frame
-**scrolls up by one line**: the top row of the frame is lost, and the terminal's
-own background shows at the bottom. Measured across the four sizes:
+At any size where the renderer emitted as many rows as the terminal had, the
+frame **scrolled up by one line**: the top row was lost, and the terminal's own
+background showed at the bottom. Measured:
 
-| Size | Rows emitted | Terminal rows | Frame survives |
+| Size | Rows emitted | Terminal rows | Frame survived |
 | --- | --- | --- | --- |
 | 100x30 | 29 | 30 | yes |
 | **80x24** | **24** | **24** | **no — scrolled** |
 | 60x16 | 15 | 16 | yes |
 | **40x12** | **12** | **12** | **no — scrolled** |
+| **100x40** | **40** | **40** | **no — scrolled** |
 
-The mechanism is in `draw_editor` (`editor.py:450`): the frame is written as
-`"\r\n".join(backdrop(...) for line in out) + "\r\n"`. When `len(out)` equals
-the terminal's row count, the last row lands on the bottom line and the
-**trailing newline then scrolls the screen** — one row lost at the top, blank
-line at the bottom. At 80x24 the row that disappears is the `huebox` wordmark.
+The mechanism was in `draw_editor`: the frame was written as
+`"\r\n".join(backdrop(...) for line in out) + "\r\n"`. When `len(out)` equalled
+the terminal's row count the last row landed on the bottom line and the
+**trailing newline scrolled the screen** — one row gone at the top. At 80x24 the
+row that disappeared was the `huebox` wordmark.
 
-This is pre-existing, unrelated to the migration, and hits 80x24 — the most
-common terminal size there is. It was invisible until something parsed the
-output as a terminal rather than as a string.
+Pre-existing, unrelated to Textual, and it hit 80x24 — the commonest terminal
+size there is. Invisible until something parsed the output as a terminal rather
+than as a string, which is all the harness did.
 
-**Consequence for this migration, and it is a decision not an oversight:** the
-goldens recorded in phase 0 encode the scrolled frame. Left alone, I1 would
-*enforce* the bug — a migrated editor would have to reproduce the missing
-wordmark to pass. So the goldens must be re-recorded after the defect is fixed,
-and the fix lands first. That is decision 11.
+**Fixed.** The trailing CRLF is now withheld exactly when the frame fills the
+screen:
 
-> Not fixed in the phase-0/phase-1 commits, deliberately: it changes what the
-> frame looks like, and §4.4 says a frame change is reviewed as a spec change.
-> It is one line of `editor.py` plus a regression test; it just should not ride
-> in on a migration commit.
+```python
+sys.stdout.write("\r\n".join(backdrop(line, slots, cols) for line in out)
+                 + ("\r\n" if len(out) < rows else ""))
+```
+
+`out` never exceeds `rows`, so `len(out) == rows` is the only scrolling case; a
+row short of the bottom keeps the newline, which is harmless there and keeps the
+cursor off the frame's last line. All four sizes now show the wordmark on row 0
+with painted rows contiguous from 0.
+
+Two things the fix had to drag along with it, both found by the suite rather
+than by reading:
+
+- `tests/test_editor.py`'s `lines()` did `split("\r\n")[:-1]` with the comment
+  *"the frame ends with a newline"* — now conditional on the trailing element
+  being empty. An unconditional `[:-1]` would have silently dropped a real row.
+- The goldens are **re-recorded**, because the phase-0 set encoded the scrolled
+  frame. Left alone, I1 would have *enforced* the bug: a migrated editor would
+  have had to reproduce the missing wordmark to pass.
 
 ## 5. Architecture
 
@@ -616,12 +639,13 @@ I1 is green.**
 10. **This document lives in `docs/001-spec/`.** The colour model (§5) and the
     file contract (§6.2) do not change, so `spec.md`'s own rule does not move it
     to `docs/002-spec/`.
-11. **Fix the one-line scroll defect before re-recording goldens** (§4.8).
-    Frame height is `min(rows - 1, 39)`, so at 80x24, 40x12 and 100x40 the
-    frame fills the screen and the trailing newline scrolls it: the wordmark
-    row is lost. The goldens captured in phase 0 encode that loss, and I1 would
+11. **Fix the one-line scroll defect, then re-record goldens** (§4.8).
+    Frame height is content-dependent, so at 80x24, 40x12 and 100x40 the frame
+    filled the screen and the trailing newline scrolled it: the wordmark row was
+    lost. The goldens captured in phase 0 encoded that loss, and I1 would
     otherwise *enforce* it — a migrated editor would have to reproduce the bug
-    to pass. Pre-existing and unrelated to Textual; found by parsing output as
+    to pass. **Done**, with the goldens re-recorded and the tests asserting no
+    rows lost. Pre-existing and unrelated to Textual; found by parsing output as
     a terminal instead of as a string.
 12. **Bind all 168 tokens, not the ones today's CSS happens to use** (§6.2).
     `$text` alone is generated as `ansi_default`, so a single unbound token is
@@ -651,9 +675,8 @@ next person, not a fact to go look up.
    same reason as 3 — but note that `diff_lines` emits `DIFF_ADDED`/`DIFF_REMOVED`
    in theme slots, so the closure set already covers it and I2 has nothing extra
    to say about it.
-6. **New, and the only one that blocks:** the frame scrolls a line at 80x24,
-   40x12 and 100x40 (§4.8). Fix the defect and re-record the goldens, or accept
-   it and let I1 enforce the missing wordmark? The spec says fix (§4.8,
-   decision 11), and the fix is one line — but it changes what every golden
-   contains, so it is worth saying out loud rather than slipping into a
-   migration commit.
+6. ~~The frame scrolls a line at 80x24, 40x12 and 100x40~~ — **answered and
+   fixed, §4.8.** The trailing CRLF is withheld when the frame fills the
+   screen; the goldens are re-recorded and `TestFrameGeometry` asserts no rows
+   lost rather than a height formula, since the height turns out to be
+   content-dependent.

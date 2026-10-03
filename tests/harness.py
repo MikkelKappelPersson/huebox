@@ -17,8 +17,10 @@ sparse `defaultdict`, and huebox's `\\033[2J` registers erased rows as
 present-and-default. At 120x50 that puts rows 39-49 in the buffer, which a
 "rows present" derivation mistakes for frame. Deriving it from the painted
 extent instead would be circular — I2 checking its own premise. So the height
-comes from `frame_rows()`, which encodes the layout rule measured across six
-sizes, and `test_equivalence` asserts that rule still holds.
+comes from the reference's own row count (`emitted_rows`), which is
+independent of both grids under comparison, so I2 stays falsifiable. The
+harness separately asserts that the candidate's painted extent equals the
+declared region, which is what catches a migrated app that paints short.
 
 **Candidate is a seam, not a fact.** Today it returns the reference's own bytes,
 so I1 is trivially green in phase 0. That is deliberate: phase 0 ends with a
@@ -56,22 +58,26 @@ GOLDEN_ROOT = os.path.join(_HERE, "golden")
 #: fixture that keeps I2 honest; 80x24 is where they do not.
 SIZES = ((100, 30), (80, 24), (60, 16), (40, 12))
 
-#: The frame stops growing at this many rows. Measured, not assumed: the
-#: painted height is `min(rows - 1, FRAME_ROWS_CAP)` at every size tried.
-FRAME_ROWS_CAP = 39
-
 DEFAULT = "default"          # pyte's sentinel for "the terminal's own colour"
 
 
-def frame_rows(rows: int) -> int:
-    """Rows of the frame, from the terminal's row count.
+def emitted_rows(text: str) -> int:
+    """Rows the renderer wrote, from its own output.
 
-    Verified against the current renderer at 100x30, 80x24, 60x16, 40x12,
-    100x40 and 120x50: painted rows are `min(rows - 1, 39)` every time. The
-    terminal keeps the rest — §8.2 says the area outside the frame is the
-    terminal's own and not the frame's to paint.
+    **The frame's height is content-dependent, not a function of the terminal
+    size.** It is `len(body + extra + tail)` after the layout has decided what
+    fits, so it lands on 24 in a 24-row terminal and 15 in a 16-row one. An
+    earlier version of this file asserted `min(rows - 1, 39)`; that formula was
+    an artefact of the scroll defect (§4.8) and was wrong at four of the six
+    sizes measured. Height is therefore read from the reference, never guessed.
+
+    The trailing `""` that a frame ending in a newline leaves behind is dropped,
+    which makes the count correct whether or not the newline was written.
     """
-    return max(0, min(rows - 1, FRAME_ROWS_CAP))
+    parts = text.split("\r\n")
+    if parts and parts[-1] == "":
+        parts.pop()
+    return len(parts)
 
 
 # --------------------------------------------------------------------------
@@ -146,10 +152,7 @@ def capture_reference(fixture, cols, rows, sel=0):
         editor.term_size = original
 
     raw = buffer.getvalue()
-    parts = raw.split("\r\n")
-    if parts and parts[-1] == "":
-        parts.pop()
-    return raw.encode("utf-8"), len(parts)
+    return raw.encode("utf-8"), emitted_rows(raw)
 
 
 def candidate_bytes(fixture, cols, rows, sel=0):
@@ -191,12 +194,12 @@ def _attrs(cell):
     return flags
 
 
-def parse(raw, cols, rows, height=None):
+def parse(raw, cols, rows, height):
     """Bytes to a cell grid, as a terminal would render it.
 
-    `height` defaults to the declared frame height (§4.1). Only the frame is
-    encoded — the terminal's own area outside it is not the frame's to paint and
-    not part of the promise.
+    `height` is the declared frame height (§4.1) — the reference's own row
+    count. Only the frame is encoded: the terminal's own area outside it is not
+    the frame's to paint and not part of the promise.
 
     Cells are stored flat, one `[char, fg, bg, attrs]` per cell. Run-length
     encoding was tried and **bought nothing**: measured against the real frame
@@ -207,7 +210,6 @@ def parse(raw, cols, rows, height=None):
     """
     if pyte is None:
         raise RuntimeError("pyte is not installed: pip install -e '.[test]'")
-    height = frame_rows(rows) if height is None else height
     screen = pyte.Screen(cols, rows)
     pyte.ByteStream(screen).feed(raw)
 
@@ -237,12 +239,11 @@ def painted_extent(raw, cols, rows):
     return painted[0], painted[-1], len(painted)
 
 
-def closure(raw, cols, rows, height=None):
+def closure(raw, cols, rows, height):
     """Every colour the bytes put on screen, hex-normalised, excluding
     `'default'`. The reference's recorded answer to 'what may be in the frame'."""
     if pyte is None:
         raise RuntimeError("pyte is not installed: pip install -e '.[test]'")
-    height = frame_rows(rows) if height is None else height
     screen = pyte.Screen(cols, rows)
     pyte.ByteStream(screen).feed(raw)
     found = set()
@@ -256,14 +257,13 @@ def closure(raw, cols, rows, height=None):
     return sorted(found)
 
 
-def unbacked(raw, cols, rows, height=None):
+def unbacked(raw, cols, rows, height):
     """Cells inside the frame whose background is still the terminal's.
 
     §8.2 said this in words. Here it is a list of coordinates.
     """
     if pyte is None:
         raise RuntimeError("pyte is not installed: pip install -e '.[test]'")
-    height = frame_rows(rows) if height is None else height
     screen = pyte.Screen(cols, rows)
     pyte.ByteStream(screen).feed(raw)
     return [(y, x) for y in range(height) for x in range(cols)
@@ -299,15 +299,13 @@ def golden_path(fixture, cols, rows):
 
 def record(fixture, cols, rows, sel=0):
     """Capture the reference frame as a golden. Phase 0's one write (§4.4)."""
-    raw, emitted = capture_reference(fixture, cols, rows, sel)
-    height = frame_rows(rows)
+    raw, height = capture_reference(fixture, cols, rows, sel)
     return {
         "fixture": fixture,
         "cols": cols,
         "rows": rows,
         "sel": sel,
         "frame_rows": height,
-        "emitted_rows": emitted,
         "closure": closure(raw, cols, rows, height),
         "cells": parse(raw, cols, rows, height),
     }
@@ -343,10 +341,9 @@ def _main(argv):
                 continue
             golden = record(name, cols, rows)
             path = write(golden)
-            print("%-9s %-8s frame_rows=%-3d emitted=%-3d colours=%-3d %s"
+            print("%-9s %-8s frame_rows=%-3d colours=%-3d %s"
                   % ("%dx%d" % (cols, rows), name, golden["frame_rows"],
-                     golden["emitted_rows"], len(golden["closure"]),
-                     os.path.relpath(path)))
+                     len(golden["closure"]), os.path.relpath(path)))
     return 0
 
 

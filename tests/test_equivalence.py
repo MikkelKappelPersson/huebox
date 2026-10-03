@@ -46,29 +46,41 @@ class TestGoldenPresence(unittest.TestCase):
 
 @needs_pyte
 class TestFrameGeometry(unittest.TestCase):
-    """`frame_rows` encodes a measured layout rule, so it gets checked.
+    """The frame paints every row it wrote, and keeps its top row.
 
-    If a future change to the renderer moves the frame's height, this fires
-    instead of the frame region quietly shifting under I1 and I2.
+    §4.8: when the frame filled the screen, the trailing newline scrolled it and
+    the top row — the `huebox` wordmark — fell off. This is the regression guard
+    for that, and it deliberately asserts *no rows lost* rather than a height
+    formula: the frame's height is content-dependent, so the only durable claim
+    is that what was written is what is on screen.
     """
 
-    def test_painted_height_matches_the_declared_rule(self):
+    def test_the_frame_paints_every_row_it_wrote(self):
         for fixture in sorted(harness.FIXTURES):
             for cols, rows in harness.SIZES:
-                raw, _ = harness.capture_reference(fixture, cols, rows)
+                raw, written = harness.capture_reference(fixture, cols, rows)
                 extent = harness.painted_extent(raw, cols, rows)
-                declared = harness.frame_rows(rows)
                 with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
-                    if declared == 0:
-                        self.assertIsNone(extent)
-                        continue
+                    self.assertIsNotNone(extent, "frame painted nothing")
                     first, last, count = extent
                     self.assertEqual(first, 0,
-                                     "frame does not start at row 0")
-                    self.assertEqual(count, declared,
-                                     "painted rows disagree with frame_rows()")
-                    self.assertEqual(last, declared - 1,
+                                     "frame does not start at row 0 — it "
+                                     "scrolled")
+                    self.assertEqual(last, written - 1,
                                      "painted rows are not contiguous")
+                    self.assertEqual(count, written,
+                                     "wrote %d rows, painted %d: a row is lost"
+                                     % (written, count))
+
+    def test_the_wordmark_survives_at_the_size_that_used_to_lose_it(self):
+        """80x24 is the case the defect hit, and the commonest terminal there
+        is. Asserting the top row's own text is stronger than counting rows."""
+        for cols, rows in ((80, 24), (40, 12)):
+            with self.subTest(size=f"{cols}x{rows}"):
+                grid = harness.record("distinct", cols, rows)["cells"]
+                top = "".join(cell[0] for cell in grid[0])
+                self.assertIn("huebox", top,
+                              "the wordmark scrolled off the top")
 
 
 @needs_pyte
@@ -105,8 +117,8 @@ class TestEquivalence(unittest.TestCase):
         for sel in (0, 21):
             for cols, rows in harness.SIZES:
                 with self.subTest(sel=sel, size=f"{cols}x{rows}"):
-                    raw = harness.candidate_bytes("distinct", cols, rows, sel)
                     golden = harness.record("distinct", cols, rows, sel)
+                    raw = harness.candidate_bytes("distinct", cols, rows, sel)
                     actual = harness.parse(raw, cols, rows,
                                            golden["frame_rows"])
                     self.assertEqual(actual, golden["cells"])
