@@ -433,3 +433,34 @@ An earlier cut of this phase put the hunk *above* the sample in the spending
 order, which cost the sample four lines at 100x30 and three at 80x24. Same
 widget, same slots, one line of allocation apart — which is why the ladder is
 a decision (28) and not an implementation detail.
+
+## P9 — the frame's own floor (spec §8.2)
+
+- [x] `render.py`: `backdrop(line, slots, cols)` — every row opens in the
+      buffer's `background`, reaches `cols` in it, and resets at the end
+- [x] `editor.py`: the frame *and* the picker frame (§13.7) are painted
+      through it; the too-small fallback (§15.4) stays unpainted
+- [x] a blank row is the floor painted once, a widget's blank line reopens
+      the fill — the two are the same columns of space on screen
+- [x] tests: `Floor` in `tests/test_render.py` and `tests/test_editor.py`;
+      layout matchers read plain rows (`plain_rows`), and one (`is_floor`)
+      reads the paint
+- [x] spec §8.2 (new), §14.1, README
+
+Notes: the floor is the one preview element that was still showing the
+*terminal's* background rather than the buffer's, which made a dark theme
+look untested in a light window and the other way round. It costs no row and
+no column of content: a row is `clip`ped and then padded to the same width
+with `visible()`, so `clip`/`pack` remain the only width-sensitive
+primitives and the §15 ladder is untouched — every frame at nineteen sizes
+has the same rows in the same places as before, with `background` painted
+under all of them.
+
+The test churn was the interesting part. Layout assertions had been reading
+`line.startswith("    ")` to find a widget's end, which a painted floor
+quietly makes true of every blank row too. They now read plain text, and the
+one matcher that cannot (`is_floor`) reads the paint: a row of pure floor has
+a single `48;2;` in it, a widget's blank line has two. That distinction is
+also why `backdrop` paints a blank row once instead of twice — the frame's
+own air and the code block's empty line are indistinguishable on screen, and
+the difference has to live in the escape sequence to be testable at all.

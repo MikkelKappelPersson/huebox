@@ -382,6 +382,29 @@ plain string it replaced, so no frame grows or loses a row to it.
 > Planned: the example area becomes a full live gallery (§14) and the layout
 > follows terminal resizes (§15).
 
+### 8.2 The frame's own floor
+
+Every row the editor draws is painted on the buffer's own `background`, from
+the first column to `cols`, and ends in a reset. The editor is not a preview
+*beside* the theme being edited — it is a sample of it: the ground under the
+palette grid, the air between the widgets and the columns after the last hint
+are all the colour a save would write to the terminal. Nothing is left to the
+terminal's own background for the user to imagine, so moving `background`
+repaints the whole surface on the same frame it moves the text on (§14.1).
+
+The floor costs no row and no column of content: a row is `clip`ped to `cols`
+and then padded in the fill to the same width, measured with `visible()` — the
+same width `clip` cuts at — so `clip`/`pack` stay the only width-sensitive
+primitives (§15.3). A row that already reaches the edge is unaffected: the
+examples strip pads itself in the same slot (§14.1), so its documented padding
+and the frame's floor agree by construction rather than by luck.
+
+Two rows are deliberately outside it. The too-small fallback (§15.4) is left
+unpainted — it is about the window, not the theme, and it is drawn precisely
+when the frame cannot fit anything else. And `show`'s static preview keeps the
+terminal's background (§15.5): its output is meant to be piped, and a
+full-width block of colour in a pager's output is worse than the alternative.
+
 ## 9. Non-functional requirements
 
 - Python ≥ 3.9.
@@ -830,9 +853,10 @@ so the whole editor becomes a live preview of unsaved state.
 
 ### 14.1 The live-everything property
 
-Every preview element re-renders from the buffer each frame — background fill,
-foreground text, selection-highlight sample, cursor/caret block, palette grid,
-interface cells, the `AaBbCc` readout and the code sample. No colour is cached
+Every preview element re-renders from the buffer each frame — background fill
+(including the floor the whole frame stands on, §8.2), foreground text,
+selection-highlight sample, cursor/caret block, palette grid, interface cells,
+the `AaBbCc` readout and the code sample. No colour is cached
 between frames; draw reads `slots` and nothing else. Changing one slot visibly
 moves the background, the highlight, the text under it and the cursor together,
 on the same frame.

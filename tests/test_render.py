@@ -15,9 +15,9 @@ from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, LABEL_WIDTH,
                            PAIR_MIN_COLS, PAIR_WIDTH, SELECTED_TEXT,
-                           TOKEN_SLOTS, WORDMARK, WORDMARK_SLOTS, _sample, bg,
-                           chrome, fg, hint_line, key_hint, pack, pair_label,
-                           title, visible, wordmark)
+                           TOKEN_SLOTS, WORDMARK, WORDMARK_SLOTS, _sample,
+                           backdrop, bg, chrome, fg, hint_line, key_hint, pack,
+                           pair_label, title, visible, wordmark)
 from huebox.render import RESET  # noqa: E402
 
 
@@ -160,6 +160,54 @@ class Geometry(unittest.TestCase):
                 width = len(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", line))
                 self.assertLessEqual(width, cols,
                                      f"width {width} > {cols}")
+
+
+class Floor(unittest.TestCase):
+    """The frame's own floor: every row stands on the buffer (§8.2)."""
+
+    SLOTS = {"background": "#101014", "foreground": "#e6e6ea"}
+
+    def test_a_row_reaches_exactly_the_width(self):
+        # the floor costs no content: a short row is padded, never trimmed
+        for text in ("", "  palette", "  a", fg("#ff8800") + "aa" + RESET):
+            for cols in (10, 40, 80, 120):
+                row = backdrop(text, self.SLOTS, cols)
+                self.assertEqual(visible(row), cols, repr(text))
+
+    def test_the_floor_is_the_buffers_own_background(self):
+        row = backdrop("  palette", self.SLOTS, 40)
+        self.assertTrue(row.startswith(bg("#101014")))
+        self.assertTrue(row.endswith(RESET))
+        # a missing slot paints MISSING in place, like every other widget
+        self.assertTrue(backdrop("x", {}, 10).startswith(bg(huebox.MISSING)))
+
+    def test_a_missing_background_is_read_per_call(self):
+        # §14.1 — no colour is cached between frames
+        first = backdrop("x", {"background": "#111111"}, 20)
+        second = backdrop("x", {"background": "#222222"}, 20)
+        self.assertNotEqual(first, second)
+
+    def test_a_blank_row_is_the_floor_and_a_content_row_is_not(self):
+        # the same 40 columns of space on screen, and the paint is what
+        # tells them apart: the frame's own air is the fill written once
+        blank = backdrop("", self.SLOTS, 40)
+        self.assertEqual(blank.count("48;2;"), 1)
+        self.assertEqual(blank, bg("#101014") + " " * 40 + RESET)
+        widget = backdrop("    ", self.SLOTS, 40)      # a block's blank line
+        self.assertEqual(widget.count("48;2;"), 2)
+        self.assertTrue(widget.startswith(bg("#101014") + "    "))
+
+    def test_a_row_too_wide_is_clipped_not_padded(self):
+        row = backdrop("x" * 60, self.SLOTS, 20)
+        self.assertEqual(visible(row), 20)
+        self.assertEqual(_plain(row), "x" * 20)
+
+    def test_a_widgets_colour_never_reaches_the_frame_own_columns(self):
+        # after the content's own reset the row is floor again: the padding
+        # to the edge belongs to the buffer, not to the last thing painted
+        row = backdrop(chrome("aa", CHROME_MUTED, self.SLOTS), self.SLOTS, 30)
+        self.assertEqual(row.split(RESET)[-2],
+                         bg("#101014") + " " * 28)
 
 
 class Typography(unittest.TestCase):

@@ -176,6 +176,30 @@ def hint_line(slots, hints, cols: int, sep: str = "  ") -> list[str]:
                 cols, sep=sep)
 
 
+def backdrop(line: str, slots, cols: int) -> str:
+    """One frame row, standing on the buffer's own background (§8.2).
+
+    The editor is a sample of the theme, not a preview beside it: the row
+    opens in the fill, reaches `cols` in it, and resets at the end, so
+    none of the terminal's own background survives anywhere in the frame.
+    The row is clipped first and padded after it, and the pad is measured
+    with `visible()` — the width `clip` cuts at — so a row already full of
+    colours reaches the edge exactly, no wider and no short.
+
+    A row with nothing in it is the floor and is painted once; a row with
+    content in it reopens the fill after it. The shape differs because the
+    frame's own air and a widget's blank line are the same columns of
+    space on screen, and only the paint tells them apart.
+    """
+    fill = bg(slots.get("background", MISSING))
+    row = clip(line, cols)
+    seen = visible(row)
+    pad = " " * max(0, cols - seen)
+    if not seen:
+        return f"{fill}{pad}{RESET}"
+    return f"{fill}{row}{fill}{pad}{RESET}"
+
+
 # --------------------------------------------------------------------------
 # live code sample
 # --------------------------------------------------------------------------

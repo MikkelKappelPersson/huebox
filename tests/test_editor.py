@@ -15,7 +15,7 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
 from huebox.color import NAMED, SLOTS  # noqa: E402
-from huebox.render import BOLD, RESET, fg  # noqa: E402
+from huebox.render import BOLD, RESET, bg, fg  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -35,31 +35,67 @@ def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None):
     return out.getvalue()
 
 
+def plain(line):
+    """One drawn row without its SGR escapes — what layout reads."""
+    return ANSI.sub("", line)
+
+
 def lines(text):
     return text.split("\r\n")[:-1]        # the frame ends with a newline
 
 
+def plain_rows(text):
+    """The frame's rows, escapes stripped: layout is a property of the text.
+
+    §8.2 paints every row — the floor, the swatches, the chrome — so a
+    matcher that reached for `line.startswith("    ")` would be reading an
+    escape sequence and nothing else.
+    """
+    return [plain(line) for line in lines(text)]
+
+
+def is_floor(line):
+    """True for a row that is nothing but the frame's own floor (§8.2).
+
+    A blank row is the floor painted once (§8.2's `backdrop`); a blank row
+    *inside* a widget is content — the code block's own indent, the sample's
+    reset — and reopens the fill after it. The two look alike on screen and
+    this is the one matcher that has to look at the paint.
+    """
+    return line.count("48;2;") == 1 and not plain(line).strip()
+
+
 def width(line):
-    return len(ANSI.sub("", line))
+    return len(plain(line))
+
+
+def _block_rows(body, head):
+    """The block under `head`'s own rows, plain: blanks inside kept.
+
+    §8.2 paints every row out to `cols`, so a row of floor wears the same
+    four columns of indent a widget wears — indentation alone can no longer
+    end a block, but a row that is *only* floor still can.
+    """
+    start = next((i for i, line in enumerate(body) if head in plain(line)),
+                 None)
+    if start is None:
+        return []
+    out = []
+    for line in body[start + 1:]:
+        if is_floor(line) or not plain(line).startswith("    "):
+            break
+        out.append(plain(line))
+    return out
 
 
 def example_rows(body):
     """How many of the strip's three rows this frame drew."""
     return sum(1 for line in body if re.match(
-        r"^  (background|selection-background|cursor-color)/",
-        ANSI.sub("", line)))
+        r"^  (background|selection-background|cursor-color)/", plain(line)))
 
 
 def _code_rows(body):
-    start = next((i for i, line in enumerate(body) if "live code" in line), None)
-    if start is None:
-        return []
-    out = []
-    for line in body[start + 1:]:
-        if not line.startswith("    "):        # the block is over
-            break
-        out.append(line)
-    return out
+    return _block_rows(body, "live code")
 
 
 def code_lines(body):
@@ -68,15 +104,7 @@ def code_lines(body):
 
 
 def _diff_rows(body):
-    start = next((i for i, line in enumerate(body) if "live diff" in line), None)
-    if start is None:
-        return []
-    out = []
-    for line in body[start + 1:]:
-        if not line.startswith("    "):        # the block is over
-            break
-        out.append(line)
-    return out
+    return _block_rows(body, "live diff")
 
 
 def diff_lines(body):
@@ -86,13 +114,60 @@ def diff_lines(body):
 
 def diff_block(body):
     """The hunk's own lines, plain: no header row, no indent."""
-    return [ANSI.sub("", line).strip() for line in _diff_rows(body)]
+    return [line.strip() for line in _diff_rows(body)]
 
 
 def code_block(body):
     """The code sample's own lines, plain: no header row, no blank ones."""
-    return [ANSI.sub("", line).strip() for line in _code_rows(body)
-            if line.strip()]
+    return [line.strip() for line in _code_rows(body) if line.strip()]
+
+
+class Floor(unittest.TestCase):
+    """The editor frame stands on the buffer's own background (§8.2)."""
+
+    CLEAR = "\033[H\033[2J"
+
+    def test_every_row_reaches_the_width_and_opens_in_the_fill(self):
+        fill = bg(FULL_SLOTS["background"])
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            with self.subTest(size=(cols, rows)):
+                for line in lines(frame(cols, rows)):
+                    self.assertEqual(width(line), cols)
+                    self.assertTrue(line.replace(self.CLEAR, "", 1)
+                                    .startswith(fill), repr(line[:24]))
+                    self.assertTrue(line.endswith(RESET))
+
+    def test_moving_the_background_moves_the_whole_frame(self):
+        # §14.1 — the floor is live: one buffer edit with no save in between
+        # repaints every row, the air between widgets included
+        moved = "#1c1f26"
+        edited = dict(FULL_SLOTS, background=moved)
+        before = lines(frame(80, 24,
+                             slots=dict(FULL_SLOTS, background="#101014")))
+        after = lines(frame(80, 24, slots=edited))
+        self.assertEqual(len(before), len(after))
+        for row in range(len(before)):
+            with self.subTest(row=row):
+                self.assertIn(bg(moved), after[row])
+                self.assertNotEqual(before[row], after[row])
+
+    def test_the_picker_frame_stands_on_it_too(self):
+        # §13.7 — the picker takes the frame over, and the floor is the
+        # frame's, so it takes the floor as well
+        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
+                mock.patch.object(editor, "term_size", return_value=(80, 24)):
+            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
+                               overlay=(["ash", "ember"], 0, "ash"))
+        for line in lines(out.getvalue()):
+            self.assertEqual(width(line), 80)
+            self.assertTrue(line.replace(self.CLEAR, "", 1)
+                            .startswith(bg(FULL_SLOTS["background"])))
+
+    def test_the_too_small_frame_is_left_unpainted(self):
+        # §8.2 — the fallback is about the window, not the theme
+        body = lines(frame(editor.MIN_COLS - 1, 24))
+        self.assertNotIn("48;2;", body[0])
+        self.assertLessEqual(width(body[0]), editor.MIN_COLS - 1)
 
 
 class TooSmall(unittest.TestCase):
@@ -116,7 +191,7 @@ class TooSmall(unittest.TestCase):
         sizes = ((editor.MIN_COLS - 1, 24), (60, 8), (24, 10), (10, 4))
         for cols, rows in sizes:
             with self.subTest(size=(cols, rows)):
-                body = lines(frame(cols, rows))
+                body = lines(frame(cols, rows))   # painted: the clear is one
                 self.assertEqual(len(body), 1)
                 self.assertTrue(body[0].startswith("\033[H\033[2J"))
                 self.assertLessEqual(width(body[0]), cols)
@@ -168,11 +243,10 @@ class NormalFrame(unittest.TestCase):
         self.assertEqual(after, frame(80, 24, slots=edited))
 
     def test_examples_sit_above_the_code_sample(self):
-        body = lines(frame(100, 30))
-        rows = {ANSI.sub("", line).split()[0] if ANSI.sub("", line).split()
-                else "" for line in body}
-        self.assertIn("examples", rows)
-        self.assertIn("live", rows)
+        body = plain_rows(frame(100, 30))
+        heads = {line.split()[0] if line.split() else "" for line in body}
+        self.assertIn("examples", heads)
+        self.assertIn("live", heads)
         self.assertLess(body.index(next(l for l in body if "examples" in l)),
                         body.index(next(l for l in body if "live code" in l)))
 
@@ -180,7 +254,7 @@ class NormalFrame(unittest.TestCase):
         # §14.4 — the hunk is a block of its own, and it reads as the
         # change to the sample drawn below it
         body = lines(frame(120, 40))
-        at = [next(i for i, l in enumerate(body) if head in l)
+        at = [next(i for i, l in enumerate(body) if head in plain(l))
               for head in ("examples", "live diff", "live code")]
         self.assertEqual(at, sorted(at))
         self.assertTrue(diff_block(body))
@@ -277,10 +351,10 @@ class NormalFrame(unittest.TestCase):
         # §15 — the palette legend is a courtesy (the grid is numbered), so
         # a tight frame spends it, and the blank separators after it, before
         # it spends a widget
-        legend = ANSI.sub("", editor.PALETTE_LEGEND)
-        tall = [ANSI.sub("", line) for line in lines(frame(80, 40))]
+        legend = plain(editor.PALETTE_LEGEND).strip()
+        tall = [line.strip() for line in plain_rows(frame(80, 40))]
         self.assertIn(legend, tall)
-        tight = [ANSI.sub("", line) for line in lines(frame(80, 24))]
+        tight = [line.strip() for line in plain_rows(frame(80, 24))]
         self.assertNotIn(legend, tight)
         for keep in ("palette", "interface", "AaBbCc", "examples", "live code"):
             self.assertTrue(any(keep in line for line in tight), keep)
@@ -293,10 +367,11 @@ class NormalFrame(unittest.TestCase):
         def blanks(cols, rows):
             body = lines(frame(cols, rows))
             head = next(i for i, line in enumerate(body)
-                        if "live diff" in line)
-            hunk = body.index(_diff_rows(body)[-1])
-            return (not ANSI.sub("", body[head - 1]).strip(),
-                    not ANSI.sub("", body[hunk + 1]).strip())
+                        if "live diff" in plain(line))
+            hunk = next(i for i, line in enumerate(body)
+                        if plain(line) == _diff_rows(body)[-1])
+            return (not plain(body[head - 1]).strip(),
+                    not plain(body[hunk + 1]).strip())
 
         for cols, rows, (above, below) in ((120, 44, (True, True)),
                                            (120, 40, (True, True)),
@@ -368,8 +443,8 @@ class NormalFrame(unittest.TestCase):
     def test_a_tall_frame_spends_its_spare_rows_on_the_diff(self):
         # the other end of the same ladder: decoration stays, and what the
         # sample did not need becomes the hunk
-        tall = [ANSI.sub("", line) for line in lines(frame(120, 40))]
-        self.assertIn(ANSI.sub("", editor.PALETTE_LEGEND), tall)
+        tall = [line.strip() for line in plain_rows(frame(120, 40))]
+        self.assertIn(editor.PALETTE_LEGEND.strip(), tall)
         self.assertTrue(any("live diff" in line for line in tall))
 
     def test_no_size_overflows_its_rows(self):
@@ -690,14 +765,21 @@ class GridArrows(unittest.TestCase):
 
     def swatch_rows(self, cols, rows=16):
         """How many swatches the frame actually put on each palette row."""
+        grid = editor.grid_geometry(cols)
+        # a swatch row is nothing but cells — labels, hexes, spaces. The
+        # legend, the headers and the blank rows of §8.2 are not, and each
+        # swatch cell paints one foreground of its own, so the paint counts
+        # cells and the text tells the row where the grid ends
+        cells = r"[ #>\da-f]+" if grid.show_hex else r"[ #>\d]+"
         raw = lines(frame(cols, rows, sel=0))
         start = next(i for i, line in enumerate(raw)
-                     if ANSI.sub("", line).strip() == "palette")
+                     if plain(line).strip() == "palette")
         out = []
         for line in raw[start + 1:]:
-            if "48;2;" not in line:         # the escapes count the cells
+            count = line.count("38;2;")
+            if not count or not re.fullmatch(cells, plain(line).strip()):
                 break
-            out.append(line.count("48;2;"))
+            out.append(count)
         return out
 
     def marked(self, name, cols, rows=16):

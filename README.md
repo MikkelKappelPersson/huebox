@@ -123,8 +123,12 @@ hues one letter each, a key in the hint line is bright (`arrows`), the label
 beside it is teal (**move**), the furniture — a path, a hex, a count — is
 muted, and a section header is the theme's own foreground in bold. Edit
 `palette-11` and both the escape in the sample and the keys change colour on
-the same frame. Quit with unsaved changes and huebox asks for a second `Esc`
-first; `r` throws the buffer away and goes back to your last save.
+the same frame. The floor is the buffer's too: every row of the editor —
+the ground under the palette grid, the air between the widgets, the column
+after the last hint — is painted in `background`, so the frame is a sample
+of the theme rather than a preview beside it. Quit with unsaved changes and
+huebox asks for a second `Esc` first; `r` throws the buffer away and goes
+back to your last save.
 
 The header names what you are editing: `ember ● ghostty` for a theme (the `●`
 marks unsaved buffer changes) or `direct:/path/to/config` in a legacy

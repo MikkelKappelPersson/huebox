@@ -20,7 +20,7 @@ from typing import NamedTuple
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
-from .render import (BOLD, CHROME_MUTED, RESET, bg, chrome, clip,
+from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, sample_lines,
                      title, wordmark)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
@@ -288,8 +288,9 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # what to do when there is no room for either.
         names, index, current = overlay
         sys.stdout.write("\r\n".join(
-            theme_lines(names, index, current, cols, rows, status, slots))
-            + "\r\n")
+            backdrop(line, slots, cols)
+            for line in theme_lines(names, index, current, cols, rows,
+                                    status, slots)) + "\r\n")
         sys.stdout.flush()
         return
     body = []
@@ -435,7 +436,11 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     if len(out) > rows:
         out = out[:rows - len(tail)] + tail
     # CRLF: raw mode disables ONLCR, so a bare \n would not reset the column
-    sys.stdout.write("\r\n".join(clip(line, cols) for line in out) + "\r\n")
+    # §8.2 — every row stands on the buffer's own background, so the frame
+    # *is* the theme: the floor, the air between widgets and the column after
+    # the last hint all read `background` out of the live buffer
+    sys.stdout.write("\r\n".join(backdrop(line, slots, cols) for line in out)
+                     + "\r\n")
     sys.stdout.flush()
 
 
