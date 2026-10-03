@@ -131,12 +131,13 @@ of the theme rather than a preview beside it.
 The `selected` row ends in a reading of the slot's own colour: three bars,
 each a sweep of one axis — the whole hue wheel at the slot's own saturation
 and value, saturation grey → colour, value black → colour — with the reading
-printed in the middle of each bar. The bars say what the axis means, the
-number says where you are, and the exact reading — `hue 207.0  sat 59.4%
-val 93.7%`, to the precision you are actually steering with — sits on the row
-below beside the specimen. Press `a`/`s` or `z`/`x` and the whole hue wheel
-repaints; press `q` and the wheel holds still while the number moves, because
-a sweep is a legend and not a playhead. Quit with
+printed in the middle of each bar and a block of `cursor-color` marking where
+it sits, carrying any digit under it in `cursor-text` the way a terminal draws
+a cursor. The bars say what the axis means; the block and the number say where
+you are; and the exact reading — `hue 207.0  sat 59.4%  val 93.7%`, to the
+precision you are actually steering with — sits on the row below beside the
+specimen. Press `a`/`s` or `z`/`x` and the whole hue wheel repaints; press `q`
+and the block slides along it while the digits travel with it. Quit with
 unsaved changes and huebox asks for a second `Esc` first; `r` throws the
 buffer away and goes back to your last save.
 

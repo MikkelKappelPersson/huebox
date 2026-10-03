@@ -215,6 +215,13 @@ def backdrop(line: str, slots, cols: int) -> str:
 # the hsv readout (§8.3)
 # --------------------------------------------------------------------------
 
+# The reading's own line through the bar: always HSV_MARK_W cells, the way
+# a terminal draws a cursor block and the way this frame already draws one
+# in the examples strip (§14.1). A fixed width is the whole point — a
+# hairline is a hairline of variable width, eating a whole cell or splitting
+# two in half depending on where the reading falls.
+HSV_MARK_W = 2
+
 # A bar is a sweep of its whole axis — a legend of what the axis means, with
 # the reading printed on top of it. The hue bar is the wheel at the slot's
 # own saturation and value, so `a`/`s` and `z`/`x` repaint every cell of it
@@ -244,26 +251,58 @@ def _sweep(width: int) -> list:
     return [i / (width - 1) for i in range(width)]
 
 
-def _chip(slots, colour, width: int, text: str) -> str:
-    """One bar: a sweep of the axis with `text` centred on top of it.
+def _ink(cells: list) -> str:
+    """One readable foreground for a run of cells — the average of them.
 
-    The number takes **one** foreground for the whole number, not one per
-    character: digits that turn from white to black halfway along a sweep
-    read as two numbers rather than one. The ground a number is read
-    against is the cells it covers, so that is what the ink is chosen from —
-    their average, through `readable_fg`, the same rule the palette cells'
-    own labels follow (§8.1).
+    A number and a line are each one thing, and a thing that changes ink
+    halfway along reads as two things: digits that go light over the dark
+    half of a sweep and dark over the light half are two numbers, and a
+    line drawn half black and half white is two lines. The ground a run is
+    read against is the cells it covers, so that is what the ink answers to
+    — `readable_fg`, the rule the palette cells' own labels follow (§8.1).
     """
-    cells = [rgb_to_hex(colour(at)) for at in _sweep(width)]
-    start = max(0, (width - len(text) + 1) // 2)
-    covered = cells[start:start + len(text)] or cells
-    ink = fg(readable_fg(rgb_to_hex(tuple(
-        sum(hex_to_rgb(cell)[i] for cell in covered) / len(covered)
+    return fg(readable_fg(rgb_to_hex(tuple(
+        sum(hex_to_rgb(cell)[i] for cell in cells) / len(cells)
         for i in range(3)))))
-    return "".join(
-        f"{bg(cell)}{ink}"
-        f"{text[i - start] if start <= i < start + len(text) else ' '}{RESET}"
-        for i, cell in enumerate(cells))
+
+
+def _marker(at: float, width: int) -> range:
+    """The cells the reading's block covers — `HSV_MARK_W` of them, always.
+
+    It wears `cursor-color` and carries whatever is under it in
+    `cursor-text`, which is exactly what a terminal does with a block cursor
+    and what the examples strip already demonstrates (§14.1). The digits the
+    block covers are drawn *on* it, in the colour meant to be read on it,
+    so the number survives the line instead of trading places with it.
+    """
+    start = min(max(int(at), 0), width - HSV_MARK_W)
+    return range(start, start + HSV_MARK_W)
+
+
+def _chip(slots, colour, width: int, text: str, at: float) -> str:
+    """One bar: a sweep of the axis, the reading on it, and its block.
+
+    Three things in `width` cells: the sweep (what the axis means), the
+    block (where the reading is), the number (what the reading is). Where
+    they meet the block wins the cells — in `cursor-color`, with the digit
+    carried on it in `cursor-text` — because a number that vanishes under
+    the playhead would be a number you lose at exactly the moment you are
+    steering it, and the exact reading is on the row below regardless.
+    """
+    cells = [rgb_to_hex(colour(step)) for step in _sweep(width)]
+    first = max(0, (width - len(text) + 1) // 2)
+    marks = set(_marker(at, width))
+    ink = _ink(cells[first:first + len(text)] or cells)
+    block_bg = bg(slots.get("cursor-color", MISSING))
+    block_fg = fg(slots.get("cursor-text", MISSING))
+    out = []
+    for i, cell in enumerate(cells):
+        char = text[i - first] if first <= i < first + len(text) else " "
+        if i in marks:
+            out.append(f"{block_bg}{block_fg}{char}{RESET}")
+        else:
+            out.append(f"{bg(cell)}{ink}{char}{RESET}")
+    return "".join(out)
 
 
 def hsv_readout(slots, value: str, cols: int) -> str:
@@ -284,15 +323,15 @@ def hsv_readout(slots, value: str, cols: int) -> str:
                   if cols >= HSV_LABELS + sum(sizes)), None)
     if width is None:
         return ""
-    axes = (("hue", width[0], f"{hue * 360:.0f}°",
+    axes = (("hue", hue, width[0], f"{hue * 360:.0f}°",
              lambda t: hsv_to_rgb(t, sat, val)),
-            ("sat", width[1], f"{sat * 100:.0f}%",
+            ("sat", sat, width[1], f"{sat * 100:.0f}%",
              lambda t: hsv_to_rgb(hue, t, val)),
-            ("val", width[2], f"{val * 100:.0f}%",
+            ("val", val, width[2], f"{val * 100:.0f}%",
              lambda t: hsv_to_rgb(hue, sat, t)))
     return "  ".join(chrome(label, CHROME_MUTED, slots) + " "
-                     + _chip(slots, colour, cells, text)
-                     for label, cells, text, colour in axes)
+                     + _chip(slots, colour, cells, text, reading * (cells - 1))
+                     for label, reading, cells, text, colour in axes)
 
 
 # --------------------------------------------------------------------------

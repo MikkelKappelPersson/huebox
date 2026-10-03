@@ -430,30 +430,40 @@ bars and the numbers live *on* them.
 own saturation and value, so `a`/`s` and `z`/`x` repaint every one of its cells
 at once, and a colour with no saturation shows as the grey bar it is. The
 saturation bar runs grey → colour and the value bar black → colour, each
-painted at the slot's own hue. The bar is a legend of what its axis means; the
-reading is what the number on it says, and the exact reading is the row below.
+painted at the slot's own hue. The bar is a legend of what its axis means.
 
-**The value is printed centred on its bar**, one cell at a time. The bars are
-odd widths so the number can sit on the middle cell, which keeps the row's
-optical balance — three bars of different lengths, each with its own reading
-sitting in the same place on it.
+**The reading is a block of `HSV_MARK_W` cells on that sweep**, wearing
+`cursor-color` and carrying whatever is under it in `cursor-text` — which is
+what a terminal does with a block cursor, and what the examples strip already
+demonstrates in miniature (§14.1). Two properties make it the right shape:
 
-**A number takes one ink for the whole number.** The ground it is read against
-is the cells it covers, so the ink is `readable_fg` of their average — the rule
-the palette cells' own labels already follow (§8.1). Choosing it per character
-turns a sweep into two numbers: the digits go light over the dark half of the
-gradient and dark over the light half, and the number stops reading as one
-thing. It is the one place in the frame where the ink is chosen from computed
-colours rather than from a slot, and it has to be: the gradient is computed,
-and no slot holds one.
+- **It is always `HSV_MARK_W` cells wide.** A hairline is a hairline of
+  variable width — a whole cell here, half of two there — and its width is
+  the first thing the eye reads. A fixed block is the first thing the eye
+  reads the same way every time.
+- **It carries the number instead of replacing it.** A playhead that takes a
+  cell takes the digit in it, and a number that vanishes under the block is a
+  number lost at exactly the moment it is being steered. Where the two meet,
+  the block wins the cells and the digits ride on it in the colour meant to be
+  read on it.
+
+**The value is printed centred on its bar**, between the labels, in one ink
+for the whole number: `readable_fg` of the average of the cells it covers —
+the rule the palette cells' own labels already follow (§8.1). Choosing it per
+character turns a sweep into two numbers: the digits go light over the dark
+half of the gradient and dark over the light half, and the number stops
+reading as one thing. The bars are odd widths so the number can sit on the
+middle cell, which keeps the row's optical balance — three bars of different
+lengths, each with its own reading in the same place on it.
 
 **The exact reading has its own line, under the bars.** A number on a bar is
 rounded to a degree and a percent, which is the wrong precision for a frame
 you are steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%` sits on
 the specimen row below, in the same muted the labels wear. The two readings
 answer different questions and neither gives up a row for the other: the bars
-are the glance, the numbers are the truth. Where the row below cannot hold
-them they go, and what is left is the hex — which is the value either way.
+and the block are the glance, the numbers are the truth. Where the row below
+cannot hold them they go, and what is left is the hex — which is the value
+either way.
 
 The bars keep a ladder, because the row is one row and §15's budget is a
 contract: `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the

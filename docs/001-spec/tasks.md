@@ -607,3 +607,30 @@ straddling a gradient, where it renders `207°` as three digits and a degree
 sign in two different inks. A number is one thing and takes one ink; the ink
 comes from the average of the cells underneath, which is the ground it is
 actually read against.
+
+## P14 — the playhead is a fixed-width block (spec §8.3)
+
+- [x] `render.py`: `_marker` → a `range` of `HSV_MARK_W` (2) cells, inside
+      the bar at both ends; no hairline glyphs
+- [x] the block wears `cursor-color` and carries the digits under it in
+      `cursor-text` — the frame's own cursor vocabulary (§14.1), not a new
+      one
+- [x] `_chip`: block cells are painted from the slots, every other cell from
+      the computed sweep; the number's ink is unchanged and now survives the
+      block instead of trading places with it
+- [x] tests: block width, position (within a cell of the reading), the
+      clamping at both ends, and the digits riding on it
+- [x] spec §8.3, README
+
+Notes: the hairline between two cells was the wrong answer twice over. Its
+width depends on where the reading falls — a whole cell or two halves — and
+half a cell is not enough resolution for a bar that is twelve degrees wide,
+so it still lied about the position. And every glyph it drew *replaced* the
+character in that cell, so the number lost one or two digits every time the
+reading crossed it.
+
+A block is what a terminal draws a cursor with, and this frame already draws
+one two widgets away in the examples strip (`cursor-color` carrying
+`cursor-text` over a single character). Reusing that pair is the whole reason
+it reads as a playhead without new vocabulary: two cells, always the same
+width, and the number rides on it.
