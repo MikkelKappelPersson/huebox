@@ -432,23 +432,20 @@ at once, and a colour with no saturation shows as the grey bar it is. The
 saturation bar runs grey → colour and the value bar black → colour, each
 painted at the slot's own hue. The bar is a legend of what its axis means.
 
-**The reading is a block of `HSV_MARK_W` cells on that sweep**, wearing
-`cursor-color` and carrying whatever is under it in `cursor-text` — which is
-what a terminal does with a block cursor, and what the examples strip already
-demonstrates in miniature (§14.1). Two properties make it the right shape:
+**The reading is a hairline on that sweep**, drawn where a caret is drawn
+between two characters: `MARK_AFTER` in the cell before the gap and
+`MARK_BEFORE` in the cell after it — half of each, one line. It is a hairline
+and not a block because a block is a third of a nine-cell bar, and a bar with
+a third of it painted over is no longer a sweep. It costs two half-cells of
+what is under it, and where the reading falls inside the number those are two
+of its characters: the rest of the number is still there, and the exact reading
+is on the row below. At either end of an axis the line hugs that end of the
+bar, where there is only one cell to use, and anywhere else it lands on the
+gap that follows the cell the reading falls in — never more than half a cell
+off.
 
-- **It is always `HSV_MARK_W` cells wide.** A hairline is a hairline of
-  variable width — a whole cell here, half of two there — and its width is
-  the first thing the eye reads. A fixed block is the first thing the eye
-  reads the same way every time.
-- **It carries the number instead of replacing it.** A playhead that takes a
-  cell takes the digit in it, and a number that vanishes under the block is a
-  number lost at exactly the moment it is being steered. Where the two meet,
-  the block wins the cells and the digits ride on it in the colour meant to be
-  read on it.
-
-**The value is printed centred on its bar**, between the labels, in one ink
-for the whole number: `readable_fg` of the average of the cells it covers —
+**The value is printed centred on its bar**, in one ink for the whole
+number: `readable_fg` of the average of the cells it covers —
 the rule the palette cells' own labels already follow (§8.1). Choosing it per
 character turns a sweep into two numbers: the digits go light over the dark
 half of the gradient and dark over the light half, and the number stops

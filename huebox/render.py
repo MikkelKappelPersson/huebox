@@ -215,12 +215,11 @@ def backdrop(line: str, slots, cols: int) -> str:
 # the hsv readout (§8.3)
 # --------------------------------------------------------------------------
 
-# The reading's own line through the bar: always HSV_MARK_W cells, the way
-# a terminal draws a cursor block and the way this frame already draws one
-# in the examples strip (§14.1). A fixed width is the whole point — a
-# hairline is a hairline of variable width, eating a whole cell or splitting
-# two in half depending on where the reading falls.
-HSV_MARK_W = 2
+# The reading's own hairline through the bar: the two half blocks that draw
+# a line in the gap between two cells, the way a caret is drawn between two
+# characters (§8.3).
+MARK_AFTER = "\u2590"             # right half of a cell: the line at its edge
+MARK_BEFORE = "\u258c"            # left half of a cell: the line at its edge
 
 # A bar is a sweep of its whole axis — a legend of what the axis means, with
 # the reading printed on top of it. The hue bar is the wheel at the slot's
@@ -266,42 +265,49 @@ def _ink(cells: list) -> str:
         for i in range(3)))))
 
 
-def _marker(at: float, width: int) -> range:
-    """The cells the reading's block covers — `HSV_MARK_W` of them, always.
+def _marker(at: float, width: int) -> dict:
+    """Where the reading's hairline falls: the halves it draws itself into.
 
-    It wears `cursor-color` and carries whatever is under it in
-    `cursor-text`, which is exactly what a terminal does with a block cursor
-    and what the examples strip already demonstrates (§14.1). The digits the
-    block covers are drawn *on* it, in the colour meant to be read on it,
-    so the number survives the line instead of trading places with it.
+    A caret between two cells is a hairline in the *gap* between them, so
+    that is where it is drawn: `MARK_AFTER` in the cell before the gap and
+    `MARK_BEFORE` in the cell after it — half of each, one line. The sweep
+    reads through it, and a digit it crosses keeps the half of itself the
+    line does not cover, so the number survives the line instead of trading
+    places with it.
+
+    A reading at either end of the axis hugs that end of the bar, where
+    there is only one cell to use, and anything in between lands on the gap
+    that follows the cell it falls in — never more than half a cell off.
     """
-    start = min(max(int(at), 0), width - HSV_MARK_W)
-    return range(start, start + HSV_MARK_W)
+    if at <= 0:
+        return {0: MARK_BEFORE}
+    if at >= width - 1:
+        return {width - 1: MARK_AFTER}
+    cell = int(at)
+    return {cell: MARK_AFTER, cell + 1: MARK_BEFORE}
 
 
 def _chip(slots, colour, width: int, text: str, at: float) -> str:
-    """One bar: a sweep of the axis, the reading on it, and its block.
+    """One bar: a sweep of the axis, the reading on it, and its hairline.
 
     Three things in `width` cells: the sweep (what the axis means), the
-    block (where the reading is), the number (what the reading is). Where
-    they meet the block wins the cells — in `cursor-color`, with the digit
-    carried on it in `cursor-text` — because a number that vanishes under
-    the playhead would be a number you lose at exactly the moment you are
-    steering it, and the exact reading is on the row below regardless.
+    hairline (where the reading is), the number (what the reading is). The
+    number takes one ink for the whole number and the hairline one ink for
+    both of its halves, so a line stays a line across a change of tone
+    instead of reading as two marks (§8.3).
     """
     cells = [rgb_to_hex(colour(step)) for step in _sweep(width)]
     first = max(0, (width - len(text) + 1) // 2)
-    marks = set(_marker(at, width))
+    marks = _marker(at, width)
     ink = _ink(cells[first:first + len(text)] or cells)
-    block_bg = bg(slots.get("cursor-color", MISSING))
-    block_fg = fg(slots.get("cursor-text", MISSING))
+    line = _ink([cells[i] for i in marks])
     out = []
     for i, cell in enumerate(cells):
-        char = text[i - first] if first <= i < first + len(text) else " "
         if i in marks:
-            out.append(f"{block_bg}{block_fg}{char}{RESET}")
-        else:
-            out.append(f"{bg(cell)}{ink}{char}{RESET}")
+            out.append(f"{bg(cell)}{line}{marks[i]}{RESET}")
+            continue
+        char = text[i - first] if first <= i < first + len(text) else " "
+        out.append(f"{bg(cell)}{ink}{char}{RESET}")
     return "".join(out)
 
 

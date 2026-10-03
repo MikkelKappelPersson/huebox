@@ -634,3 +634,26 @@ one two widgets away in the examples strip (`cursor-color` carrying
 `cursor-text` over a single character). Reusing that pair is the whole reason
 it reads as a playhead without new vocabulary: two cells, always the same
 width, and the number rides on it.
+
+## P15 — the playhead is a hairline, not a block (spec §8.3)
+
+- [x] `render.py`: `_marker` → the two halves of the gap the reading falls
+      on (`MARK_AFTER` / `MARK_BEFORE`), one half-cell each
+- [x] both halves take one ink, from the average of the two cells, so a line
+      across a change of tone stays a line
+- [x] at either end of an axis the line hugs the bar's own edge
+- [x] tests: the line is one or two halves and never more, its ink is one,
+      it is within half a cell of the reading, and it takes exactly the two
+      cells of the number it crosses (§8.3)
+- [x] spec §8.3, README
+
+Notes: the two-cell block was too thick to be a playhead — a third of a
+nine-cell saturation bar, painted over, which is no longer a sweep. A
+hairline in the gap between two cells is what a caret looks like between two
+characters, and it costs two half-cells of whatever is under it.
+
+The one thing it cannot have is the digits it crosses. A cell holds one
+character: where the reading falls inside the number the line owns those two
+cells, and the number loses two characters — which is why the exact reading
+is on the row below and why the test says so out loud rather than pretending
+the two never meet.

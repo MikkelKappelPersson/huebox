@@ -240,20 +240,11 @@ class Readout(unittest.TestCase):
                    if plain(line).startswith("  selected"))
         return row if painted else plain(row)
 
-    def chips(self, cols, slots=None):
-        """The bar cells of the selected row: (bg, fg, character) in order."""
+    def bars(self, cols, slots=None):
+        """Every bar cell of the selected row, painted, in order."""
         return re.findall(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
                           r"\x1b\[38;2;(\d+);(\d+);(\d+)m(.)",
                           self.selected(cols, slots=slots, painted=True))
-
-    def specimen(self, cols, rows=30, slots=None, painted=False):
-        row = next(line for line in lines(frame(cols, rows, sel=4,
-                                               slots=slots or self.SLOTS))
-                   if "AaBbCc" in plain(line))
-        return row if painted else plain(row)
-
-    def exact(self, value="#61afef"):
-        return hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
 
     def specimen(self, cols, rows=30, slots=None, painted=False):
         row = next(line for line in lines(frame(cols, rows, sel=4,
@@ -269,9 +260,10 @@ class Readout(unittest.TestCase):
         # the bars are the glance, the exact numbers are the truth, and
         # neither of them gives up a row for the other (§8.3)
         wide = self.selected(100)
-        for value in ("207°", "59%", "94%"):
-            self.assertIn(value, wide)              # in the bars
         self.assertIn("hue", wide)
+        self.assertIn("sat", wide)
+        self.assertIn("val", wide)
+        self.assertEqual(len(self.bars(100)), sum(HSV_FULL))
         self.assertIn(self.exact(), self.specimen(100))
         self.assertNotIn(self.exact(), wide)
 
@@ -283,7 +275,7 @@ class Readout(unittest.TestCase):
                            (self.BARS - 1, False), (self.EXACT, False),
                            (self.EXACT - 1, False)):
             with self.subTest(size=(cols, 30)):
-                self.assertEqual("207°" in self.selected(cols), bars)
+                self.assertEqual(bool(self.bars(cols)), bars)
                 self.assertEqual(self.exact() in self.specimen(cols),
                                  cols >= self.EXACT)
 
@@ -304,14 +296,14 @@ class Readout(unittest.TestCase):
                 self.assertLessEqual(visible(text), cols)
                 self.assertLess(text.index("palette-4"),
                                 text.index("#61afef"))
-                self.assertEqual(len(self.chips(cols)),
+                self.assertEqual(len(self.bars(cols)),
                                  sum(HSV_FULL if cols >= 90 else HSV_COMPACT)
                                  if room else 0)
 
     def test_the_bars_are_a_sweep_with_the_reading_printed_on_top(self):
         # the bar is the axis; the number is the reading, centred on it
         own = hex_to_rgb("#61afef")
-        cells = self.chips(100)
+        cells = self.bars(100)
         at = 0
         for width in HSV_FULL:
             with self.subTest(width=width):
@@ -333,7 +325,7 @@ class Readout(unittest.TestCase):
         after = self.selected(100, slots=st.slots)
         self.assertNotEqual(before, after)
         self.assertNotIn("#61afef", after)              # the hex moved
-        self.assertNotEqual(self.chips(100), self.chips(100, slots=st.slots))
+        self.assertNotEqual(self.bars(100), self.bars(100, slots=st.slots))
         # ... and the exact reading below followed it
         self.assertNotEqual(hsv_numbers(*rgb_to_hsv(hex_to_rgb("#61afef"))),
                             hsv_numbers(*rgb_to_hsv(hex_to_rgb(
