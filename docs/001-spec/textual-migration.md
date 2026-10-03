@@ -1,7 +1,7 @@
 # huebox — Textual migration
 
-Status: **proposed** · Plans spec: `spec.md` §5, §8.2, §14.1, §15, §9, §10 ·
-Conventions: `AGENTS.md`
+Status: **phases 0–1 landed, no TODOs open** · Plans spec: `spec.md` §5, §8.2,
+§14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
 `docs/002-spec/` only when the colour model or the file contract changes in a
@@ -14,6 +14,15 @@ of the frame may change colour.** Everything below exists to make that claim
 testable rather than aspirational, because it is the one promise worth
 breaking huebox over, and the one a migration breaks silently if left
 unwatched.
+
+**Where the research stands.** Every claim about Textual in here is measured
+against **8.2.8**, not recalled: the 168 tokens (§6.2), the `get_css_variables`
+override (§6.2), the eight environment variables that can rewrite its output
+(§6.4), the phase-A mechanism reproduced end to end through a real compositor
+and a real VT emulator (§5.5), and the 256-colour degradation confirmed with
+numbers (§4.5). Two findings changed the document: the colour system is read
+from the environment at import time and cannot be corrected in-process, and
+huebox has a pre-existing one-line scroll defect that the harness found (§4.8).
 
 ---
 
@@ -184,11 +193,23 @@ widget that quietly degrades to the 256-colour palette is **invisible** to I1
 and I2 — on a truecolor terminal the two are indistinguishable, and the frame
 looks correct until someone runs over SSH on a 256-colour host.
 
-So every fixture runs **twice**: the candidate app is launched once with
-`COLORTERM=truecolor` and once with `COLORTERM` unset and
-`TERM=xterm-256color`, and both grids must equal the golden. Textual emits
-`38;2` in the first and `38;5` in the second; if the region differs, the app
-is not colour-faithful and the test says so.
+**Confirmed, with the mechanism, against Textual 8.2.8.** The same phase-A app
+(`/tmp/probe` shape of §5.5) run twice, changing only the terminal's colour
+system:
+
+| `TEXTUAL_COLOR_SYSTEM` | `#1e1e2e` becomes | `#7dc4e4` becomes |
+| --- | --- | --- |
+| `truecolor` | `1e1e2e` | `7dc4e4` |
+| `256` | **`000000`** | **`87d7d7`** |
+
+Every cell differed, and nothing in the frame said so. The setting is read from
+the environment **at import time** (`textual.constants.COLOR_SYSTEM`, default
+`auto`), so it cannot be fixed inside the running app — it has to be pinned in
+the candidate's environment, and `auto` must never be what the harness sets.
+
+So every fixture runs **twice**, the candidate launched once at each depth, and
+both grids must equal the golden. The depth is set by the env, not by
+`COLORTERM` alone: `TEXTUAL_COLOR_SYSTEM` plus `TERM`/`COLORTERM` together.
 
 ### 4.6 What the harness cannot see
 
@@ -228,6 +249,43 @@ Goldens are flat per-cell records, ~44 KB each and 524 KB in total for all
 twelve. Run-length encoding was tried and dropped: measured against the real
 frame it compressed nothing, because a row is full of SGR 0s and so no two
 neighbouring cells ever share all four fields.
+
+### 4.8 A defect the harness found in huebox, not in Textual
+
+Phase 0's goldens are off by one row at 80x24, and the harness turned out to be
+right and the frame wrong.
+
+At any size where the renderer emits as many rows as the terminal has, the frame
+**scrolls up by one line**: the top row of the frame is lost, and the terminal's
+own background shows at the bottom. Measured across the four sizes:
+
+| Size | Rows emitted | Terminal rows | Frame survives |
+| --- | --- | --- | --- |
+| 100x30 | 29 | 30 | yes |
+| **80x24** | **24** | **24** | **no — scrolled** |
+| 60x16 | 15 | 16 | yes |
+| **40x12** | **12** | **12** | **no — scrolled** |
+
+The mechanism is in `draw_editor` (`editor.py:450`): the frame is written as
+`"\r\n".join(backdrop(...) for line in out) + "\r\n"`. When `len(out)` equals
+the terminal's row count, the last row lands on the bottom line and the
+**trailing newline then scrolls the screen** — one row lost at the top, blank
+line at the bottom. At 80x24 the row that disappears is the `huebox` wordmark.
+
+This is pre-existing, unrelated to the migration, and hits 80x24 — the most
+common terminal size there is. It was invisible until something parsed the
+output as a terminal rather than as a string.
+
+**Consequence for this migration, and it is a decision not an oversight:** the
+goldens recorded in phase 0 encode the scrolled frame. Left alone, I1 would
+*enforce* the bug — a migrated editor would have to reproduce the missing
+wordmark to pass. So the goldens must be re-recorded after the defect is fixed,
+and the fix lands first. That is decision 11.
+
+> Not fixed in the phase-0/phase-1 commits, deliberately: it changes what the
+> frame looks like, and §4.4 says a frame change is reviewed as a spec change.
+> It is one line of `editor.py` plus a regression test; it just should not ride
+> in on a migration commit.
 
 ## 5. Architecture
 
@@ -285,17 +343,26 @@ migration is the payoff for having drawn that line.
 ### 5.5 Phase A — one custom widget
 
 Phase A renders the entire frame in **one** custom `Widget` whose
-`render_line(y)` returns the row from `render.py`, parsed with
-`rich.text.Text.from_ansi`. Verified working on Rich 15.0.0:
+`render_line(y)` returns a `Strip` of segments built from the row `render.py`
+emitted, parsed with `rich.text.Text.from_ansi`. Verified working on Rich
+15.0.0:
 
 ```
 >>> Text.from_ansi('\033[38;2;255;0;0mred\033[48;2;0;0;255mon blue\033[0m tail').spans
 [Span(0, 3, '#ff0000'), Span(3, 10, '#ff0000 on #0000ff')]
 ```
 
-`render.py` therefore needs no rewrite at all — the SGR it already emits is
-consumed unchanged. Mouse is added by hit-testing the click against the grid
-geometry `editor.py:90` already computes. Scrolling is a `ScrollView` wrapper.
+**And verified end to end, which is the reason phase A is not a hope.** A probe
+app — one widget, `render_line` returning `Strip(segments, width)`, huebox's own
+rows as its input — was run in a pty at 80x24 and its bytes parsed back through
+`pyte` (§4.1). Every colour and every attribute matched: foreground `7dc4e4`,
+background `1e1e2e`, bold flag set, per cell. The only differences were the
+probe's own bugs, not Textual's. `render.py` needs no rewrite at all — the SGR
+it already emits is consumed unchanged, through a real compositor, to exact
+24-bit output.
+
+Mouse is added by hit-testing the click against the grid geometry
+`editor.py:90` already computes. Scrolling is a `ScrollView` wrapper.
 
 This is deliberately the *least* Textual-shaped version, and it is the right
 first step: it moves the compositor underneath the frame while keeping the
@@ -323,19 +390,49 @@ widget rule reads those and nothing else.
 
 ### 6.2 No Textual default may reach a cell
 
-Textual's own design tokens (`$primary`, `$surface`, `$panel`, `$boost`,
-`$warning`, and the scrollbar/focus/border roles) must all be **bound** to
-theme slots in phase A, so that any built-in surface that reaches the frame
-draws in theme colour. I2 is what proves it did not.
+Textual's colour system is **168 named tokens**, not the handful of design
+tokens one might guess at — `textual.design.ColorSystem(...).generate()` returns
+all of them. They cover the scrollbar (seven: `scrollbar`, `scrollbar-active`,
+`scrollbar-background`, `scrollbar-background-active`, `scrollbar-background-hover`,
+`scrollbar-hover`, `scrollbar-corner-color`), the footer, buttons, inputs,
+links, markdown headings, and the block cursor. Each also carries
+`-lighten-1..3`, `-darken-1..3` and `-muted` variants.
 
-Phase 0 has already shown what I2 will be doing. The `dark` fixture paints
-**55** colours at 100x30 against `distinct`'s **50** on the same layout — the
-near-black frame is where a leaked default is least visible and most worth
-asserting on, which is why it is a fixture and not a note.
+Several line up with huebox's slots closely enough to bind directly:
 
-> **TODO** — confirm the exact token names and the binding API against the
-> installed Textual before phase A; record the answer here. Not guessed at in
-> this document.
+| Textual token | huebox slot |
+| --- | --- |
+| `input-selection-background` / `-foreground` | `selection-background` / `selection-foreground` |
+| `block-cursor-foreground` / `-background` / `-text-style` | `cursor-color` / `cursor-text` |
+| `text` / `text-muted` / `text-disabled` | `foreground` / a muted chrome slot |
+| `background`, `surface`, `panel`, `boost` | `background`, and the frame's own fill |
+| `screen-selection-background` / `-foreground` | the selection pair again |
+
+**The override mechanism is verified.** `App.get_css_variables()` returns a
+mapping that is fed to the `Stylesheet` as-is, so returning token *names* works:
+
+```python
+class Probe(App):
+    CSS = "Static { background: $panel; color: $text; }"
+    def get_css_variables(self):
+        return {**super().get_css_variables(),
+                "panel": "#112233", "text": "#aabbcc"}
+# -> w.styles.background == Color(17, 34, 51)
+# -> w.styles.color        == Color(170, 187, 204)
+```
+
+So phase A binds **all 168** to theme slots — not the handful that happen to
+appear in today's CSS. Any token a built-in surface reaches for then draws in
+theme colour, and I2 is what proves it.
+
+**One default is a live hazard.** `$text` is generated as `ansi_default` — the
+terminal's own foreground, not a colour huebox chose. Any widget that falls
+through to `$text` paints a colour outside the closure set, which is precisely
+what I2 exists to catch, and precisely the sort of thing that looks fine on the
+author's terminal.
+
+> **Resolved.** The TODO that used to sit here — token names and the binding
+> API — is answered above, against Textual 8.2.8.
 
 ### 6.3 Markup escaping
 
@@ -347,14 +444,34 @@ brackets.
 
 ### 6.4 Determinism
 
-Textual reads user configuration (a `~/.textual` theme/CSS file) and its own
-themes. Under the harness that would make the candidate depend on the
-developer's home directory and silently break I1 for everyone else. The
-harness must neutralise it — `HOME` redirected to a fixture directory, and the
-app's own theme set programmatically — and the app must never consult user
-config for colour.
+The original worry here was a user config file. **There is none** — searching
+Textual 8.2.8 finds no `~/.textual` theme or `.tcss` discovery. The real hazard
+is the environment, and it is worse than a config file because it is invisible:
 
-> **TODO** — confirm the config-discovery path and the override.
+| Variable | Default | Effect on the frame's bytes |
+| --- | --- | --- |
+| `TEXTUAL_COLOR_SYSTEM` | `auto` | **colour depth — the §4.5 blind spot** |
+| `TEXTUAL_THEME` | `textual-dark` | the base every token derives from |
+| `TEXTUAL_FILTERS` | `""` | adds line filters; `dim` changes every cell |
+| `NO_COLOR` | unset | installs a `Monochrome()` filter — kills all colour |
+| `TEXTUAL_ANIMATIONS` | `FULL` | output cadence |
+| `TEXTUAL` | `""` | features: `devtools`, `debug`, **`headless`** |
+| `TEXTUAL_DEBUG`, `TEXTUAL_FPS`, `TEXTUAL_DRIVER` | — | logging, cadence, driver |
+
+Textual also installs an `ANSIToTruecolor` line filter that converts ANSI
+colours against the app's *own* ansi theme, and honours `NO_COLOR` with a
+`Monochrome()` filter — both of which rewrite cells.
+
+Every one of these is read at **import time** into `textual.constants`, so none
+can be corrected inside the running app. The candidate must be launched as a
+subprocess with all of them pinned (absent or explicit), plus `TERM`,
+`COLORTERM`, `FORCE_COLOR`, `HOME` and `XDG_CONFIG_HOME`. Phase 0's
+`color_depth_env()` is the seam; phase 2 widens it into the full pinned
+environment. `auto` is never an acceptable value.
+
+> **Resolved.** The TODO that used to sit here is answered above. The
+> mechanism is not a config file at all, which is why the original wording was
+> wrong.
 
 ## 7. User-visible behaviour changes
 
@@ -373,6 +490,13 @@ Mouse support means SGR mouse reporting while the editor runs, so the user's
 terminal stops passing clicks through and text cannot be selected with the
 mouse mid-session. Expected for a full-screen app; worth a line in the README.
 Click-to-close and focus-follows-mouse are the compensating polish.
+
+**It is toggleable, and that closes the question.** `App.run(mouse=False)`
+disables reporting for the session, and the driver honours it
+(`LinuxDriver(..., mouse=False)` never emits the enable sequences). So a
+`--no-mouse` flag is a one-line pass-through rather than a feature. It is not
+built here — the editor is single-purpose — but the cost of adding it later is
+one argument, and the README can say so honestly.
 
 ### 7.3 Render cadence
 
@@ -438,7 +562,10 @@ renames.
    `editor.REQUIRES` declaration with `cli`'s clean-failure guard, and §9's
    extras table. 395 tests green under `-W always`.
 2. Textual shell around the existing draw: App, keys, resize, raw mode.
-   `render.py` untouched; frame still painted by huebox. I1 green.
+   `render.py` untouched; frame still painted by huebox. I1 green. **The
+   mechanism is already proven** (§5.5), so this phase is assembly rather than
+   discovery — with the caveat from §6.4 that the candidate's whole environment
+   has to be pinned before a single byte is trusted.
 3. Phase A: the single custom widget, `render.py` per-row, `tui.py` retired,
    `MIN_COLS`/`MIN_ROWS` relocated. I1 + I2 green.
 4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
@@ -463,6 +590,7 @@ I1 is green.**
 | Bracket injection from paths/theme names | `test_markup.py` (§6.3) |
 | Developer-local Textual config skewing results | `HOME` redirect (§6.4) |
 | Loss of pure-render testability | `test_render.py` unchanged (§5.2) |
+| Colour system degrading in-process | Pinned env (§6.4); read at import time, so only the launcher can fix it |
 | Scope creep into config writing | §5.1 — `formats/`, `themes.py` untouched |
 
 ## 12. Decisions
@@ -488,14 +616,44 @@ I1 is green.**
 10. **This document lives in `docs/001-spec/`.** The colour model (§5) and the
     file contract (§6.2) do not change, so `spec.md`'s own rule does not move it
     to `docs/002-spec/`.
+11. **Fix the one-line scroll defect before re-recording goldens** (§4.8).
+    Frame height is `min(rows - 1, 39)`, so at 80x24, 40x12 and 100x40 the
+    frame fills the screen and the trailing newline scrolls it: the wordmark
+    row is lost. The goldens captured in phase 0 encode that loss, and I1 would
+    otherwise *enforce* it — a migrated editor would have to reproduce the bug
+    to pass. Pre-existing and unrelated to Textual; found by parsing output as
+    a terminal instead of as a string.
+12. **Bind all 168 tokens, not the ones today's CSS happens to use** (§6.2).
+    `$text` alone is generated as `ansi_default`, so a single unbound token is
+    enough to leak the terminal's own foreground into the frame.
 
 ## 13. Open questions
 
-1. Exact Textual design-token names and the API that binds them (§6.2).
-2. Textual's user-config discovery path and how the harness neutralises it
-   (§6.4).
-3. Whether the Theme picker should become a real focusable list in phase B or
-   stay a phase-A widget with key bindings — decided per extraction, not now.
-4. Whether mouse support should be toggleable (§7.2).
+Everything this document used to leave open is now answered by measurement
+against Textual 8.2.8. What is left is what is genuinely a decision for the
+next person, not a fact to go look up.
+
+1. ~~Exact Textual design-token names and the API that binds them~~ —
+   **answered, §6.2.** 168 tokens; `get_css_variables()` overrides them by
+   name; `$text` defaults to `ansi_default` and must be bound.
+2. ~~Textual's user-config discovery path~~ — **answered, §6.4.** There is no
+   user config file; the hazard is eight environment variables read at import
+   time, listed and pinned.
+3. Whether the theme picker becomes a real focusable list in phase B or stays a
+   phase-A widget with key bindings. Still open, and deliberately per
+   extraction: the answer depends on whether the list's rows survive I1 as
+   separate widgets, which is only knowable once there is something to extract.
+4. ~~Whether mouse support should be toggleable~~ — **answered, §7.2.**
+   `App.run(mouse=False)`. Not building it; the cost of adding it is one
+   argument.
 5. Whether the diff widget (§14.4) is extractable under I2, or whether its
-   paired-colour rows make it a permanent phase-A widget.
+   paired-colour rows make it a permanent phase-A widget. Still open, for the
+   same reason as 3 — but note that `diff_lines` emits `DIFF_ADDED`/`DIFF_REMOVED`
+   in theme slots, so the closure set already covers it and I2 has nothing extra
+   to say about it.
+6. **New, and the only one that blocks:** the frame scrolls a line at 80x24,
+   40x12 and 100x40 (§4.8). Fix the defect and re-record the goldens, or accept
+   it and let I1 enforce the missing wordmark? The spec says fix (§4.8,
+   decision 11), and the fix is one line — but it changes what every golden
+   contains, so it is worth saying out loud rather than slipping into a
+   migration commit.
