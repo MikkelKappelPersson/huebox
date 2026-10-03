@@ -434,7 +434,9 @@ renames.
    `pyproject.toml`. 389 tests green under `-W always`, and green again with
    pyte absent (14 skipped), because pyte is an extra and not a dependency.
 1. Packaging: the two extras, the `edit` guard, §9 amendment. No behaviour
-   change.
+   change. **Landed:** the `editor` and `test` groups in `pyproject.toml`, the
+   `editor.REQUIRES` declaration with `cli`'s clean-failure guard, and §9's
+   extras table. 395 tests green under `-W always`.
 2. Textual shell around the existing draw: App, keys, resize, raw mode.
    `render.py` untouched; frame still painted by huebox. I1 green.
 3. Phase A: the single custom widget, `render.py` per-row, `tui.py` retired,

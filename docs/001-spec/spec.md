@@ -497,6 +497,25 @@ frame already drew.
 - No network access at runtime, for any command.
 - No writes outside the resolved config and its backup.
 
+**Extras, not dependencies.** Optional-dependency groups exist so that the one
+dependency above stays one:
+
+| Group | Holds | Cost to install it |
+| --- | --- | --- |
+| `editor` | Textual, for the interactive editor | `huebox edit` only |
+| `test` | pyte, for the colour-equivalence harness (§10) | never, for a user |
+
+`show`, `list`, `use`, `new`, `import` and `--dump` install **one** dependency
+and need no extra. A missing extra is a user error: one line on stderr with the
+install line and exit 1, never a traceback (AGENTS.md). The editor declares
+what it needs in `editor.REQUIRES` and `cli` reads that, so the two cannot
+drift.
+
+> The `editor` group is **empty of effect until the Textual migration's phase
+> 3** (`textual-migration.md` §10), because the editor is still the stdlib one.
+> Declaring it early would break `huebox edit` on a bare install for no reason;
+> the guard is built and tested now, and the name is added when it is true.
+
 ## 10. Testing
 
 `python3 -m unittest discover -s tests` (post-§17 layout; v1: `test_huebox -v`) must cover, at minimum:

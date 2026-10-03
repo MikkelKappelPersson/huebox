@@ -18,6 +18,13 @@ import signal
 import sys
 from typing import NamedTuple
 
+#: Optional-dependency groups this editor needs to run, checked by `cli` before
+#: the session opens so a missing extra is an error line and an exit 1 rather
+#: than a traceback (AGENTS.md). Empty while the editor is still the stdlib one;
+#: the Textual migration turns it into `("textual",)` in its phase 3, and until
+#: then `huebox edit` keeps working on a bare install.
+REQUIRES: tuple = ()
+
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
 from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,

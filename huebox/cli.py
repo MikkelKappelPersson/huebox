@@ -22,12 +22,13 @@ that belongs to another theme (§13.6, decision 26).
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 import time
 from collections import namedtuple
 
-from . import __version__, themes
+from . import __version__, editor, themes
 from .color import SLOTS
 from .detect import resolve
 from .editor import Library, edit
@@ -301,6 +302,20 @@ def _edit_target(args) -> Target:
 # running the editor
 # --------------------------------------------------------------------------
 
+def _missing_extras() -> list:
+    """Optional-dependency groups the editor needs that are not installed.
+
+    Read off `editor.REQUIRES` rather than named here, so the editor is the one
+    place that says what it needs and cannot drift from it.
+
+    A missing extra is a user error, so it is reported on stderr with the
+    install line and exits 1 — never a traceback from deep inside an import
+    (AGENTS.md). Returns the names, empty when nothing is missing.
+    """
+    return [name for name in editor.REQUIRES
+            if importlib.util.find_spec(name) is None]
+
+
 def _run_editor(target: Target, spec: PushSpec = None) -> int:
     """Open the editor; theme mode writes truth, then pushes (§13.6).
 
@@ -319,6 +334,13 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
     writes truth only: a programmatic `edit()` must never push a terminal
     the caller did not ask about.
     """
+    missing = _missing_extras()
+    if missing:
+        groups = ",".join(missing)
+        return _fail(f"the editor needs the '{groups}' extra — install it with "
+                     f"`pipx install 'huebox[{groups}]'` "
+                     f"(or `uv tool install 'huebox[{groups}]'`), or run "
+                     f"`huebox show` which needs no extra")
     spec = spec or PushSpec((), None, None, True)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         # a pipe or a file: no terminal to drive, and no traceback either
