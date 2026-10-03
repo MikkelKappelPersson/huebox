@@ -16,7 +16,7 @@ from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, HSV_COMPACT,
-                           HSV_FULL, HSV_LABELS, MARK_AFTER, MARK_BEFORE,
+                           HSV_FULL, HSV_LABELS, MARK,
                            LABEL_WIDTH, PAIR_MIN_COLS,
                            PAIR_WIDTH, SELECTED_TEXT, TOKEN_SLOTS, WORDMARK,
                            WORDMARK_SLOTS, _sample, backdrop, bg, chrome, fg,
@@ -260,9 +260,8 @@ class HsvReadout(unittest.TestCase):
                        if char != " " and i not in line)
 
     def marks(self, cells):
-        """Where the hairline is: the cells wearing a half block."""
-        return [i for i, (_, _, char) in enumerate(cells)
-                if char in (MARK_AFTER, MARK_BEFORE)]
+        """Where the hairline is: the one cell wearing the mark."""
+        return [i for i, (_, _, char) in enumerate(cells) if char == MARK]
 
     CLEAR = "#1c1c1c"          # grey: every hairline is clear of a number
 
@@ -353,55 +352,59 @@ class HsvReadout(unittest.TestCase):
         self.assertNotIn("\033[1m", line)          # no bold: §8.1
         self.assertNotIn("\033[2m", line)          # no dim either
 
-    def test_every_bar_carries_a_hairline_and_nothing_else(self):
-        # the playhead is a line in the gap between two cells — the halves
-        # on either side of it — not a block, and never more than that
+    def test_every_bar_carries_one_hairline_and_nothing_else(self):
+        # a line, not a stripe: one cell, one glyph, an eighth of it ink,
+        # always inside the bar
         for value in ("#61afef", "#ff0000", "#ffffff", "#000000", "#f5f5dc",
                       "#010203"):
             cells = self.cells(hsv_readout(self.SLOTS, value, self.WIDE))
             at = 0
-            for width in HSV_FULL:
+            for axis, width in enumerate(HSV_FULL):
                 bar = cells[at:at + width]
                 with self.subTest(value=value, width=width):
                     self.assertEqual(len(bar), width)
-                    line = self.marks(bar)
-                    self.assertIn(len(line), (1, 2))
-                    self.assertEqual(line, list(range(line[0], line[0] + 2))
-                                     if len(line) == 2 else line)
-                    if len(line) == 2:               # a gap, straddled
-                        self.assertEqual(
-                            (bar[line[0]][2], bar[line[1]][2]),
-                            (MARK_AFTER, MARK_BEFORE))
-                    self.assertEqual(len({bar[i][1] for i in line}), 1)
+                    want = min(width - 1, max(0, int(self.reading(value, axis)
+                                                    * (width - 1) + 0.5)))
+                    self.assertEqual(self.marks(bar), [want])
+                    line = self.marks(bar)[0]
+                    self.assertEqual(bar[line][2], MARK)
+                    # the line is readable wherever the sweep puts it
+                    self.assertEqual(bar[line][1],
+                                     hex_to_rgb(readable_fg(rgb_to_hex(
+                                         bar[line][0]))))
                 at += width
 
+    def reading(self, value, axis):
+        """The slot's own reading of one axis, 0..1."""
+        return rgb_to_hsv(hex_to_rgb(value))[axis]
+
     def test_the_hairline_is_where_the_reading_is(self):
-        # never more than half a cell off, and on the bar's own edge at
-        # either end of the axis
+        # never more than half a cell off, and in the end cell at the ends
         for value in ("#61afef", "#00c000", "#ff0000", "#ffffff", "#0000ff",
                       "#f5f5dc", "#010203"):
-            reading = rgb_to_hsv(hex_to_rgb(value))[0]
             bar = self.chip(hsv_readout(self.SLOTS, value, self.WIDE), 0)
             with self.subTest(value=value):
-                line = self.marks(bar)
-                want = reading * (HSV_FULL[0] - 1)
-                # the gap the line straddles: after the cell it falls in
-                self.assertLessEqual(abs(line[0] + 0.5 - want), 1.0)
-                self.assertGreaterEqual(line[0], 0)
-                self.assertLessEqual(line[-1], HSV_FULL[0] - 1)
+                line = self.marks(bar)[0]
+                want = self.reading(value, 0) * (HSV_FULL[0] - 1)
+                self.assertLessEqual(abs(line - want), 1.0)
+                self.assertGreaterEqual(line, 0)
+                self.assertLessEqual(line, HSV_FULL[0] - 1)
 
     def test_the_hairline_hugs_the_ends_of_an_axis(self):
-        self.assertEqual(_marker(0, 9), {0: MARK_BEFORE})
-        self.assertEqual(_marker(-1, 9), {0: MARK_BEFORE})
-        self.assertEqual(_marker(8, 9), {8: MARK_AFTER})
-        self.assertEqual(_marker(99, 9), {8: MARK_AFTER})
-        self.assertEqual(_marker(4, 9), {4: MARK_AFTER, 5: MARK_BEFORE})
+        # `MARK` is drawn an eighth into a cell, so the two ends of the axis
+        # land in the first and the last cell and nowhere else
+        self.assertEqual(_marker(0, 9), {0: MARK})
+        self.assertEqual(_marker(-1, 9), {0: MARK})
+        self.assertEqual(_marker(8, 9), {8: MARK})
+        self.assertEqual(_marker(99, 9), {8: MARK})
+        self.assertEqual(_marker(4, 9), {4: MARK})
+        self.assertEqual(_marker(4.4, 9), {4: MARK})
+        self.assertEqual(_marker(4.6, 9), {5: MARK})
 
-    def test_the_line_takes_the_cells_it_crosses_and_no_more(self):
-        # the one thing the two cannot share: a cell. Where the reading
-        # falls inside the number the hairline owns those two cells and the
-        # rest of the number is still there — the exact reading is on the
-        # row below, and the line is what the frame is for (§8.3)
+    def test_the_line_takes_the_one_character_it_shares(self):
+        # the price of a line thinner than a character: a cell holds one
+        # of them, so a reading inside the number costs one digit — which is
+        # why the exact reading is on the row below (§8.3)
         cells = self.cells(hsv_readout(self.SLOTS, "#61afef", self.WIDE))
         at, crossed = 0, []
         for width, value in zip(HSV_FULL, ("207°", "59%", "94%")):
@@ -411,14 +414,21 @@ class HsvReadout(unittest.TestCase):
             number = set(range(first, first + len(value)))
             worn = [i for i in range(width)
                     if bar[i][2] != " " and i not in line]
+            taken = sorted(line & number)
             with self.subTest(value=value):
-                self.assertEqual("".join(bar[i][2] for i in worn),
-                                 value[:len(worn)])     # what is left reads
-                self.assertGreaterEqual(len(worn), len(value) - 2)
-            crossed += sorted(line & number)
+                self.assertLessEqual(len(taken), 1)
+                # every digit still on screen is the digit that belongs
+                # there, and exactly the one the line took is missing
+                self.assertEqual(
+                    [bar[i][2] for i in worn],
+                    [value[i - first] for i in range(width)
+                     if bar[i][2] != " " and i not in line])
+                self.assertEqual(len(worn), len(value) - len(taken))
+            crossed += taken
             at += width
-        # `7°` under the hue line, `9%` under the saturation one
-        self.assertEqual(crossed, [8, 9, 4, 5])
+        # the `7` of `207°` under the hue line, the `%` of `59%` under the
+        # saturation one
+        self.assertEqual(crossed, [8, 5])
 
     def test_the_bars_follow_the_reading_they_are_about(self):
         # `q` moves the hue: the number on the hue bar moves with it, the

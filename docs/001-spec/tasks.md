@@ -657,3 +657,27 @@ character: where the reading falls inside the number the line owns those two
 cells, and the number loses two characters — which is why the exact reading
 is on the row below and why the test says so out loud rather than pretending
 the two never meet.
+
+## P16 — the hairline is an eighth of a cell (spec §8.3)
+
+- [x] `render.py`: `MARK_AFTER`/`MARK_BEFORE` → `MARK` (U+258F, left one
+      eighth block), one cell, drawn an eighth into the cell the reading
+      falls nearest
+- [x] the line's ink is the readable side of the cell it is drawn into
+- [x] tests: one mark per bar and never two, its ink, its position (half a
+      cell at worst), and the single character it costs the number
+- [x] spec §8.3, README
+
+Notes: two half blocks are not a hairline. `▐` and `▌` side by side are one
+full cell of ink — the two halves make a *solid* column, which is what the
+eye reads, however thin each glyph looks in isolation. That is why the mark
+is now a single character: a left one-eighth block, which leaves the other
+seven eighths of the cell showing the sweep.
+
+Anchoring the glyph to the cell's edge rather than centring it buys the
+sub-cell position the bar wants for free — the line is an eighth into the
+nearest cell, so hue 207° lands a seventh of the way into cell 8 of fifteen
+rather than in the middle of one.
+
+One character is all a thinner-than-character line can cost: the cell it is
+drawn into is the cell whose character it replaces.

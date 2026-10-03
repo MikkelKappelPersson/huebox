@@ -131,14 +131,15 @@ of the theme rather than a preview beside it.
 The `selected` row ends in a reading of the slot's own colour: three bars,
 each a sweep of one axis — the whole hue wheel at the slot's own saturation
 and value, saturation grey → colour, value black → colour — with the reading
-printed in the middle of each bar and a hairline marking where it sits,
-drawn on the gap between two cells the way a caret is drawn between two
-characters. The bars say what the axis means; the line and the number say
-where you are; and the exact reading — `hue 207.0  sat 59.4%  val 93.7%`, to
-the precision you are steering with — sits on the row below beside the
-specimen. Press `a`/`s` or `z`/`x` and the whole hue wheel repaints; press `q`
-and the hairline slides along the wheel. Quit with
-unsaved changes and huebox asks for a second `Esc` first; `r` throws the
+printed in the middle of each bar and a hairline marking where it sits — one
+eighth of a cell wide, set into the cell the reading falls nearest, so the
+bar is still a bar and not a bar with a stripe through it. The bars say what
+the axis means; the line and the number say where you are; and the exact
+reading — `hue 207.0  sat 59.4%  val 93.7%`, to the precision you are
+steering with — sits on the row below beside the specimen. Press `a`/`s` or
+`z`/`x` and the whole hue wheel repaints; press `q` and the hairline slides
+along the wheel. Quit with unsaved changes and huebox asks for a second `Esc`
+first; `r` throws the
 buffer away and goes back to your last save.
 
 The header names what you are editing: `ember ● ghostty` for a theme (the `●`

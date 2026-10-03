@@ -432,17 +432,23 @@ at once, and a colour with no saturation shows as the grey bar it is. The
 saturation bar runs grey → colour and the value bar black → colour, each
 painted at the slot's own hue. The bar is a legend of what its axis means.
 
-**The reading is a hairline on that sweep**, drawn where a caret is drawn
-between two characters: `MARK_AFTER` in the cell before the gap and
-`MARK_BEFORE` in the cell after it — half of each, one line. It is a hairline
-and not a block because a block is a third of a nine-cell bar, and a bar with
-a third of it painted over is no longer a sweep. It costs two half-cells of
-what is under it, and where the reading falls inside the number those are two
-of its characters: the rest of the number is still there, and the exact reading
-is on the row below. At either end of an axis the line hugs that end of the
-bar, where there is only one cell to use, and anywhere else it lands on the
-gap that follows the cell the reading falls in — never more than half a cell
-off.
+**The reading is a hairline on that sweep**: `MARK`, a left one-eighth block
+— the thinnest line a cell can draw — set an eighth into the cell the reading
+falls nearest. It is not a block, because a block is a third of a nine-cell
+saturation bar painted over, and a bar with a third of it painted over is no
+longer a sweep. It is not two half-cells either, which is a *full* cell of ink
+however thin each half looks on its own.
+
+The glyph is anchored to the cell's edge rather than centred in it, so the
+line's position inside the cell is the bar's sub-cell resolution: it is never
+more than half a cell off, and the other seven eighths of its cell keep
+showing the sweep. Its ink is the readable side of the cell it is drawn into,
+the same rule the number follows.
+
+A cell holds one character, so the line costs whatever character is in that
+cell — one digit of the number when the reading falls inside it, which is the
+price of a line thinner than a character and the reason the exact reading is
+on the row below.
 
 **The value is printed centred on its bar**, in one ink for the whole
 number: `readable_fg` of the average of the cells it covers —

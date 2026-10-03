@@ -215,11 +215,12 @@ def backdrop(line: str, slots, cols: int) -> str:
 # the hsv readout (§8.3)
 # --------------------------------------------------------------------------
 
-# The reading's own hairline through the bar: the two half blocks that draw
-# a line in the gap between two cells, the way a caret is drawn between two
-# characters (§8.3).
-MARK_AFTER = "\u2590"             # right half of a cell: the line at its edge
-MARK_BEFORE = "\u258c"            # left half of a cell: the line at its edge
+# The reading's own hairline through the bar: the thinnest line a cell can
+# draw, one eighth of it wide, set into the cell the reading falls nearest
+# (§8.3). A left one-eighth block rather than `│` because the glyph is
+# anchored to the cell's edge, which is the sub-cell position the bar wants,
+# and because the eight other sevenths of the cell keep showing the sweep.
+MARK = "\u258f"                   # LEFT ONE EIGHTH BLOCK
 
 # A bar is a sweep of its whole axis — a legend of what the axis means, with
 # the reading printed on top of it. The hue bar is the wheel at the slot's
@@ -266,25 +267,20 @@ def _ink(cells: list) -> str:
 
 
 def _marker(at: float, width: int) -> dict:
-    """Where the reading's hairline falls: the halves it draws itself into.
+    """Where the reading's hairline falls: the one cell it draws itself into.
 
-    A caret between two cells is a hairline in the *gap* between them, so
-    that is where it is drawn: `MARK_AFTER` in the cell before the gap and
-    `MARK_BEFORE` in the cell after it — half of each, one line. The sweep
-    reads through it, and a digit it crosses keeps the half of itself the
-    line does not cover, so the number survives the line instead of trading
-    places with it.
+    `MARK` is an eighth of a cell wide, so the bar is a bar and not a bar
+    with a stripe through it — but a cell holds one character, so the line
+    costs the character in that cell, and a reading inside the number costs
+    one digit of it. That is the price of a line thinner than a character,
+    and it is why the exact reading is on the row below (§8.3).
 
-    A reading at either end of the axis hugs that end of the bar, where
-    there is only one cell to use, and anything in between lands on the gap
-    that follows the cell it falls in — never more than half a cell off.
+    The line sits an eighth into the cell the reading falls nearest, which
+    is never more than half a cell off, and at either end of the axis it
+    lands in the end cell — against that end of the bar.
     """
-    if at <= 0:
-        return {0: MARK_BEFORE}
-    if at >= width - 1:
-        return {width - 1: MARK_AFTER}
-    cell = int(at)
-    return {cell: MARK_AFTER, cell + 1: MARK_BEFORE}
+    cell = min(width - 1, max(0, int(at + 0.5)))
+    return {cell: MARK}
 
 
 def _chip(slots, colour, width: int, text: str, at: float) -> str:
@@ -292,15 +288,15 @@ def _chip(slots, colour, width: int, text: str, at: float) -> str:
 
     Three things in `width` cells: the sweep (what the axis means), the
     hairline (where the reading is), the number (what the reading is). The
-    number takes one ink for the whole number and the hairline one ink for
-    both of its halves, so a line stays a line across a change of tone
-    instead of reading as two marks (§8.3).
+    number takes one ink for the whole number, the hairline the readable ink
+    of the cell it is drawn into — the same rule, applied to a line that is
+    eight times thinner than a character (§8.3).
     """
     cells = [rgb_to_hex(colour(step)) for step in _sweep(width)]
     first = max(0, (width - len(text) + 1) // 2)
     marks = _marker(at, width)
     ink = _ink(cells[first:first + len(text)] or cells)
-    line = _ink([cells[i] for i in marks])
+    line = _ink([cells[i] for i in marks])   # one cell, one ink
     out = []
     for i, cell in enumerate(cells):
         if i in marks:
