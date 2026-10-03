@@ -15,7 +15,8 @@ from pygments import lex
 from pygments.lexers import get_lexer_by_name
 from pygments.token import Token
 
-from .color import MISSING, NAMED, hex_to_rgb, readable_fg
+from .color import (MISSING, NAMED, hex_to_rgb, hsv_to_rgb, readable_fg,
+                   rgb_to_hex, rgb_to_hsv)
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -198,6 +199,90 @@ def backdrop(line: str, slots, cols: int) -> str:
     if not seen:
         return f"{fill}{pad}{RESET}"
     return f"{fill}{row}{fill}{pad}{RESET}"
+
+
+# --------------------------------------------------------------------------
+# the hsv readout (§8.3)
+# --------------------------------------------------------------------------
+
+# Three axes, three gradients. The hue bar sweeps the wheel at the slot's own
+# saturation and value, so `a`/`s` and `z`/`x` repaint every cell of it at
+# once; saturation and value keep one width everywhere, so the row reads the
+# same at every terminal size and only the hue bar flexes.
+HSV_SAT_W = 6
+HSV_HUE_MIN, HSV_HUE_MAX = 10, 30
+HSV_SHORT = "{:.0f}° {:.0f}% {:.0f}%"        # `207° 59% 94%`
+HSV_LONG = "hue {:5.1f}  sat {:4.1f}%  val {:4.1f}%"
+# `hue `, `  sat `, `  val ` — the labels and the gaps between the bars
+HSV_LABELS = 16
+
+
+def hsv_numbers(hue: float, sat: float, val: float) -> str:
+    """`hue 207.0  sat 59.4%  val 93.7%` — the reading the bars replace."""
+    return HSV_LONG.format(hue * 360, sat * 100, val * 100)
+
+
+def _marker(reading: float, width: int) -> int:
+    """The cell a 0..1 reading sits on: round half up, so 1.0 is the last."""
+    return min(width - 1, max(0, int(reading * (width - 1) + 0.5)))
+
+
+def _bar(slots, colour, at: int, width: int) -> str:
+    """`width` cells of `colour`, the one at `at` wearing the key slot.
+
+    `colour` takes a 0..1 reading and answers in rgb, like `hsv_to_rgb`:
+    the bars are computed, never read from a slot, because no slot holds a
+    hue sweep — only the reading of one.
+
+    The marker is painted *over* its cell rather than instead of it, so the
+    colour it points at still reads; the bar reopens the buffer's background
+    on the way out, because a reset in the middle of the row would put the
+    terminal's own background under the label that follows (§8.2, §14.1).
+    """
+    key = fg(slots.get(CHROME_KEY, MISSING))
+    cells = [f"{bg(rgb_to_hex(colour(i / (width - 1))))}{key}│{RESET}"
+             if i == at else
+             f"{bg(rgb_to_hex(colour(i / (width - 1))))} {RESET}"
+             for i in range(width)]
+    return "".join(cells) + bg(slots.get("background", MISSING))
+
+
+def hsv_readout(slots, value: str, cols: int) -> str:
+    """The slot's hue, saturation and value: bars, or the numbers (§8.3).
+
+    Pure like every widget here: the gradients are computed from `value`
+    and the chrome from `slots`, on the call, so one keystroke moves the
+    markers and repaints the bars on the same frame (§14.1). `cols` is the
+    room the row has left for the reading, and the ladder it answers with is
+    the one §8.3 records: bars and the short readout, bars alone, or the
+    numbers. Nothing here is ever wider than `cols`; the row that carries it
+    is a row the frame already spends (§15).
+    """
+    hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
+    short = HSV_SHORT.format(hue * 360, sat * 100, val * 100)
+    numbers = hsv_numbers(hue, sat, val)
+    # the fit is measured on the strings this slot actually produces, so a
+    # rung is never chosen and then cut: the ladder answers with what fits,
+    # not with what usually fits
+    bars_only = HSV_LABELS + HSV_HUE_MIN + 2 * HSV_SAT_W
+    if cols >= bars_only + 2 + len(short):
+        hue_w = min(HSV_HUE_MAX, cols - (bars_only + 2 + len(short)
+                                         - HSV_HUE_MIN))
+        read = "  " + chrome(short, CHROME_MUTED, slots)
+    elif cols >= bars_only:
+        hue_w = HSV_HUE_MIN + min(HSV_HUE_MAX - HSV_HUE_MIN,
+                                  cols - bars_only)
+        read = ""
+    elif cols >= len(numbers):
+        return numbers
+    else:
+        return ""               # too narrow for a reading at all: the hex
+    axes = (("hue", hue, hue_w, lambda t: hsv_to_rgb(t, sat, val)),
+            ("sat", sat, HSV_SAT_W, lambda t: hsv_to_rgb(hue, t, val)),
+            ("val", val, HSV_SAT_W, lambda t: hsv_to_rgb(hue, sat, t)))
+    return "  ".join(chrome(label, CHROME_MUTED, slots) + " "
+                     + _bar(slots, colour, _marker(reading, width), width)
+                     for label, reading, width, colour in axes) + read
 
 
 # --------------------------------------------------------------------------

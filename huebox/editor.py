@@ -21,8 +21,8 @@ from typing import NamedTuple
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
                     is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
 from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
-                     diff_lines, example_lines, fg, hint_line, sample_lines,
-                     title, wordmark)
+                     diff_lines, example_lines, fg, hint_line, hsv_readout,
+                     sample_lines, title, visible, wordmark)
 from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
                   term_size)
 
@@ -338,15 +338,14 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
-    h, s, v = rgb_to_hsv(hex_to_rgb(value))
-    # the slot's own name and hex are the point of the line, the three
-    # numbers are the reading of it: the theme's text colour for both, and
-    # muted for the hex and the hsv beside it (§8.1)
-    body.append("  " + title("selected", slots)
-                + "  " + chrome(key, "foreground", slots)
-                + "  " + chrome(value, CHROME_MUTED, slots) + "   "
-                + chrome(f"hue {h * 360:5.1f}  sat {s * 100:4.1f}%"
-                         f"  val {v * 100:4.1f}%", CHROME_MUTED, slots))
+    # §8.3 — the reading of the slot's own colour. It is bars where the row
+    # has room for them and the numbers they replace where it does not, so
+    # `room` is whatever the subject leaves — the row itself never grows
+    # and §15's budget does not move
+    subject = ("  " + title("selected", slots)
+               + "  " + chrome(key, "foreground", slots)
+               + "  " + chrome(value, CHROME_MUTED, slots) + "   ")
+    body.append(subject + hsv_readout(slots, value, cols - visible(subject)))
     body.append(f"    {fg(value)}AaBbCc 0123 {RESET}")
     body.append("")
 

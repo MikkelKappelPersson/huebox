@@ -15,7 +15,7 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
 from huebox.color import NAMED, SLOTS  # noqa: E402
-from huebox.render import BOLD, RESET, bg, fg  # noqa: E402
+from huebox.render import BOLD, RESET, bg, fg, visible  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -168,6 +168,61 @@ class Floor(unittest.TestCase):
         body = lines(frame(editor.MIN_COLS - 1, 24))
         self.assertNotIn("48;2;", body[0])
         self.assertLessEqual(width(body[0]), editor.MIN_COLS - 1)
+
+
+class Readout(unittest.TestCase):
+    """The selected row's reading: bars, or the numbers (§8.3)."""
+
+    SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
+                 **{"palette-4": "#61afef"})
+
+    def selected(self, cols, rows=30, sel=4, slots=None):
+        body = plain_rows(frame(cols, rows, sel=sel,
+                                slots=slots or self.SLOTS))
+        return next(line for line in body if line.startswith("  selected"))
+
+    def test_a_wide_row_draws_the_bars_and_a_narrow_one_the_numbers(self):
+        self.assertIn("│", self.selected(100))
+        self.assertIn("207° 59% 94%", self.selected(100))
+        self.assertIn("│", self.selected(80))
+        self.assertNotIn("207°", self.selected(80))
+        self.assertIn("hue 207.0", self.selected(70))
+        self.assertNotIn("│", self.selected(70))
+        # too narrow for a whole reading: the hex is the value (§8.3)
+        self.assertNotIn("hue", self.selected(60))
+
+    def test_the_row_fits_at_every_size(self):
+        for cols in (120, 100, 90, 80, 72, 70, 68, 64, 60, 50, 45, 40):
+            with self.subTest(size=(cols, 30)):
+                self.assertLessEqual(visible(self.selected(cols)), cols)
+                # and the subject is never cut: name, then hex, in that order
+                text = self.selected(cols)
+                self.assertIn("#61afef", text)
+                self.assertLess(text.index("palette-4"), text.index("#61afef"))
+
+    def test_nudging_the_hue_moves_the_marker_not_only_the_hex(self):
+        # the point of the bars: a hue step the eye can follow moves the
+        # marker. One degree is finer than a 30-cell bar, so this steps x20
+        # — which is exactly why the short readout sits beside the bars
+        before = self.selected(100)
+        st = editor.EditorState(dict(self.SLOTS), lambda values: None)
+        st.sel, st.grid = 4, editor.grid_geometry(100)
+        for key in ("f", "f", "q"):
+            editor.apply_key(key, st)
+        after = self.selected(100, slots=st.slots)
+        self.assertNotEqual(before, after)
+        self.assertNotEqual(before.index("│"), after.index("│"))
+        self.assertNotIn("#61afef", after)      # the hex moved too
+
+    def test_the_readout_never_costs_a_row(self):
+        # §15 — the readout is a string on a row the frame already drew, so
+        # two sizes a rung apart (80 draws bars, 70 draws numbers) keep the
+        # same frame and the same widget lines
+        wide, narrow = frame(80, 24), frame(70, 24)
+        self.assertEqual(len(lines(wide)), len(lines(narrow)))
+        self.assertEqual(code_lines(lines(wide)), code_lines(lines(narrow)))
+        self.assertEqual(example_rows(lines(wide)),
+                         example_rows(lines(narrow)))
 
 
 class TooSmall(unittest.TestCase):

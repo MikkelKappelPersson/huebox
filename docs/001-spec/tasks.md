@@ -464,3 +464,35 @@ a single `48;2;` in it, a widget's blank line has two. That distinction is
 also why `backdrop` paints a blank row once instead of twice — the frame's
 own air and the code block's empty line are indistinguishable on screen, and
 the difference has to live in the escape sequence to be testable at all.
+
+## P10 — the selected slot's readout (spec §8.3)
+
+- [x] `render.py`: `hsv_readout(slots, value, cols)` — hue / sat / val as
+      three computed gradients with a `│` marker each, the marker in
+      `palette-11` painted *over* its cell
+- [x] the ladder: bars + short readout, bars alone, the long numbers, then
+      nothing — measured on the strings the slot produces, never clipped
+      after the fact (a cut-off number is worse than none)
+- [x] the gaps between bars reopen the buffer's `background`, so the floor
+      of §8.2 runs under the labels too
+- [x] `editor.py`: the readout replaces the numbers on the `selected` row;
+      no row added, so §15's ladder does not move (the tests say so)
+- [x] tests: `HsvReadout` in `tests/test_render.py`, `Readout` in
+      `tests/test_editor.py`; spec §8.3 (new), README
+
+Notes: hue editing was the one place the frame showed you a number and
+nothing else — `q` moved a digit by 1° and the eye had nothing to follow.
+The hue bar sweeps the wheel *at the slot's own saturation and value*, so
+`a`/`s` and `z`/`x` repaint every cell of it at once, and a colour with no
+saturation shows as the grey bar it is.
+
+The rung boundary is the interesting part. The first cut measured the short
+readout against `"0° 0% 0%"` and chose the bars-plus-numbers rung for a row
+that then had its `94%` clipped off the end — the rung has to be measured
+on what this slot actually produces. Below the numbers the readout is empty
+rather than cut, which is a small loss of information at 50–69 columns and
+the reason the frame at 60 no longer ends in `val 9`.
+
+The bars are computed, not read from a slot: no slot holds a hue sweep, only
+the reading of one. They are still live-everything (§14.1) because every
+cell is derived from the buffer's own hex on the call.

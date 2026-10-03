@@ -126,9 +126,16 @@ muted, and a section header is the theme's own foreground in bold. Edit
 the same frame. The floor is the buffer's too: every row of the editor —
 the ground under the palette grid, the air between the widgets, the column
 after the last hint — is painted in `background`, so the frame is a sample
-of the theme rather than a preview beside it. Quit with unsaved changes and
-huebox asks for a second `Esc` first; `r` throws the buffer away and goes
-back to your last save.
+of the theme rather than a preview beside it.
+
+The `selected` row ends in a reading of the slot's own colour: hue across
+the whole wheel at its current saturation and value, saturation grey →
+colour, value black → colour, each with a marker on it — so `q` moves
+something you can see and not only a digit. Beside them, where the terminal
+has the columns, the numbers (`207° 59% 94%`); where it does not, the
+bars alone; and on a narrow terminal the numbers they replace. Quit with
+unsaved changes and huebox asks for a second `Esc` first; `r` throws the
+buffer away and goes back to your last save.
 
 The header names what you are editing: `ember ● ghostty` for a theme (the `●`
 marks unsaved buffer changes) or `direct:/path/to/config` in a legacy
