@@ -16,7 +16,7 @@ from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, HSV_COMPACT,
-                           HSV_FULL, HSV_TIGHT, MARK,
+                           HSV_CHROME, HSV_FULL, HSV_TIGHT, MARK,
                            LABEL_WIDTH, PAIR_MIN_COLS,
                            PAIR_WIDTH, SELECTED_TEXT, TOKEN_SLOTS, WORDMARK,
                            WORDMARK_SLOTS, _sample, backdrop, bg, chrome, fg,
@@ -238,8 +238,7 @@ class HsvReadout(unittest.TestCase):
     # one character — a bar cell carries no ink unless it is the hairline
     CELL = re.compile(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
                       r"(?:\x1b\[38;2;(\d+);(\d+);(\d+)m)?([^\x1b])")
-    # the widest readings the chrome carries: `hue 240° sat 100% val 100% `
-    WIDE = sum(HSV_FULL) + 31
+    WIDE = sum(HSV_FULL) + HSV_CHROME    # the chrome is fixed — see below
 
     def cells(self, line):
         """Every bar cell of the readout: (bg, fg or None, character)."""
@@ -262,10 +261,28 @@ class HsvReadout(unittest.TestCase):
         """Where the hairline is: the one cell wearing the mark."""
         return [i for i, (_, _, char) in enumerate(cells) if char == MARK]
 
+    def test_the_readings_are_in_fixed_fields_so_the_bars_never_move(self):
+        # `hue   9°`, `hue  10°`, `hue 120°`: a reading that grows a digit
+        # must not move the bar after it, or the whole row jumps a column
+        # every time a number crosses a power of ten (§8.3)
+        for value in ("#090000", "#ff0000", "#00ff00", "#00ffff", "#ffffff",
+                      "#010101", "#61afef"):
+            line = hsv_readout(self.SLOTS, value, self.WIDE)
+            with self.subTest(value=value):
+                # the bars are the last `sum(HSV_FULL)` columns, so what is
+                # left for the readings is the same whatever they say
+                self.assertEqual(visible(line) - sum(HSV_FULL), HSV_CHROME)
+                self.assertEqual(visible(line), self.WIDE)
+        self.assertEqual(HSV_CHROME, 31)          # a constant, not a range
+        self.assertTrue(_plain(hsv_readout(self.SLOTS, "#00ff00", self.WIDE))
+                        .startswith("hue 120° "))
+        self.assertTrue(_plain(hsv_readout(self.SLOTS, "#090000", self.WIDE))
+                        .startswith("hue   0° "))
+
     def test_a_wide_room_gives_three_bars_with_their_readings(self):
         line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
         text = _plain(line)
-        readings = (("hue", "207°"), ("sat", "59%"), ("val", "94%"))
+        readings = (("hue", "207°"), ("sat", " 59%"), ("val", " 94%"))
         for label, reading in readings:
             self.assertIn(f"{label} {reading} ", text)
         self.assertEqual(len(self.cells(line)), sum(HSV_FULL))
@@ -275,7 +292,7 @@ class HsvReadout(unittest.TestCase):
         # complete: `hue 207° [bar]`, the bar carrying only the sweep and
         # the line, so there is nothing for the line to take (§8.3)
         line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
-        readings = (("hue", "207°"), ("sat", "59%"), ("val", "94%"))
+        readings = (("hue", "207°"), ("sat", " 59%"), ("val", " 94%"))
         for label, reading in readings:
             with self.subTest(label=label):
                 self.assertIn(f"{label} {reading} ", _plain(line))

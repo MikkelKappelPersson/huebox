@@ -706,3 +706,23 @@ and the single-ink-per-number rule goes away with the overlap that caused it.
 The numbers cost width, which is why the ladder grew a rung: `HSV_TIGHT`
 keeps bars on an ordinary 80-column terminal, and below it the exact reading
 on the specimen row is the whole reading — the same numbers, spelled out.
+
+## P18 — the readings get fixed fields (spec §8.3)
+
+- [x] `render.py`: each reading is right-aligned in `HSV_FIELD` (4) columns,
+      so `hue   9°`, `hue  10°` and `hue 120°` all put the bar after them in
+      the same column
+- [x] `HSV_CHROME` is a constant (31) rather than a range that moved with
+      the slot's value, which also fixes the ladder's thresholds
+- [x] tests: the bar columns are identical across one-, two- and three-digit
+      readings, in the readout and in the drawn frame
+- [x] spec §8.3, README
+
+Notes: the last jitter in the frame. The readings sat wherever their digits
+ended, so nudging a value across a power of ten — hue 99° to 100°, value 9% to
+10% — pushed the whole row a column sideways while the reader was looking at
+it. Fixed fields are what make the frame still.
+
+It also simplified the ladder: the chrome the readings need is now a constant,
+so a rung is chosen at the same width for every slot rather than one that
+depended on how many digits the slot happened to have.

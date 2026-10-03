@@ -451,6 +451,14 @@ are whole all the time — and the number, being off the gradient, is ordinary
 chrome in the muted the labels wear (§8.1), which is also the ink the exact
 reading below it wears.
 
+**Every reading is right-aligned in a field of `HSV_FIELD` columns** — `hue
+120°`, `hue  10°`, `hue   9°`, `sat   4%`, `sat 100%`. Without a fixed field a
+reading that grows a digit moves the bar after it, and the whole row jumps a
+column every time a number crosses a power of ten, which is a thing the eye
+notices while it is trying to read the colours. With one, `HSV_CHROME` is a
+constant (31 columns) instead of a range, the ladder's thresholds stop moving
+with the slot's value, and the frame is still where it was a frame ago.
+
 **The exact reading has its own line, under the bars.** A number is rounded to
 a degree and a percent, which is the wrong precision for a frame you are
 steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%` sits on the
@@ -465,9 +473,10 @@ size, and the bars are what gives way as the row narrows: `HSV_FULL` (hue 15,
 saturation 9, value 9) where the row has the columns, `HSV_COMPACT` (11, 7, 7)
 where it has nearly enough, `HSV_TIGHT` (7, 5, 5) on an ordinary 80-column
 terminal, and nothing where even that does not fit — at which point the exact
-reading below is the whole reading. The ladder is measured on the strings this
-slot produces, chrome included, so a rung is never chosen and then clipped, and
-the subject — the slot's name and hex — is never the thing that gets cut.
+reading below is the whole reading. Because `HSV_CHROME` is fixed, each rung
+is chosen at a width that is the same for every slot, so a rung is never
+chosen and then clipped, and the subject — the slot's name and hex — is never
+the thing that gets cut.
 Nothing here costs a row: the readout replaces the string that was on a row the
 frame already drew.
 

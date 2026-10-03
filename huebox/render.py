@@ -229,9 +229,18 @@ MARK = "\u258f"                   # LEFT ONE EIGHTH BLOCK
 # shows as the grey bar it is; the saturation bar runs grey -> colour and the
 # value bar black -> colour, each painted at the slot's own hue.
 #
-# Three rungs of the ladder (§8.3): the numbers sit outside the bars now, so
-# their chrome is paid for at every size, and the bars are what gives way as
-# the row narrows.
+# The readings are right-aligned in a field of `HSV_FIELD` columns, so a
+# reading that grows a digit — `hue   9°`, `hue  10°`, `hue 120°` — does not
+# move the bar after it. Without this the whole row jumps a column every
+# time a number crosses a power of ten, which is a thing the eye notices
+# while it is trying to read the colours (§8.3).
+HSV_LABELS = ("hue", "sat", "val")
+HSV_FIELD = 4                        # `120°`, ` 48%`, `100%`
+HSV_CHROME = sum(len(label) + 1 + HSV_FIELD + 1
+                 for label in HSV_LABELS) + 2 * (len(HSV_LABELS) - 1)
+
+# Three rungs of the ladder (§8.3): the numbers sit outside the bars, and
+# their chrome is fixed, so the bars are what gives way as the row narrows.
 HSV_FULL = (15, 9, 9)                # hue, sat, val on a wide row
 HSV_COMPACT = (11, 7, 7)             # on a nearly-wide one
 HSV_TIGHT = (7, 5, 5)                # and on an ordinary 80-column one
@@ -323,18 +332,17 @@ def hsv_readout(slots, value: str, cols: int) -> str:
     the same numbers twice.
     """
     hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
-    axes = (("hue", hue, f"{hue * 360:.0f}°",
+    # `hue 207° ` + bar, with two spaces between the axes. The readings are
+    # in fixed fields, so this chrome is the same width whatever the slot
+    # holds — which is the whole point of the fields.
+    axes = (("hue", hue, f"{hue * 360:{HSV_FIELD - 1}.0f}°",
              lambda t: hsv_to_rgb(t, sat, val)),
-            ("sat", sat, f"{sat * 100:.0f}%",
+            ("sat", sat, f"{sat * 100:{HSV_FIELD - 1}.0f}%",
              lambda t: hsv_to_rgb(hue, t, val)),
-            ("val", val, f"{val * 100:.0f}%",
+            ("val", val, f"{val * 100:{HSV_FIELD - 1}.0f}%",
              lambda t: hsv_to_rgb(hue, sat, t)))
-    # `hue 207° ` + bar, with two spaces between the axes — measured on the
-    # strings this slot produces, so a rung is never chosen and then cut
-    labels = sum(len(label) + len(number) + 2
-                 for label, _, number, _ in axes) + 2 * (len(axes) - 1)
     width = next((sizes for sizes in HSV_LADDER
-                  if cols >= labels + sum(sizes)), None)
+                  if cols >= HSV_CHROME + sum(sizes)), None)
     if width is None:
         return ""
     return "  ".join(chrome(label, CHROME_MUTED, slots) + " "

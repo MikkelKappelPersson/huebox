@@ -274,7 +274,7 @@ class Readout(unittest.TestCase):
         # neither of them gives up a row for the other (§8.3)
         wide = self.selected(100)
         self.assertEqual(len(self.bars(100)), sum(HSV_FULL))
-        for reading in ("hue 207°", "sat 59%", "val 94%"):
+        for reading in ("hue 207°", "sat  59%", "val  94%"):
             self.assertIn(reading, wide)          # beside its bar
         self.assertIn(self.exact(), self.specimen(100))
         self.assertNotIn(self.exact(), wide)
@@ -307,6 +307,25 @@ class Readout(unittest.TestCase):
                 self.assertLessEqual(visible(text), cols)
                 self.assertIn("#61afef", text)
                 self.assertLess(text.index("palette-4"), text.index("#61afef"))
+
+    def test_the_row_does_not_move_when_a_reading_grows_a_digit(self):
+        # §8.3 — the readings are in fixed fields, so the bars start in the
+        # same columns whatever the slot says; the row is stable while the
+        # reader is trying to look at the colours
+        at = None
+        for slots in (self.SLOTS,
+                      dict(self.SLOTS, **{"palette-4": "#00ff00"}),
+                      dict(self.SLOTS, **{"palette-4": "#090000"}),
+                      dict(self.SLOTS, **{"palette-4": "#61aaff"})):
+            body = plain_rows(frame(100, 30, sel=4, slots=slots))
+            row = next(line for line in body
+                       if line.startswith("  selected"))
+            self.assertLessEqual(visible(row), 100)
+            bars = self.bars(100, slots=slots)
+            self.assertEqual(len(bars), sum(HSV_FULL))
+            if at is None:
+                at = visible(row) - len(bars)
+            self.assertEqual(visible(row) - len(bars), at)
 
     def test_the_reading_is_never_on_screen_twice(self):
         for cols in (120, 100, 90, 80, 66, 60, 50):

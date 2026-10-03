@@ -129,9 +129,11 @@ after the last hint — is painted in `background`, so the frame is a sample
 of the theme rather than a preview beside it.
 
 The `selected` row ends in a reading of the slot's own colour: for each axis a
-number and a bar — `hue 120° [the whole wheel] sat 48% [grey → colour] val 48%
-[black → colour]`. The bar is a sweep of its whole axis at the slot's own other
-two readings, so pressing `a`/`s` or `z`/`x` repaints the entire hue wheel; the
+number and a bar — `hue 120° [the whole wheel] sat  48% [grey → colour] val
+ 48% [black → colour]` — each reading in a fixed-width field, so the bars
+start in the same columns whatever the slot says and the row does not jump
+when a number grows a digit. The bar is a sweep of its whole axis at the
+slot's own other two readings, so pressing `a`/`s` or `z`/`x` repaints the entire hue wheel; the
 number says what the reading is; a hairline one eighth of a cell wide, set into
 the cell the reading falls nearest, says where it sits on the bar. The exact
 reading — `hue 120.0  sat 48.4%  val 47.8%` — sits on the row below beside the
