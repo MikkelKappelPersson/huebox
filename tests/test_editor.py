@@ -14,9 +14,9 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
-from huebox.color import NAMED, SLOTS  # noqa: E402
-from huebox.render import (BOLD, ESCAPE_END, RESET, bg, fg,  # noqa: E402
-                           visible)
+from huebox.color import NAMED, SLOTS, hex_to_rgb  # noqa: E402
+from huebox.render import (BOLD, ESCAPE_END, HSV_COMPACT,  # noqa: E402
+                           HSV_FULL, HSV_LABELS, RESET, bg, fg, visible)
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -219,52 +219,87 @@ class Floor(unittest.TestCase):
 
 
 class Readout(unittest.TestCase):
-    """The selected row's reading: bars, or the numbers (§8.3)."""
+    """The selected row's reading: bars wearing their value, or numbers."""
 
     SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
                  **{"palette-4": "#61afef"})
+    WIDE, COMPACT = HSV_LABELS + sum(HSV_FULL), HSV_LABELS + sum(HSV_COMPACT)
 
-    def selected(self, cols, rows=30, sel=4, slots=None):
-        body = plain_rows(frame(cols, rows, sel=sel,
-                                slots=slots or self.SLOTS))
-        return next(line for line in body if line.startswith("  selected"))
+    def selected(self, cols, rows=30, sel=4, slots=None, painted=False):
+        body = lines(frame(cols, rows, sel=sel, slots=slots or self.SLOTS))
+        row = next(line for line in body
+                   if plain(line).startswith("  selected"))
+        return row if painted else plain(row)
 
-    def test_a_wide_row_draws_the_bars_and_a_narrow_one_the_numbers(self):
-        self.assertIn("│", self.selected(100))
-        self.assertIn("207° 59% 94%", self.selected(100))
-        self.assertIn("│", self.selected(80))
-        self.assertNotIn("207°", self.selected(80))
+    def chips(self, cols, slots=None):
+        """The bar cells of the selected row: (bg, fg, character) in order."""
+        return re.findall(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
+                          r"\x1b\[38;2;(\d+);(\d+);(\d+)m(.)",
+                          self.selected(cols, slots=slots, painted=True))
+
+    def test_a_wide_row_wears_its_values_and_a_narrow_one_spells_them(self):
+        wide = self.selected(100)
+        self.assertIn("hue", wide)
+        self.assertIn("sat", wide)
+        self.assertIn("val", wide)
+        for value in ("207°", "59%", "94%"):
+            self.assertIn(value, wide)          # inside the bars, not after
+        compact = self.selected(80)
+        self.assertIn("207°", compact)          # smaller bars, same values
         self.assertIn("hue 207.0", self.selected(70))
-        self.assertNotIn("│", self.selected(70))
         # too narrow for a whole reading: the hex is the value (§8.3)
         self.assertNotIn("hue", self.selected(60))
 
-    def test_the_row_fits_at_every_size(self):
-        for cols in (120, 100, 90, 80, 72, 70, 68, 64, 60, 50, 45, 40):
+    def test_the_bars_start_where_the_row_has_room_for_them(self):
+        # the ladder is measured on the row, so the subject — name and hex —
+        # is never the thing that gets cut
+        for cols, room in ((120, self.WIDE), (100, self.WIDE),
+                           (80, self.COMPACT), (70, 0)):
             with self.subTest(size=(cols, 30)):
-                self.assertLessEqual(visible(self.selected(cols)), cols)
-                # and the subject is never cut: name, then hex, in that order
                 text = self.selected(cols)
-                self.assertIn("#61afef", text)
-                self.assertLess(text.index("palette-4"), text.index("#61afef"))
+                self.assertLessEqual(visible(text), cols)
+                self.assertLess(text.index("palette-4"),
+                                text.index("#61afef"))
+                self.assertEqual(len(self.chips(cols)),
+                                 sum(HSV_FULL if cols >= 90 else HSV_COMPACT)
+                                 if room else 0)
 
-    def test_nudging_the_hue_moves_the_marker_not_only_the_hex(self):
-        # the point of the bars: a hue step the eye can follow moves the
-        # marker. One degree is finer than a 30-cell bar, so this steps x20
-        # — which is exactly why the short readout sits beside the bars
+    def test_the_value_sits_where_the_reading_is(self):
+        # the middle cell of each bar is the slot's own colour, and the
+        # number is printed over it — so the digits never move
+        own = hex_to_rgb("#61afef")
+        cells = self.chips(100)
+        at = 0
+        for width in HSV_FULL:
+            with self.subTest(width=width):
+                self.assertEqual(
+                    tuple(int(v) for v in cells[at + width // 2][:3]), own)
+            at += width
+
+    def test_nudging_the_hue_slides_the_bar_under_a_still_number(self):
+        # `q` moves the colour; the digits stay centred and the cells move
         before = self.selected(100)
         st = editor.EditorState(dict(self.SLOTS), lambda values: None)
         st.sel, st.grid = 4, editor.grid_geometry(100)
-        for key in ("f", "f", "q"):
-            editor.apply_key(key, st)
+        editor.apply_key("f", st)            # x5: 5 degrees is a visible step
+        editor.apply_key("q", st)
         after = self.selected(100, slots=st.slots)
         self.assertNotEqual(before, after)
-        self.assertNotEqual(before.index("│"), after.index("│"))
-        self.assertNotIn("#61afef", after)      # the hex moved too
+        self.assertNotIn("#61afef", after)          # the hex moved
+        self.assertEqual(after.index("20"), before.index("20"))   # digits hold
+        self.assertNotEqual(self.chips(100), self.chips(100, slots=st.slots))
+
+    def test_no_column_of_the_row_shows_the_terminals_own_background(self):
+        # §8.2 — a chip is a run of resets, and every one of them has to be
+        # followed by the fill again or the gaps show through
+        for cols in (100, 80, 70, 60):
+            with self.subTest(size=(cols, 30)):
+                row = self.selected(cols, painted=True)
+                self.assertEqual(unpainted(row), [])
 
     def test_the_readout_never_costs_a_row(self):
         # §15 — the readout is a string on a row the frame already drew, so
-        # two sizes a rung apart (80 draws bars, 70 draws numbers) keep the
+        # two sizes a rung apart (80 draws bars, 70 spells them out) keep the
         # same frame and the same widget lines
         wide, narrow = frame(80, 24), frame(70, 24)
         self.assertEqual(len(lines(wide)), len(lines(narrow)))

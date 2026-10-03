@@ -215,13 +215,17 @@ def backdrop(line: str, slots, cols: int) -> str:
 # the hsv readout (§8.3)
 # --------------------------------------------------------------------------
 
-# Three axes, three gradients. The hue bar sweeps the wheel at the slot's own
-# saturation and value, so `a`/`s` and `z`/`x` repaint every cell of it at
-# once; saturation and value keep one width everywhere, so the row reads the
-# same at every terminal size and only the hue bar flexes.
-HSV_SAT_W = 6
-HSV_HUE_MIN, HSV_HUE_MAX = 10, 30
-HSV_SHORT = "{:.0f}° {:.0f}% {:.0f}%"        # `207° 59% 94%`
+# A bar is a window on its axis, centred on the reading: the hue bar shows
+# HSV_HUE_SPAN degrees either side of the slot's own hue at the slot's own
+# saturation and value, and saturation and value HSV_AXIS_SPAN either side of
+# theirs. The middle cell of every bar is the slot's exact colour, so the
+# number printed over it never moves and `q`/`a`/`s`/`z`/`x` slide the window
+# under it. Widths are the two rungs of the ladder, all of them odd so the
+# middle cell really is the centre.
+HSV_HUE_SPAN = 60                    # degrees either side of the reading
+HSV_AXIS_SPAN = 0.3                  # the same idea, in saturation/value
+HSV_FULL = (15, 9, 9)                # hue, sat, val on a wide row
+HSV_COMPACT = (11, 7, 7)             # on a nearly-wide one
 HSV_LONG = "hue {:5.1f}  sat {:4.1f}%  val {:4.1f}%"
 # `hue `, `  sat `, `  val ` — the labels and the gaps between the bars
 HSV_LABELS = 16
@@ -232,67 +236,68 @@ def hsv_numbers(hue: float, sat: float, val: float) -> str:
     return HSV_LONG.format(hue * 360, sat * 100, val * 100)
 
 
-def _marker(reading: float, width: int) -> int:
-    """The cell a 0..1 reading sits on: round half up, so 1.0 is the last."""
-    return min(width - 1, max(0, int(reading * (width - 1) + 0.5)))
+def _window(reading: float, span: float, width: int, wrap: bool) -> list:
+    """`width` readings of one axis, evenly spaced, centred on `reading`.
 
-
-def _bar(slots, colour, at: int, width: int) -> str:
-    """`width` cells of `colour`, the one at `at` wearing the key slot.
-
-    `colour` takes a 0..1 reading and answers in rgb, like `hsv_to_rgb`:
-    the bars are computed, never read from a slot, because no slot holds a
-    hue sweep — only the reading of one.
-
-    The marker is painted *over* its cell rather than instead of it, so the
-    colour it points at still reads; the bar reopens the buffer's background
-    on the way out, because a reset in the middle of the row would put the
-    terminal's own background under the label that follows (§8.2, §14.1).
+    With an odd `width` the centre cell is the reading exactly, which is the
+    whole arrangement: the number sits on the value it names. Hue wraps at
+    the ends because the wheel does; saturation and value clamp at zero,
+    because there is nothing below zero and a clamp is the truth.
     """
-    key = fg(slots.get(CHROME_KEY, MISSING))
-    cells = [f"{bg(rgb_to_hex(colour(i / (width - 1))))}{key}│{RESET}"
-             if i == at else
-             f"{bg(rgb_to_hex(colour(i / (width - 1))))} {RESET}"
-             for i in range(width)]
-    return "".join(cells) + bg(slots.get("background", MISSING))
+    step = 2 * span / (width - 1)
+    out = []
+    for i in range(width):
+        at = reading + (i - (width - 1) / 2) * step
+        out.append(at % 1.0 if wrap else min(1.0, max(0.0, at)))
+    return out
+
+
+def _chip(slots, colour, reading, span, width, text, wrap=False) -> str:
+    """One bar: a window of the axis with `text` centred over it.
+
+    The text is drawn cell by cell in `readable_fg` of the cell underneath —
+    black or white, whichever stays legible — which is the rule the palette
+    cells\' own labels follow and the reason a value can sit straight on a
+    gradient with no box around it. Nothing here paints a foreground of its
+    own: every cell answers from the value, so the chip is legible on any
+    theme, including the one whose colours are all the same.
+    """
+    cells = [rgb_to_hex(colour(at))
+             for at in _window(reading, span, width, wrap)]
+    start = (width - len(text) + 1) // 2
+    return "".join(
+        f"{bg(cell)}{fg(readable_fg(cell))}"
+        f"{text[i - start] if start <= i < start + len(text) else ' '}{RESET}"
+        for i, cell in enumerate(cells))
 
 
 def hsv_readout(slots, value: str, cols: int) -> str:
-    """The slot's hue, saturation and value: bars, or the numbers (§8.3).
+    """The slot\'s hue, saturation and value: bars, or the numbers (§8.3).
 
-    Pure like every widget here: the gradients are computed from `value`
-    and the chrome from `slots`, on the call, so one keystroke moves the
-    markers and repaints the bars on the same frame (§14.1). `cols` is the
-    room the row has left for the reading, and the ladder it answers with is
-    the one §8.3 records: bars and the short readout, bars alone, or the
-    numbers. Nothing here is ever wider than `cols`; the row that carries it
-    is a row the frame already spends (§15).
+    Pure like every widget here: every cell of every bar is computed from
+    `value` and every colour of chrome from `slots`, on the call, so one
+    keystroke slides the windows on the same frame as everything else
+    (§14.1). `cols` is the room the row has left, and the ladder it answers
+    with is the one §8.3 records: the full bars, the compact ones, or the
+    numbers — never a rung chosen and then cut. Nothing here is ever wider
+    than `cols`, and the row that carries it is a row the frame already
+    spends (§15).
     """
     hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
-    short = HSV_SHORT.format(hue * 360, sat * 100, val * 100)
     numbers = hsv_numbers(hue, sat, val)
-    # the fit is measured on the strings this slot actually produces, so a
-    # rung is never chosen and then cut: the ladder answers with what fits,
-    # not with what usually fits
-    bars_only = HSV_LABELS + HSV_HUE_MIN + 2 * HSV_SAT_W
-    if cols >= bars_only + 2 + len(short):
-        hue_w = min(HSV_HUE_MAX, cols - (bars_only + 2 + len(short)
-                                         - HSV_HUE_MIN))
-        read = "  " + chrome(short, CHROME_MUTED, slots)
-    elif cols >= bars_only:
-        hue_w = HSV_HUE_MIN + min(HSV_HUE_MAX - HSV_HUE_MIN,
-                                  cols - bars_only)
-        read = ""
-    elif cols >= len(numbers):
-        return numbers
-    else:
-        return ""               # too narrow for a reading at all: the hex
-    axes = (("hue", hue, hue_w, lambda t: hsv_to_rgb(t, sat, val)),
-            ("sat", sat, HSV_SAT_W, lambda t: hsv_to_rgb(hue, t, val)),
-            ("val", val, HSV_SAT_W, lambda t: hsv_to_rgb(hue, sat, t)))
-    return "  ".join(chrome(label, CHROME_MUTED, slots) + " "
-                     + _bar(slots, colour, _marker(reading, width), width)
-                     for label, reading, width, colour in axes) + read
+    width = next((sizes for sizes in (HSV_FULL, HSV_COMPACT)
+                  if cols >= HSV_LABELS + sum(sizes)), None)
+    if width is None:
+        return numbers if cols >= len(numbers) else ""
+    axes = (("hue", hue, width[0], HSV_HUE_SPAN / 360, True,
+             f"{hue * 360:.0f}°", lambda t: hsv_to_rgb(t, sat, val)),
+            ("sat", sat, width[1], HSV_AXIS_SPAN, False,
+             f"{sat * 100:.0f}%", lambda t: hsv_to_rgb(hue, t, val)),
+            ("val", val, width[2], HSV_AXIS_SPAN, False,
+             f"{val * 100:.0f}%", lambda t: hsv_to_rgb(hue, sat, t)))
+    return "  ".join(chrome(label, CHROME_MUTED, slots) + " " + _chip(
+        slots, colour, reading, span, cells, text, wrap)
+        for label, reading, cells, span, wrap, text, colour in axes)
 
 
 # --------------------------------------------------------------------------

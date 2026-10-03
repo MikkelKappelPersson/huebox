@@ -15,8 +15,9 @@ from huebox.color import (hex_to_rgb, hsv_to_rgb,  # noqa: E402
 from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
-                           DIFF_REMOVED, EXAMPLE_PHRASE, HSV_HUE_MAX,
-                           HSV_HUE_MIN, HSV_SAT_W, LABEL_WIDTH, PAIR_MIN_COLS,
+                           DIFF_REMOVED, EXAMPLE_PHRASE, HSV_COMPACT,
+                           HSV_FULL, HSV_HUE_SPAN, HSV_LABELS,
+                           LABEL_WIDTH, PAIR_MIN_COLS,
                            PAIR_WIDTH, SELECTED_TEXT, TOKEN_SLOTS, WORDMARK,
                            WORDMARK_SLOTS, _sample, backdrop, bg, chrome, fg,
                            hint_line, hsv_numbers, hsv_readout, key_hint, pack,
@@ -227,104 +228,114 @@ class Floor(unittest.TestCase):
 
 
 class HsvReadout(unittest.TestCase):
-    """The selected slot's reading: three bars, or the numbers (§8.3)."""
+    """The slot's reading: three bars, each wearing its own value (§8.3)."""
 
     SLOTS = {"background": "#101014", "foreground": "#e6e6ea",
              "palette-11": "#e0c06c", "palette-8": "#d0d0d8"}
-    WIDE, MID = 80, 44
+    # one chip cell: its background, its foreground, its one character
+    CELL = re.compile(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
+                      r"\x1b\[38;2;(\d+);(\d+);(\d+)m(.)")
+    WIDE = HSV_LABELS + sum(HSV_FULL)
 
-    def plain(self, text):
-        return _plain(text)
+    def cells(self, line):
+        """Every chip cell of the readout: (bg, fg, character), in order."""
+        return [(tuple(int(v) for v in (r, g, b)),      # noqa: E501
+                 tuple(int(v) for v in (fr, fg, fb)), char)
+                for r, g, b, fr, fg, fb, char in self.CELL.findall(line)]
 
-    def markers(self, text):
-        """Where each bar's marker sits, in display columns."""
-        return [i for i, ch in enumerate(self.plain(text)) if ch == "│"]
-
-    def test_wide_room_gives_the_bars_and_the_short_readout(self):
+    def test_a_wide_room_gives_the_three_bars_with_their_values(self):
         line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
-        self.assertIn("hue", self.plain(line))
-        self.assertIn("sat", self.plain(line))
-        self.assertIn("val", self.plain(line))
-        self.assertIn("207° 59% 94%", self.plain(line))
-        self.assertEqual(len(self.markers(line)), 3)
+        text = _plain(line)
+        self.assertEqual(len(self.cells(line)), sum(HSV_FULL))
+        for label, value in (("hue", "207°"), ("sat", "59%"), ("val", "94%")):
+            self.assertIn(label, text)
+            self.assertIn(value, text)
 
-    def test_middle_room_gives_the_bars_and_a_narrow_one_the_numbers(self):
-        bars = hsv_readout(self.SLOTS, "#61afef", self.MID)
-        self.assertEqual(len(self.markers(bars)), 3)
-        self.assertNotIn("207°", self.plain(bars))
-        numbers = hsv_readout(self.SLOTS, "#61afef", 34)
+    def test_the_centre_of_every_bar_is_the_slots_own_colour(self):
+        # the whole arrangement: the middle cell *is* the reading, which is
+        # why the number printed over it does not move when the value does
+        own = hex_to_rgb("#61afef")
+        cells = self.cells(hsv_readout(self.SLOTS, "#61afef", self.WIDE))
+        at = 0
+        for width in HSV_FULL:
+            with self.subTest(width=width):
+                self.assertEqual(cells[at + width // 2][0], own)
+            at += width
+
+    def test_the_value_is_centred_on_its_bar(self):
+        line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
+        cells = self.cells(line)
+        at = 0
+        for width, value in zip(HSV_FULL, ("207°", "59%", "94%")):
+            with self.subTest(value=value):
+                worn = [i for i in range(width) if cells[at + i][2] != " "]
+                self.assertEqual("".join(cells[at + i][2]
+                                         for i in worn), value)
+                middle = (worn[0] + worn[-1]) / 2
+                self.assertAlmostEqual(middle, (width - 1) / 2, delta=0.5)
+            at += width
+
+    def test_a_value_on_a_gradient_is_legible_on_any_theme(self):
+        # one cell at a time in `readable_fg` of the cell underneath — the
+        # rule the palette cells' own labels follow (§8.3)
+        line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
+        for cell_bg, cell_fg, _ in self.cells(line):
+            self.assertIn(cell_fg, ((0, 0, 0), (255, 255, 255)))
+        # and the frame's own slots never reach a chip: a black or white
+        # foreground, nothing else
+        self.assertNotIn("38;2;", _plain(line))
+        self.assertNotIn(fg(self.SLOTS["palette-11"]), line)
+
+    def test_the_window_slides_with_the_reading(self):
+        # `q` moves the hue a degree; the gradient moves, the number does not
+        before = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
+        after = hsv_readout(self.SLOTS, "#62b0ef", self.WIDE)
+        self.assertEqual(_plain(before), _plain(after))   # 207° either way
+        self.assertNotEqual(before, after)                 # the cells moved
+        self.assertEqual(before, hsv_readout(self.SLOTS, "#61afef", self.WIDE))
+
+    def test_the_ends_of_an_axis_are_the_truth(self):
+        # hue wraps, because the wheel does; saturation and value clamp at
+        # zero, because there is nothing below zero
+        value = "#ff0055"
+        hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
+        cells = self.cells(hsv_readout(self.SLOTS, value, self.WIDE))
+        bar = cells[:HSV_FULL[0]]
+        span = HSV_HUE_SPAN / 360
+        self.assertEqual(bar[len(bar) // 2][0], hex_to_rgb(value))
+        self.assertEqual(bar[-1][0],
+                         hex_to_rgb(rgb_to_hex(
+                             hsv_to_rgb((hue + span) % 1.0, sat, val))))
+        # a nearly-desaturated colour clamps: its windows cannot reach
+        # below zero, so the cells at the near end repeat instead of
+        # inventing colours the axis does not have
+        flat = self.cells(hsv_readout(self.SLOTS, "#101010", self.WIDE))
+        at = HSV_FULL[0]
+        for start, width in ((at, HSV_FULL[1]), (at + HSV_FULL[1],
+                                                HSV_FULL[2])):
+            bar = flat[start:start + width]
+            self.assertEqual(len({cell[0] for cell in bar[:3]}), 1)
+
+    def test_the_ladder_and_never_a_rung_cut_after_the_fact(self):
+        self.assertEqual(
+            len(self.cells(hsv_readout(self.SLOTS, "#61afef", self.WIDE))),
+            sum(HSV_FULL))
+        compact = hsv_readout(self.SLOTS, "#61afef", self.WIDE - 8)
+        self.assertEqual(len(self.cells(compact)), sum(HSV_COMPACT))
+        numbers = hsv_readout(self.SLOTS, "#61afef", 33)
         self.assertEqual(numbers, hsv_numbers(207 / 360, 0.594, 0.937))
         self.assertEqual(hsv_readout(self.SLOTS, "#61afef", 10), "")
-
-    def test_nothing_is_ever_wider_than_the_room_it_is_given(self):
-        # the rung is measured on the strings this slot produces, so no size
-        # is ever clipped after the fact (§15.3)
         for value in ("#61afef", "#000000", "#ffffff", "#808080", "#010203"):
-            for cols in range(0, 100):
+            for cols in range(0, self.WIDE + 4):
                 line = hsv_readout(self.SLOTS, value, cols)
                 self.assertLessEqual(visible(line), cols, (value, cols))
 
-    def test_the_hue_bar_sweeps_the_wheel_at_the_slot_own_sat_and_val(self):
-        # first cell is hue 0, last is hue 1, and both carry the slot's own
-        # saturation and value — which is why a grey colour gives a grey bar
+    def test_nothing_in_the_bars_is_a_terminal_attribute(self):
         line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
-        hue, sat, val = rgb_to_hsv(hex_to_rgb("#61afef"))
-        self.assertTrue(line.startswith(fg(self.SLOTS["palette-8"]) + "hue"))
-        self.assertIn(bg(rgb_to_hex(hsv_to_rgb(0, sat, val))), line)
-        self.assertIn(bg(rgb_to_hex(hsv_to_rgb(1, sat, val))), line)
-        # the saturation bar runs grey → colour and the value bar black →
-        # colour: the two ends that make them worth drawing at all
-        self.assertIn(bg(rgb_to_hex(hsv_to_rgb(hue, 0, val))), line)
-        self.assertIn(bg(rgb_to_hex(hsv_to_rgb(hue, sat, 0))), line)
-        # a grey colour has no hue to sweep, and the bar says so
-        grey = hsv_readout(self.SLOTS, "#808080", self.WIDE)
-        self.assertNotIn(bg(rgb_to_hex(hsv_to_rgb(0.5, 1.0, 1.0))), grey)
-
-    def test_a_marker_sits_on_the_reading_it_names(self):
-        # red is hue 0, full sat, full val: the first cell of the hue bar
-        # and the last cell of the other two
-        line = hsv_readout(self.SLOTS, "#ff0000", self.WIDE)
-        text, at = self.plain(line), self.markers(line)
-        hue_bar = text.index("hue") + 4
-        sat_bar = text.index("sat") + 4
-        val_bar = text.index("val") + 4
-        self.assertEqual(at, [hue_bar, sat_bar + HSV_SAT_W - 1,
-                              val_bar + HSV_SAT_W - 1])
-        # and the marker wears the key slot, not the colour under it
-        self.assertIn(fg(self.SLOTS["palette-11"]) + "│", line)
-
-    def test_the_marker_moves_with_the_reading(self):
-        # green is a third of the way round the wheel: `q` must be able to
-        # move what the eye can see, not only a digit
-        line = hsv_readout(self.SLOTS, "#00ff00", self.WIDE)
-        text, at = self.plain(line), self.markers(line)
-        hue_bar = text.index("hue") + 4
-        width = HSV_HUE_MAX                       # the bar is at its cap here
-        self.assertAlmostEqual((at[0] - hue_bar) / (width - 1), 1 / 3,
-                               delta=0.05)
-        self.assertNotEqual(at[0],
-                            self.markers(hsv_readout(self.SLOTS, "#ff0000",
-                                                      self.WIDE))[0])
-
-    def test_the_bars_carry_no_terminal_attribute_and_no_stale_colour(self):
-        line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
-        self.assertNotIn("\033[1m", line)      # no bold: §8.1
-        self.assertNotIn("\033[2m", line)      # no dim either
-        # §14.1 — the readout is computed on the call, never cached, and the
-        # same call twice is the same pixels
-        self.assertEqual(line, hsv_readout(self.SLOTS, "#61afef", self.WIDE))
-        self.assertNotEqual(line,
-                            hsv_readout(dict(self.SLOTS, background="#202028"),
-                                        "#61afef", self.WIDE))
-        self.assertNotEqual(line,
-                            hsv_readout(self.SLOTS, "#61afe0", self.WIDE))
-
-    def test_the_gaps_between_the_bars_are_the_buffers_background(self):
-        # a bar's reset must not leave the terminal's background showing
-        # under the label that follows it (§8.2)
-        line = hsv_readout(self.SLOTS, "#61afef", self.WIDE)
-        self.assertIn(bg(self.SLOTS["background"]) + "  "
-                      + fg(self.SLOTS["palette-8"]) + "sat", line)
+        self.assertNotIn("\033[1m", line)          # no bold: §8.1
+        self.assertNotIn("\033[2m", line)          # no dim either
+        self.assertNotIn(";1m", line)
+        self.assertEqual(len(self.CELL.findall(line)), sum(HSV_FULL))
 
 
 class Typography(unittest.TestCase):

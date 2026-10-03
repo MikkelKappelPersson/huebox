@@ -522,3 +522,36 @@ column of the frame is unpainted", which is a statement about the order of
 paints and resets, not about any particular escape sequence. It is the first
 test in the suite that would have caught this, and it is worth keeping for
 whatever paints a row next.
+
+## P11 — the value in its own bar (spec §8.3, rework)
+
+- [x] `render.py`: `hsv_readout` rewritten — no playhead, no trailing readout;
+      each bar is `_window` (a span either side of the reading, centred) with
+      the value printed over it by `_chip`
+- [x] `_window`: the middle cell of an odd-width bar *is* the reading; hue
+      wraps, saturation and value clamp at zero
+- [x] `_chip`: the text is painted one cell at a time in `readable_fg` of the
+      cell underneath, the rule the palette cells' own labels follow
+- [x] ladder: `HSV_FULL` (15, 9, 9), `HSV_COMPACT` (11, 7, 7), the long
+      numbers, nothing — so the row is ~30 columns shorter than the playhead
+      version and no digit can land on a playhead
+- [x] tests: `HsvReadout` rewritten (centre cell, centring, wrap, clamp,
+      legibility, ladder), `Readout` rewritten in `tests/test_editor.py`
+      (per size, digits hold their column, no unpainted column)
+- [x] spec §8.3 rewritten, README
+
+Notes: the playhead and the value wanted the same cell. `q` moves a degree and
+a 30-cell bar is twelve degrees wide, so the playhead sits still for a dozen
+keystrokes and then jumps — and in the compact rung it lands on the digits
+about a third of the time. Centring the value removes the collision by
+construction: there is no marker, because the centre cell *is* the reading.
+
+The bar had to stop being the whole wheel and become a window on it, because
+a number centred over a fixed gradient says nothing about where the reading
+is. As a window it says more than the playhead did — the cells around the
+reading are the neighbouring colours, and the centre cell is exactly the
+colour in the hex above it.
+
+Saturation and value clamp rather than wrap. `#101010` has no saturation to
+speak of, and its window's near end repeats the same cell four times; that is
+the truth of the axis, and inventing colours below zero would not be.

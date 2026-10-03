@@ -128,12 +128,14 @@ the ground under the palette grid, the air between the widgets, the column
 after the last hint — is painted in `background`, so the frame is a sample
 of the theme rather than a preview beside it.
 
-The `selected` row ends in a reading of the slot's own colour: hue across
-the whole wheel at its current saturation and value, saturation grey →
-colour, value black → colour, each with a marker on it — so `q` moves
-something you can see and not only a digit. Beside them, where the terminal
-has the columns, the numbers (`207° 59% 94%`); where it does not, the
-bars alone; and on a narrow terminal the numbers they replace. Quit with
+The `selected` row ends in a reading of the slot's own colour: three
+bars, each a window on one axis — hue across ±60° of its own hue at its own
+saturation and value, saturation and value likewise — with the value printed
+in the middle of its own bar, because the middle cell *is* the value. Press
+`q` and the wheel slides under a number that does not move; press `a`/`s` and
+the saturation window slides too, black on white or white on black as the
+cell underneath needs. Where the terminal is too narrow for the bars, the
+same reading is spelled out (`hue 207.0  sat 59.4%  val 93.7%`). Quit with
 unsaved changes and huebox asks for a second `Esc` first; `r` throws the
 buffer away and goes back to your last save.
 
