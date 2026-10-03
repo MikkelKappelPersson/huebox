@@ -9,6 +9,13 @@ colour model or the file contract changes in a way that breaks existing configs.
 §§1–12 describe v1 as built. §§13–16 are the plan: the theme library, staged
 editing with live examples, and a responsive layout.
 
+`textual-migration.md` is a separate proposal: replacing the hand-rolled
+terminal I/O and draw loop with Textual, under a cell-for-cell colour
+equivalence harness. It is **not** a format change and does not move this
+document to `docs/002-spec/`; it is cited from here for the rendering
+guarantees it must preserve (§8.2, §14.1) and the §9 dependency rule it would
+amend.
+
 Everything marked `TODO` is a decision we have not made yet — unless a `>` note
 directly below it records the answer, which is how a closed one stays closed
 and still shows what was asked. Everything else is either a rule the code
