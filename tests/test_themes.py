@@ -959,6 +959,53 @@ class FakeTTY:
         raise OSError("no fd: the test drives the key stream")
 
 
+def stdlib_driver(fmt, path, slots, write, backup_path=None, theme=None,
+                  library=None, report=None, notes=None):
+    """A session driven by the stdlib loop, for the suites below.
+
+    `cli._run_editor` names its session so it can be swapped. This is the swap:
+    the raw-mode loop `editor.edit` used to be, kept as a test double because it
+    runs against seams the suites patch — `editor.read_key` to feed a key
+    stream, `editor.draw_editor` to capture frames, `editor.term_size` to fix the
+    geometry. A real compositor will not let them do any of that, and these
+    tests are about the *wiring*: that a save writes truth before it pushes,
+    that a direct session says why a flag cannot apply, that quitting clean
+    leaves the file alone. That wiring is `cli`'s, not the driver's, so driving
+    it through the simplest loop that consumes the same seams tests the right
+    thing.
+
+    Pairs with I1, which says the compositor changes no cell: the two together
+    cover "the shell is faithful" and "the session is wired", which neither
+    covers alone.
+    """
+    fd, saved = editor.enter_raw()
+    try:
+        state = editor.EditorState(slots, None, None, backup_path,
+                                   theme=theme, fmt=fmt, library=library,
+                                   path=path)
+        # The prompt seam: the suites answer with `mock.patch("builtins.input")`,
+        # so the driver reads through it rather than through a terminal.
+        state.prompt_hex = lambda label: input(label).strip()
+        state.prompt_name = state.prompt_hex
+        state.write = lambda values: write(state.theme, state.path, values)
+        while True:
+            state.grid = editor.grid_geometry(editor.term_size()[0])
+            editor.draw_editor(fmt, editor.session_path(state), state.slots,
+                               state.sel, state.undo, state.status,
+                               state.mult, head=editor.head_label(state),
+                               overlay=state.picker_frame(),
+                               grid=state.grid)
+            key = editor.read_key(fd)
+            if key == "resize":
+                continue
+            editor.apply_key(key, state)
+            if state.quit:
+                break
+    finally:
+        editor.exit_raw(fd, saved)
+    editor.report_session(state, report, notes)
+
+
 class FakeOut(io.StringIO):
     """stdout that claims to be a terminal and still captures the frame."""
 
@@ -984,7 +1031,8 @@ class EditorWiring(LibraryHome):
                                   side_effect=lambda fd: next(stream)):
             cli._run_editor(cli.Target("ember", "theme ember",
                                        self.theme_file("ember"),
-                                       themes.load("ember")), spec)
+                                       themes.load("ember")), spec,
+                            driver=stdlib_driver)
         return out.getvalue(), err.getvalue()
 
     def test_ctrl_s_writes_the_theme_file(self):
@@ -1035,7 +1083,8 @@ class _PushSession(LibraryHome):
                                   side_effect=lambda fd: next(stream)):
             status = cli._run_editor(
                 cli.Target("ember", "theme ember", self.theme_file("ember"),
-                           themes.load("ember")), spec)
+                           themes.load("ember")), spec,
+                driver=stdlib_driver)
         return status, out.getvalue(), err.getvalue()
 
 
@@ -1230,7 +1279,8 @@ class Picker(LibraryHome):
                                   side_effect=lambda fd: next(stream)), \
                 mock.patch("builtins.input", side_effect=ask):
             status = cli._run_editor(target or self.theme_target("ember"),
-                                     spec if spec is not None else self.spec)
+                                     spec if spec is not None else self.spec,
+                                     driver=stdlib_driver)
         return status, drawn, out.getvalue(), err.getvalue()
 
     def test_a_direct_session_says_why_the_flag_cannot_apply(self):

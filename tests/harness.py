@@ -143,9 +143,18 @@ FIXTURES = {
 def capture_reference(fixture, cols, rows, sel=0):
     """The frame as the editor writes it today, with no framework involved.
 
-    Returns `(raw, emitted_rows)`. `emitted_rows` is how many rows the renderer
-    joined, which is not always how many it painted — at 80x24 it emits 24 and
-    paints 23. The harness wants the painted count, from `frame_rows`.
+    Returns `(raw, written_rows)`.
+
+    The arguments are a **direct-mode session**'s, which is what a harness run
+    is: `head=None` so the header names the format, and `path=""` because
+    `editor.session_path()` returns nothing for a session with no theme (§13.7 —
+    `direct:<path>` already carries the path, so printing it twice reads like two
+    files). The candidate derives both the same way, so the two sides differ in
+    the compositor and nothing else.
+
+    An earlier version pinned `path` to the fixture's config file, which no real
+    session ever passes, and the header's path came back as sixteen differing
+    cells. Pinning an argument nothing produces is not a stronger test.
     """
     import huebox.editor as editor
 
@@ -155,7 +164,7 @@ def capture_reference(fixture, cols, rows, sel=0):
     buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(buffer):
-            editor.draw_editor("ghostty", spec["path"], spec["slots"], sel,
+            editor.draw_editor("ghostty", "", spec["slots"], sel,
                                REFERENCE_UNDO, REFERENCE_STATUS,
                                REFERENCE_MULT)
     finally:

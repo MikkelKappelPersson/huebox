@@ -1,23 +1,37 @@
-"""The editor's Textual shell (migration phase 2).
+"""The editor: the frame, under Textual's compositor (migration phases 2–3).
 
-§4.3, §14, and `docs/001-spec/textual-migration.md` §5.5. Phase 2 moves the
-*compositor* under the frame and changes nothing about the frame: the rows
-`draw_editor` has always written are captured and handed to Textual as a
-`Strip`, so the SGR huebox emits is the SGR the terminal sees.
+§4.3, §13.7, §14, and `docs/001-spec/textual-migration.md` §5.5. Textual owns
+the screen; `render.py` still owns the frame. The rows here are the ones
+`draw_editor` wrote, captured rather than re-rendered, so "the frame is
+unchanged" is true by construction and I1 measures the compositor underneath
+rather than a rewrite beside it.
 
-**The rows come from `draw_editor` itself, not from a re-implementation.**
-That is the point of the phase. A second copy of the frame's construction
-would be a second chance to get it wrong, and I1 could then only tell that the
-two copies agreed — not that either matched what huebox used to do. Capturing
-the real writer makes "the frame is unchanged" true by construction, and I1
-measures the compositor underneath rather than a rewrite beside it.
+**The key surface is not reimplemented.** `apply_key` and `EditorState` already
+are the whole of huebox's editing behaviour — selection, adjust, undo, revert,
+step size, the picker overlay, the save, the two-armed Esc. This module owns
+only what a compositor needs to own: getting a key in, redrawing, and taking the
+terminal back for the two prompts. So there is one implementation of "what `u`
+does" and it is the one the 400-odd existing tests cover.
 
-**Slots arrive as a file.** `HUEBOX_SLOTS` names a JSON object of the 22 slots:
-the same contract production has, where the editor is handed its buffer, and it
-keeps the test fixtures in `tests/` where they belong.
+**Three Textual details this exists to get right.**
 
-Not stdout: Textual owns the screen. Anything this module says goes to stderr
-under `HUEBOX_DEBUG`, so a pty capture sees only the frame.
+*Key names.* Textual says `escape`, `ctrl+c`, `ctrl+s`; `apply_key` was written
+against huebox's own reader and says `esc`, `\x03`, `\x13`. `translate` is the
+whole of the difference, and it is the only place the two vocabularies meet.
+
+*The prompts.* `apply_key` calls `st.prompt_hex(label)` synchronously, so the
+answer has to be available when it returns. `App.suspend()` hands the terminal
+back exactly as it was before the app started — cooked mode, no alternate
+screen — which is precisely the drop-out-of-raw-mode pattern `edit()` used, and
+keeps the seam synchronous instead of turning the whole key surface async.
+
+*Nothing is bound.* Textual's own bindings would swallow keys `apply_key` wants.
+`BINDINGS` is empty and every key arrives at `on_key`; the command palette is
+off for the same reason.
+
+Not stdout: Textual writes the UI to `sys.__stderr__` on purpose, so a pty
+capture sees the frame and nothing else. Diagnostics go to stderr under
+`HUEBOX_DEBUG`.
 """
 
 from __future__ import annotations
@@ -26,7 +40,6 @@ import contextlib
 import io
 import json
 import os
-import sys
 
 from rich.console import Console
 from rich.segment import Segment
@@ -35,17 +48,26 @@ from textual.app import App, ComposeResult
 from textual.strip import Strip
 from textual.widget import Widget
 
-from .color import MISSING, SLOTS, step_hsv
-from .editor import MULT_STEPS, draw_editor, grid_geometry, move_slot, too_small_frame
-from .render import visible
-from .tui import MIN_COLS, MIN_ROWS
+from .color import MISSING, SLOTS
+from .editor import (MULT_STEPS, EditorState, apply_key, draw_editor,
+                     grid_geometry, head_label, report_session, session_path,
+                     too_small_frame)
+from .render import MIN_COLS, MIN_ROWS, visible
 
-#: The Textual design tokens this app binds, so no built-in surface draws in
-#: Textual's own colours (migration spec §6.2). §5.1 of that spec's decision
-#: list is emphatic that this is all 168 tokens in phase A, not the handful
-#: today's CSS happens to name; phase 2 binds the surface the frame actually
-#: has, and phase 3 widens it. `$text` is the one that defaults to
-#: `ansi_default` — the terminal's own foreground — so it is bound first.
+#: Textual's key vocabulary → huebox's. The only seam between them.
+KEYS = {
+    "escape": "esc",
+    "ctrl+c": "\x03",
+    "ctrl+s": "\x13",
+    "ctrl+d": "\x04",
+}
+
+#: The Textual design tokens this shell binds, so no built-in surface draws in
+#: Textual's own colours (migration spec §6.2). 168 tokens exist; this is the
+#: subset the shell touches, and phase A's decomposition widens it. `$text` is
+#: the one that matters most — it is generated as `ansi_default`, the terminal's
+#: own foreground, so anything falling through to it paints a colour that is not
+#: the theme's. I2 is what proves none did.
 TOKEN_SLOTS = {
     "background": "background",
     "surface": "background",
@@ -69,17 +91,24 @@ TOKEN_SLOTS = {
 }
 
 
+def translate(key: str) -> str:
+    """Textual's key name → the one `apply_key` expects."""
+    return KEYS.get(key, key)
+
+
 def _debug(message: str) -> None:
     if os.environ.get("HUEBOX_DEBUG"):
+        import sys
         print(f"huebox.app: {message}", file=sys.stderr, flush=True)
 
 
 def load_slots() -> dict:
     """The buffer to render, from the JSON file `HUEBOX_SLOTS` names.
 
-    A slot the file omits keeps `MISSING`, the same way a slot a terminal
-    config omits does: the frame is honest about what it does not know instead
-    of inventing a colour for it.
+    A slot the file omits keeps `MISSING`, the same way a slot a terminal config
+    omits does: the frame is honest about what it does not know instead of
+    inventing a colour for it. Production passes the buffer in rather than a
+    path — this is the harness's way in, and the one shape both understand.
     """
     path = os.environ.get("HUEBOX_SLOTS")
     given = {}
@@ -89,33 +118,28 @@ def load_slots() -> dict:
     return {name: given.get(name, MISSING) for name in SLOTS}
 
 
-def frame_rows(fmt, path, slots, sel, cols=None, rows=None, undo=None,
-               status="", mult=1, head=None, overlay=None):
+def frame_rows(fmt, path, state, cols, head=None, overlay=None):
     """The frame as a list of rows, captured from `draw_editor`.
 
-    Returns the rows *without* the trailing newline decision, which belongs to
-    whoever writes them: `draw_editor` keeps it (and withholds it when the frame
-    fills the screen, §4.8), Textual positions cells itself.
-
-    `cols`/`rows` are ignored when given — `draw_editor` reads the terminal,
-    which under a pty is the size the harness asked for. They are accepted so
-    the signature reads like the thing it replaced.
+    Returns the rows without the trailing-newline decision, which belongs to
+    whoever writes them: `draw_editor` keeps that (and withholds the newline
+    when the frame fills the screen, §4.8), Textual positions cells itself.
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        draw_editor(fmt, path, slots, sel, list(undo or []), status, mult,
-                    head=head, overlay=overlay)
+        draw_editor(fmt, path, state.slots, state.sel, state.undo,
+                    state.status, state.mult, head=head, overlay=overlay)
     text = buffer.getvalue()
-    rows_out = text.split("\r\n")
-    if rows_out and rows_out[-1] == "":
-        rows_out.pop()
-    return rows_out
+    rows = text.split("\r\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    return rows
 
 
 class Frame(Widget):
     """The whole frame, one row per line `draw_editor` wrote.
 
-    `render_line` is the only thing Textual asks for and it is handed the row's
+    `render_line` is the only thing Textual asks for, and it is handed the row's
     screen coordinate. The rows are parsed once here rather than per frame: the
     strings are exactly what `render.py` emitted, so `Text.from_ansi` is a
     re-encoding rather than an interpretation.
@@ -127,7 +151,6 @@ class Frame(Widget):
 
     def __init__(self, rows_text, width, **kwargs):
         super().__init__(**kwargs)
-        self.text_rows = rows_text
         self.console = Console(file=io.StringIO(), force_terminal=True,
                                color_system="truecolor", legacy_windows=False,
                                markup=False, highlight=False)
@@ -153,80 +176,100 @@ class Frame(Widget):
 
 
 class Editor(App):
-    """The frame, under Textual's compositor.
+    """One editing session, under Textual's compositor.
 
-    Phase 2 wires the shell: the arrows walk the grid the frame was drawn for
-    (§4.3.1), and a resize re-derives the frame at the new width. The save
-    path, the picker and the prompts are phase 3 — they still live in
-    `editor.py` behind the injected seams, and I1 does not look at them.
+    `write` is the session's one save path and `library` the picker's seam onto
+    the theme store — the same four injected seams `edit()` took, unchanged, so
+    `cli` builds them once and both the tests and this shell consume them.
     """
 
-    BINDINGS = [
-        ("up", "slot('up')", "up"),
-        ("down", "slot('down')", "down"),
-        ("left", "slot('left')", "left"),
-        ("right", "slot('right')", "right"),
-        ("q", "nudge('h', -1)", "hue-"),
-        ("w", "nudge('h', 1)", "hue+"),
-        ("a", "nudge('s', -1)", "sat-"),
-        ("s", "nudge('s', 1)", "sat+"),
-        ("z", "nudge('v', -1)", "val-"),
-        ("x", "nudge('v', 1)", "val+"),
-    ]
+    ENABLE_COMMAND_PALETTE = False
+    BINDINGS = []
 
-    def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", **kwargs):
-        # Before `super()`: App.__init__ calls get_css_variables() to build
-        # the stylesheet, so the buffer has to exist by then or the first frame
-        # is painted against MISSING for every slot.
+    def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", slots=None,
+                 write=None, backup_path=None, theme=None, library=None,
+                 head_override=None, **kwargs):
+        # Before `super()`: App.__init__ calls get_css_variables() to build the
+        # stylesheet, so the buffer must exist by then or the first frame is
+        # painted against MISSING for every slot.
         self.fmt = fmt
         self.path = path
-        self.slots = load_slots()
-        self.sel = int(os.environ.get("HUEBOX_SEL", "0"))
-        # Passed through verbatim: the hint line renders `x{mult}` literally, so
-        # this is a label as much as a step size. Production's default is
-        # `MULT_STEPS[0]`; the harness supplies its own value and both sides of
-        # I1 must be given the same one, or the hint row differs by a word.
-        self.mult = os.environ.get("HUEBOX_MULT", str(MULT_STEPS[0]))
-        self.status = os.environ.get("HUEBOX_STATUS", "")
-        self.undo = []
-        self.head = os.environ.get("HUEBOX_HEAD") or None
-        self.rows_text = []
+        self.slots = load_slots() if slots is None else dict(slots)
+        self.write = write
+        self.backup_path = backup_path
+        self.theme_name = theme
+        self.library = library
+        # `None` means "derive it from the session"; `""` means "none", which is
+        # how the harness pins the header to the reference's arguments.
+        self.head_override = head_override
+        self.state = None
         super().__init__(**kwargs)
+        # After `super()`, and in the constructor rather than `on_mount`: Textual
+        # delivers a `Resize` during start-up, before `on_mount` runs, and
+        # `on_resize` redraws. A session built in `on_mount` would still be None
+        # then, and the frame would be drawn from nothing.
+        self.build_state()
 
-    # -- the frame ---------------------------------------------------------
+    # -- the session -------------------------------------------------------
+
+    def build_state(self):
+        """The session, seeded from the environment the harness supplies.
+
+        `HUEBOX_SEL`, `HUEBOX_MULT` and `HUEBOX_STATUS` exist so the reference
+        and the candidate can be given the *same* session rather than each
+        choosing its own defaults — `mult` is printed verbatim by the hint line,
+        so `False` against `1` is a visible cell difference that is nothing to
+        do with colour.
+        """
+        state = EditorState(self.slots, None, self.prompt_text,
+                            self.backup_path, theme=self.theme_name,
+                            fmt=self.fmt, library=self.library,
+                            path=self.path)
+        state.prompt_name = self.prompt_text
+        if self.write is not None:
+            # bound to the state, not to this call's arguments: both the theme
+            # and the path can change while the session runs (§13.7)
+            state.write = lambda values: self.write(state.theme, state.path,
+                                                    values)
+        state.sel = int(os.environ.get("HUEBOX_SEL", "0"))
+        state.mult = os.environ.get("HUEBOX_MULT", str(MULT_STEPS[0]))
+        state.status = os.environ.get("HUEBOX_STATUS", "")
+        self.state = state
+        return state
 
     def compose(self) -> ComposeResult:
         # Nothing here: the frame's width comes from the size Textual hands us
-        # at mount, and a `ScrollView` would bring a border and a scrollbar
-        # that the frame has no room for. Scrolling is phase 4, and it is
-        # gated on I1 (migration spec §5.6) like everything else that changes
-        # what reaches the screen.
+        # at mount, and a `ScrollView` would bring a border and a scrollbar the
+        # frame has no room for. Scrolling is phase 4, gated on I1 like
+        # everything else that changes what reaches the screen.
         return iter(())
 
     def get_css_variables(self):
-        """Every colour Textual draws with, bound to a theme slot.
-
-        §6.2: 168 tokens exist and this is the subset the shell touches in
-        phase 2. Anything unbound falls through to Textual's own palette, and
-        `$text` in particular falls through to `ansi_default` — the terminal's
-        own foreground — which I2 exists to catch.
-        """
         variables = dict(super().get_css_variables())
         for token, slot in TOKEN_SLOTS.items():
             variables[token] = self.slots.get(slot, MISSING)
         return variables
 
+    def head_for(self, state):
+        """The header's subject: pinned by the harness, derived otherwise."""
+        if self.head_override is not None:
+            return self.head_override or None
+        return head_label(state)
+
     def redraw(self) -> None:
         """Re-derive the frame at the current size and hand it to the widget."""
         width, height = self.size
-        too_small = width < MIN_COLS or height < MIN_ROWS
-        if too_small:
+        state = self.state
+        # §15 — one geometry per frame, read by the frame and by the arrows,
+        # which move through the grid the user can see (§4.3)
+        state.grid = grid_geometry(width)
+
+        if width < MIN_COLS or height < MIN_ROWS:
             rows_text = [too_small_frame(width)]
         else:
-            rows_text = frame_rows(self.fmt, self.path, self.slots, self.sel,
-                                   undo=self.undo, status=self.status,
-                                   mult=self.mult, head=self.head)
-        self.rows_text = rows_text
+            rows_text = frame_rows(self.fmt, session_path(state), state,
+                                   width, head=self.head_for(state),
+                                   overlay=state.picker_frame())
 
         for child in list(self.query(Frame)):
             child.remove()
@@ -236,53 +279,76 @@ class Editor(App):
         frame.styles.padding = 0
         frame.styles.margin = 0
         self.mount(frame)
-        _debug(f"redraw {width}x{height}: {len(rows_text)} rows, "
-               f"sel={self.sel}, widest={max((visible(r) for r in rows_text), default=0)}")
+        _debug("redraw %dx%d: %d rows, sel=%d, widest=%d"
+               % (width, height, len(rows_text), state.sel,
+                  max((visible(row) for row in rows_text), default=0)))
 
     def on_mount(self) -> None:
         self.title = "huebox"
         self.redraw()
 
     def on_resize(self, event) -> None:
-        _debug(f"resize to {event.size}")
-        self.redraw()
+        _debug("resize to %s" % (event.size,))
+        if self.state is not None:
+            self.redraw()
 
     # -- input -------------------------------------------------------------
 
-    def action_slot(self, direction: str) -> None:
-        """Walk the grid the frame was drawn for (§4.3.1)."""
-        width = self.size.width
-        if width < MIN_COLS:
-            return
-        target = move_slot(self.sel, direction, grid_geometry(width))
-        if target != self.sel:
-            self.sel = target
+    def on_key(self, event) -> None:
+        # Every key, unhandled by Textual, straight to the one key surface.
+        event.stop()
+        apply_key(translate(event.key), self.state)
+        if self.state.quit:
+            self.exit()
+        else:
             self.redraw()
 
-    def action_nudge(self, axis: str, step: int) -> None:
-        """Step the selected slot along one axis (§4.3, `ADJUST`).
+    def action_slot(self, direction: str) -> None:      # pragma: no cover
+        """Unused: `on_key` covers the arrows, so nothing is bound."""
 
-        Through `color.step_hsv`, the same arithmetic `editor._adjust` uses, so
-        a key press moves the colour by the same amount under Textual as it
-        always did. The shell had its own 0.01 steps for a moment, which would
-        have made `q/w` and `a/s` feel wrong in a way no test would have caught.
+    def prompt_text(self, label: str):
+        """One line, with the terminal handed over for it (§4.3).
+
+        `App.suspend()` restores the terminal to what it was before the app
+        started — cooked mode, no alternate screen — which is exactly the
+        drop-out-of-raw-mode pattern `edit()` used, and keeps `apply_key`'s
+        call synchronous. Ctrl+C or EOF cancels the prompt and returns to the
+        editor rather than ending it.
         """
-        mult = self.mult
-        if not isinstance(mult, (int, float)) or isinstance(mult, bool):
-            # `HUEBOX_MULT` is a label the hint line prints as well as a step,
-            # so the harness may pass something like "False"; fall back to the
-            # real default rather than multiplying by nonsense.
-            mult = MULT_STEPS[0]
-        name = SLOTS[self.sel]
-        self.slots[name] = step_hsv(self.slots[name], axis, step, mult)
-        self.redraw()
+        with self.suspend():
+            _debug("prompt %r" % (label,))
+            try:
+                return input(label).strip()
+            except (EOFError, KeyboardInterrupt):
+                return None
+
+    def action_nudge(self, axis: str, step: int) -> None:   # pragma: no cover
+        """Unused: `on_key` covers the adjust keys, so nothing is bound."""
+
+
+def run(fmt, path, slots, write, backup_path=None, theme=None, library=None,
+        report=None, notes=None):
+    """Run one session to completion, then say what it has to say.
+
+    What `cli` calls. `report_session` runs here rather than in `cli` because the
+    session state lives on the `Editor`, and the wording of what a user reads on
+    exit is huebox's, not the driver's.
+    """
+    editor = Editor(fmt=fmt, path=path, slots=slots, write=write,
+                    backup_path=backup_path, theme=theme, library=library)
+    try:
+        editor.run()
+    finally:
+        report_session(editor.state, report, notes)
+    return editor
 
 
 def main() -> int:
-    """`python -m huebox.app` — the shell, driven by the environment."""
-    fmt = os.environ.get("HUEBOX_FMT", "ghostty")
-    path = os.environ.get("HUEBOX_PATH", "/tmp/huebox.conf")
-    Editor(fmt=fmt, path=path).run()
+    """`python -m huebox.app` — driven by the environment, for the harness."""
+    head = os.environ.get("HUEBOX_HEAD")
+    Editor(fmt=os.environ.get("HUEBOX_FMT", "ghostty"),
+           path=os.environ.get("HUEBOX_PATH", "/tmp/huebox.conf"),
+           head_override=head).run()
     return 0
 
 

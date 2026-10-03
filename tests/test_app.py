@@ -150,28 +150,27 @@ class TestFrameRowsMatchTheWriter(unittest.TestCase):
         from huebox import editor
 
         slots = harness.FIXTURES["distinct"]["slots"]
-        path = harness.FIXTURES["distinct"]["path"]
+        state = editor.EditorState(slots, None, None, None, fmt="ghostty",
+                                   path="")
+        state.sel = 0
+        state.mult = harness.REFERENCE_MULT
+        state.status = harness.REFERENCE_STATUS
 
         original = editor.term_size
         editor.term_size = lambda default=(80, 24): (80, 24)
         buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(buffer):
-                editor.draw_editor("ghostty", path, slots, 0,
-                                   harness.REFERENCE_UNDO,
-                                   harness.REFERENCE_STATUS,
-                                   harness.REFERENCE_MULT)
+                editor.draw_editor("ghostty", "", state.slots, state.sel,
+                                   state.undo, state.status, state.mult)
         finally:
             editor.term_size = original
         written = buffer.getvalue().split("\r\n")
         if written and written[-1] == "":
             written.pop()
 
-        self.assertEqual(huebox_app.frame_rows("ghostty", path, slots, 0,
-                                               undo=harness.REFERENCE_UNDO,
-                                               status=harness.REFERENCE_STATUS,
-                                               mult=harness.REFERENCE_MULT),
-                         written)
+        self.assertEqual(
+            huebox_app.frame_rows("ghostty", "", state, 80), written)
 
 
 if __name__ == "__main__":

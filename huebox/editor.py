@@ -29,7 +29,7 @@ from typing import NamedTuple
 #: has not installed the extra, for a module the command does not yet use.
 #: Phase 3 sets this, and the deletion of `cli`'s `edit` path is the same
 #: commit, so the two cannot disagree about what `huebox edit` runs.
-REQUIRES: tuple = ()
+REQUIRES: tuple = ("textual",)
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
@@ -528,6 +528,40 @@ class EditorState:
             return None
         return (self.overlay, self.overlay_index,
                 self.theme if self.theme in self.overlay else "")
+
+
+def report_session(st, report=None, notes=None):
+    """What the session has to say once the frame is done (§13.6, §13.7).
+
+    A function rather than a driver, because the wording is huebox's and not the
+    compositor's: `app.py` runs the session and calls this afterwards, as the
+    raw-mode loop used to, so the migration did not quietly reword what a user
+    reads on exit.
+
+    The push report and the picker's complaints go to stderr, after the frame and
+    never inside it, where they would scroll through the editor. The report's
+    wording is the caller's: it knows what it pushed and what it could not read.
+    """
+    if st.written:
+        if st.theme is not None:
+            print(f"  saved theme {st.theme}  {st.path}")
+            print("")
+        else:
+            print(f"  saved {st.path}")
+            if st.backup_made:
+                print(f"  backup of the pre-save state: "
+                      f"{st.backup_path}.huebox.bak")
+            print("  reload your terminal to see the change\n")
+    elif st.dirty():
+        print("  nothing saved - the buffer was discarded\n")
+    elif st.created:
+        print(f"  created theme {st.created}  {st.path}")
+        print("  Ctrl+S saves it to the terminal\n")
+    else:
+        print("  no changes\n")
+
+    for line in list(report or []) + list(notes or []):
+        print(f"huebox: {line}", file=sys.stderr)
 
 
 def ensure_backup(path):

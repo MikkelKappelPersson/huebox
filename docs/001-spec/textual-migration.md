@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–2 landed, scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–3 (mostly) landed, scroll defect fixed, no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -595,7 +595,19 @@ renames.
    for a module the command does not yet run. I1 and I2 both green at every
    size and fixture; §4.5's probe confirmed live against the app.
 3. Phase A: the single custom widget, `render.py` per-row, `tui.py` retired,
-   `MIN_COLS`/`MIN_ROWS` relocated. I1 + I2 green.
+   `MIN_COLS`/`MIN_ROWS` relocated. I1 + I2 green. **Partly landed.** The single
+   custom widget was phase 2; this phase made the app the *session* — it drives
+   `EditorState` and `apply_key` rather than reimplementing either, so selection,
+   adjust, undo, revert, step size, the picker overlay, the save and the two-armed
+   Esc are all the implementations the 400 existing tests already cover. `cli`
+   hands it the four injected seams unchanged, `editor.REQUIRES` is
+   `("textual",)`, `MIN_COLS`/`MIN_ROWS` moved to `render.py`, and the post-session
+   report is `editor.report_session` so the wording stayed huebox's.
+   `_run_editor` names its `driver`, which is what lets the wiring suites drive
+   the session without a compositor.
+   **Left:** `tui.py`'s raw-mode and key-reading half, and `editor.edit`, are now
+   unreachable and still on disk. Deleting them is the rest of this phase and
+   wants its own commit, where the diff is a deletion rather than a move.
 4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
    mouse changes input, not output.
 5. Phase B: decomposition, one widget per commit, I1 + I2 before each next.

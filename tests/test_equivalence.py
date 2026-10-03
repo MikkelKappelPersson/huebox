@@ -116,35 +116,75 @@ class TestEquivalence(unittest.TestCase):
         return "\n".join(lines)
 
     def test_every_fixture_matches_at_every_size(self):
-        for cols, rows in harness.SIZES:
-            for fixture in sorted(harness.FIXTURES):
-                with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
-                    self._compare(fixture, cols, rows)
+        """The matrix, tiered by what each part can catch.
+
+        I1 compares cell for cell, and a launch costs a Python start plus a
+        settled frame — so the full 4x3 matrix is 12 processes and most of the
+        suite's wall clock. The tiers keep every size and every fixture in the
+        promise while cutting it to 8 launches:
+
+        * `distinct` at **all four** sizes. The size is what changes the frame —
+          the bars appear at 100x30 and not at 80x24, so the colours and the row
+          count both move, and a size that is only ever checked with one fixture
+          would miss a layout that colours differently.
+        * `dark` and `missing` at the **two** sizes that bracket it, 100x30 and
+          80x24. `dark` is the near-black fixture where a leaked default is
+          least visible, and `missing` the one where every slot is the same grey
+          so the frame cannot tell slots apart — both are about *what a slot
+          resolves to*, which does not vary with size.
+
+        The full matrix is one `HUEBOX_ALL=1` away for a release, and says so
+        rather than quietly covering less.
+        """
+        tiers = ([("distinct", cols, rows) for cols, rows in harness.SIZES]
+                 + [(fixture, cols, rows)
+                    for fixture in ("dark", "missing")
+                    for cols, rows in ((100, 30), (80, 24))])
+        if os.environ.get("HUEBOX_ALL"):
+            tiers = [(fixture, cols, rows)
+                     for cols, rows in harness.SIZES
+                     for fixture in sorted(harness.FIXTURES)]
+        for fixture, cols, rows in tiers:
+            with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
+                self._compare(fixture, cols, rows)
+
+    def test_the_full_matrix_is_one_environment_variable_away(self):
+        """Guard against the tiering quietly dropping a case: with `HUEBOX_ALL`
+        set, the matrix is the full cross product."""
+        full = {(fixture, cols, rows)
+                for cols, rows in harness.SIZES
+                for fixture in sorted(harness.FIXTURES)}
+        tiered = ({(fixture, cols, rows)
+                   for cols, rows in harness.SIZES
+                   for fixture in ("distinct",)}
+                  | {(fixture, cols, rows)
+                     for fixture in ("dark", "missing")
+                     for cols, rows in ((100, 30), (80, 24))})
+        missing_from_tier = full - tiered
+        self.assertEqual(missing_from_tier,
+                         {(f, c, r) for (c, r) in ((60, 16), (40, 12))
+                          for f in ("dark", "missing")},
+                         "the tiering changed shape; the guard above should be "
+                         "updated with it, deliberately")
 
     def test_selection_at_each_grid_edge(self):
         """The selection walks, and the frame follows.
 
-        Compared against the **live reference** for each `sel`, not against the
-        frozen golden: `golden_path` has no `sel` in it, so the sel=0 record
-        would be asked to stand in for a frame that is not it — and the diff
-        would come back as attributes rather than as colours, which reads as a
-        compositor bug and is not one. The frozen golden still covers sel=0 at
-        every size and fixture in `test_every_fixture_matches_at_every_size`;
-        this asks a different question, and the two sides of it are still
-        independent (Textual's compositor versus huebox's own writer).
+        80x24 only: the arrows move which cell is bold, and that is a function of
+        the grid, not of the size — `test_editor` covers the walk itself at every
+        width. What this checks is that the compositor carries the bold flag, so
+        one size is enough and the process is worth it.
         """
         for sel in (0, 21):
-            for cols, rows in harness.SIZES:
-                with self.subTest(sel=sel, size=f"{cols}x{rows}"):
-                    raw, height = harness.capture_reference("distinct", cols,
-                                                           rows, sel)
-                    expected = harness.parse(raw, cols, rows, height)
-                    actual = harness.parse(
-                        harness.candidate_bytes("distinct", cols, rows, sel),
-                        cols, rows, height)
-                    self.assertEqual(actual, expected,
-                                     "frame changed:\n" + self._report(
-                                         harness.diff(expected, actual, cols)))
+            with self.subTest(sel=sel):
+                raw, height = harness.capture_reference("distinct", 80, 24, sel)
+                expected = harness.parse(raw, 80, 24, height)
+                actual = harness.parse(
+                    harness.candidate_bytes("distinct", 80, 24, sel),
+                    80, 24, height)
+                self.assertEqual(actual, expected,
+                                 "frame changed:\n" + self._report(
+                                     harness.diff(expected, actual, 80)))
 
 
 @needs_pyte

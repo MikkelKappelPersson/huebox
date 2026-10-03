@@ -16,6 +16,7 @@ import os
 import sys
 import unittest
 from contextlib import redirect_stderr
+from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
@@ -25,24 +26,44 @@ from huebox import cli, editor  # noqa: E402
 MISSING = "definitely_not_installed_huebox"
 
 
+class TTY(io.StringIO):
+    """A StringIO that claims to be a terminal, and captures anyway."""
+
+    def isatty(self):
+        return True
+
+
 class TestEditorRequirements(unittest.TestCase):
     def _run_with(self, requires):
-        """Run the editor entry point with `editor.REQUIRES` set to `requires`."""
+        """Run the editor entry point with `editor.REQUIRES` set to `requires`.
+
+        The tty test is patched on because `_run_editor` asks it first, and on
+        purpose: `huebox edit | cat` should say what is wrong with a piped
+        session rather than ask for an install it will never use. `TTY` rather
+        than a bare `StringIO` because `_run_editor` reads `sys.stdout.isatty()`
+        too — patching `sys.stdout` with something that says no would send it
+        down the "not a terminal" path and the extra check would never run.
+        """
         original = editor.REQUIRES
         editor.REQUIRES = requires
-        stderr = io.StringIO()
+        out, err = TTY(), io.StringIO()
+        target = cli.Target(None, "direct:/tmp/huebox.conf",
+                            "/tmp/huebox.conf", {})
         try:
-            with redirect_stderr(stderr):
-                code = cli._run_editor(None)
+            with mock.patch.object(sys, "stdin", TTY()), \
+                    mock.patch.object(sys, "stdout", out), \
+                    redirect_stderr(err):
+                code = cli._run_editor(target)
         finally:
             editor.REQUIRES = original
-        return code, stderr.getvalue()
+        return code, err.getvalue()
 
-    def test_phase_1_needs_no_extra_at_all(self):
-        # The actual state: the editor is still the stdlib one, so a bare
-        # install can edit and this guard has nothing to say.
-        self.assertEqual(editor.REQUIRES, ())
-        self.assertEqual(cli._missing_extras(), [])
+    def test_the_editor_names_the_extra_it_runs_on(self):
+        # Phase 3: `huebox edit` is the Textual shell, so the editor says it
+        # needs Textual and `cli` reports it missing rather than letting an
+        # ImportError out. Naming an extra is never speculative here — it lands
+        # in the same commit that makes the command use it.
+        self.assertEqual(editor.REQUIRES, ("textual",))
 
     def test_a_missing_extra_is_one_line_on_stderr_and_exit_1(self):
         code, err = self._run_with((MISSING,))
@@ -64,8 +85,8 @@ class TestEditorRequirements(unittest.TestCase):
         self.assertIn("nope_one_huebox,nope_two_huebox", err)
 
     def test_an_installed_requirement_is_silent(self):
-        # The shape the phase 3 check will take for textual: importable means
-        # the guard stays out of the way.
+        # The shape the real check takes for textual: importable means the guard
+        # stays out of the way, so a normal install never sees the message.
         original = editor.REQUIRES
         editor.REQUIRES = ("sys",)
         try:

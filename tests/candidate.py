@@ -128,6 +128,13 @@ def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None
     env["TEXTUAL_COLOR_SYSTEM"] = "truecolor" if depth == "truecolor" else "256"
     env["HUEBOX_SLOTS"] = slots_path
     env["HUEBOX_SEL"] = str(sel)
+    # `draw_editor`'s `head` replaces the format label in the header. The
+    # reference is captured with `head=None`, so "" pins the candidate to the
+    # same argument; the app reads "" as "no head" and an absent variable as
+    # "derive it from the session". Both sides of I1 have to be given the same
+    # arguments, or the header differs by a word and the diff reads as a colour
+    # change rather than as the label it is.
+    env["HUEBOX_HEAD"] = ""
     env["HUEBOX_MULT"] = str(harness.REFERENCE_MULT)
     env["HUEBOX_STATUS"] = str(harness.REFERENCE_STATUS)
     env["HUEBOX_FMT"] = "ghostty"
