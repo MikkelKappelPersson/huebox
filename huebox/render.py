@@ -187,18 +187,28 @@ def backdrop(line: str, slots, cols: int) -> str:
     with `visible()` — the width `clip` cuts at — so a row already full of
     colours reaches the edge exactly, no wider and no short.
 
+    **A reset reopens the fill.** SGR 0 clears the background as well as
+    the foreground, and a row is full of resets — one at the end of every
+    chrome run, and the wordmark is one run per letter. Painting the fill
+    once at the row's head would leave every run after the first reset
+    sitting on the terminal's own background: the rest of the wordmark, the
+    parenthetical beside a header, the gaps between two hints. So every
+    reset inside the row is followed by the fill again. Nothing is painted
+    over: a run that wants a background of its own paints it right after.
+
     A row with nothing in it is the floor and is painted once; a row with
     content in it reopens the fill after it. The shape differs because the
     frame's own air and a widget's blank line are the same columns of
     space on screen, and only the paint tells them apart.
     """
     fill = bg(slots.get("background", MISSING))
-    row = clip(line, cols)
+    row = clip(line, cols).replace(RESET, RESET + fill)
     seen = visible(row)
     pad = " " * max(0, cols - seen)
     if not seen:
         return f"{fill}{pad}{RESET}"
-    return f"{fill}{row}{fill}{pad}{RESET}"
+    # the row ends on the fill, unless its own last run already closed it
+    return f"{fill}{row}{'' if row.endswith(fill) else fill}{pad}{RESET}"
 
 
 # --------------------------------------------------------------------------

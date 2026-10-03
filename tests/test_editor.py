@@ -15,7 +15,8 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 from huebox import editor  # noqa: E402
 from huebox.color import NAMED, SLOTS  # noqa: E402
-from huebox.render import BOLD, RESET, bg, fg, visible  # noqa: E402
+from huebox.render import (BOLD, ESCAPE_END, RESET, bg, fg,  # noqa: E402
+                           visible)
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
@@ -122,6 +123,33 @@ def code_block(body):
     return [line.strip() for line in _code_rows(body) if line.strip()]
 
 
+def unpainted(row: str) -> list:
+    """The columns a terminal would paint in its *own* background (§8.2).
+
+    A walk, not a regex: SGR 0 clears the background as well as the
+    foreground, so a row is only whole if something repaints the floor
+    after every reset. Returns the column numbers that would show through.
+    """
+    holes, set_bg, i, column = [], False, 0, 0
+    while i < len(row):
+        if row[i] == "\033":
+            j = i + 1
+            while j < len(row) and row[j] not in ESCAPE_END:
+                j += 1
+            sgr = row[i:j + 1]
+            if sgr == RESET:
+                set_bg = False
+            elif sgr.startswith("\033[48;2;"):
+                set_bg = True
+            i = j + 1
+            continue
+        if not set_bg:
+            holes.append(column)
+        column += 1
+        i += 1
+    return holes
+
+
 class Floor(unittest.TestCase):
     """The editor frame stands on the buffer's own background (§8.2)."""
 
@@ -136,6 +164,26 @@ class Floor(unittest.TestCase):
                     self.assertTrue(line.replace(self.CLEAR, "", 1)
                                     .startswith(fill), repr(line[:24]))
                     self.assertTrue(line.endswith(RESET))
+
+    def test_no_column_of_the_frame_shows_the_terminals_own_background(self):
+        # §8.2 — every reset in a row reopens the fill. Without that, the
+        # run after it (a wordmark letter, a parenthetical beside a
+        # header, a gap between hints) sits on the terminal's background,
+        # which is a hole in the middle of a frame painted all one colour.
+        for cols, rows in ((120, 40), (100, 30), (80, 24), (60, 16),
+                           (40, 12)):
+            with self.subTest(size=(cols, rows)):
+                for row, line in enumerate(lines(frame(cols, rows))):
+                    self.assertEqual(unpainted(line.replace(self.CLEAR, "", 1)),
+                                     [], f"row {row}")
+
+    def test_the_picker_frame_has_no_hole_either(self):
+        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
+                mock.patch.object(editor, "term_size", return_value=(80, 24)):
+            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
+                               overlay=(["ash", "ember"], 0, "ash"))
+        for line in lines(out.getvalue()):
+            self.assertEqual(unpainted(line.replace(self.CLEAR, "", 1)), [])
 
     def test_moving_the_background_moves_the_whole_frame(self):
         # §14.1 — the floor is live: one buffer edit with no save in between

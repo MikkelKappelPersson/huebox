@@ -200,6 +200,19 @@ class Floor(unittest.TestCase):
         self.assertEqual(widget.count("48;2;"), 2)
         self.assertTrue(widget.startswith(bg("#101014") + "    "))
 
+    def test_a_reset_reopens_the_fill(self):
+        # §8.2 — SGR 0 clears the background too, so a row painted once at
+        # its head leaves every run after the first reset on the terminal's
+        # own background. This is the hole the frame showed: the rest of
+        # the wordmark, the parenthetical beside a header, the gap between
+        # two hints.
+        row = chrome("aa", CHROME_MUTED, self.SLOTS) + "  bb"
+        painted = backdrop(row, self.SLOTS, 20)
+        # the fill opens the row, reopens after the chrome run's reset, and
+        # closes before the pad: three times for one reset
+        self.assertIn(RESET + bg("#101014") + "  bb", painted)
+        self.assertEqual(painted.count(bg("#101014")), 3)
+
     def test_a_row_too_wide_is_clipped_not_padded(self):
         row = backdrop("x" * 60, self.SLOTS, 20)
         self.assertEqual(visible(row), 20)

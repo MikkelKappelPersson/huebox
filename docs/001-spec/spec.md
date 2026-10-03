@@ -399,45 +399,65 @@ primitives (§15.3). A row that already reaches the edge is unaffected: the
 examples strip pads itself in the same slot (§14.1), so its documented padding
 and the frame's floor agree by construction rather than by luck.
 
+**A reset reopens the fill.** SGR 0 clears the background as well as the
+foreground, and a frame row is full of resets — one at the end of every chrome
+run, and the wordmark is one run per letter. A fill painted only at the row's
+head therefore leaves every run after the first reset on the terminal's own
+background: the rest of the wordmark, the parenthetical beside a header, the
+gap between two hints, the blank line inside the code block. So the floor is
+repainted after *every* reset inside a row, and the property that follows is
+the one the frame owes the reader: **no column of the frame shows the
+terminal's background**. A run that wants a background of its own paints it
+immediately after the reopen, so nothing is painted over — swatches, the
+examples strip and the §8.3 bars are untouched. The area outside the frame
+(below `rows`, right of `cols`) is the terminal's own and is not the frame's
+to paint.
+
 Two rows are deliberately outside it. The too-small fallback (§15.4) is left
 unpainted — it is about the window, not the theme, and it is drawn precisely
 when the frame cannot fit anything else. And `show`'s static preview keeps the
 terminal's background (§15.5): its output is meant to be piped, and a
 full-width block of colour in a pager's output is worse than the alternative.
 
-### 8.3 The selected slot's readout — bars before numbers
+### 8.3 The selected slot's readout — the value in its own bar
 
 The `selected` row ends in a reading of the slot's own colour: hue, saturation
-and value. Numbers alone make every edit blind — `q` moves the hue and the
-only thing that changes is a digit — so where the row has room, the reading is
-three gradients with a marker on each:
+and value. Numbers alone make every edit blind — `q` moves the hue and the only
+thing that changes is a digit — so where the row has room, the reading is three
+bars and the numbers live *inside* them.
 
-- the **hue bar** sweeps the whole wheel at the slot's *own* saturation and
-  value, so `a`/`s` and `z`/`x` repaint every cell of it at once, and a
-  desaturated colour shows as the grey bar it is;
-- the **sat bar** runs grey → colour, the **val bar** black → colour;
-- a marker is `│` in the key slot (`palette-11`), painted *over* the cell it
-  points at, so the colour underneath still reads;
-- the labels are furniture (`palette-8`), the muted the numbers wore.
+**A bar is a window on its axis, centred on the reading.** The hue bar shows
+`HSV_HUE_SPAN` degrees either side of the slot's own hue at the slot's own
+saturation and value; the saturation bar shows `HSV_AXIS_SPAN` either side of
+its own; the value bar likewise. **The middle cell of every bar is the slot's
+exact colour** — so `q` slides a wheel under a number that never moves, `a`/`s`
+and `z`/`x` slide the other two the same way, and there is no playhead that
+could land on top of a digit. Saturation and value clamp at zero because there
+is nothing below zero; hue wraps, because the wheel does.
 
-Every cell is computed from the slot's hex, so the readout is a function of the
-buffer and not a decoration on it: one keystroke moves the markers and the
-gradients on the same frame as everything else (§14.1). The gaps between the
-bars are painted in `background`, exactly as the examples strip pads itself
-(§14.1) — a bar's reset must not leave the terminal's own background showing
-between two runs.
+**The value is printed centred over its window**, one cell at a time in
+`readable_fg` of that cell — black or white, whichever stays legible — which is
+the same rule the palette cells' own labels follow. A number on a gradient is
+legible at every point of it, and the centring is what says *this cell*: the
+centre of the bar is the reading, and the number is where the reading is.
+
+Every cell is computed from the slot's hex, so the bars are a function of the
+buffer and not a decoration on it: one keystroke slides the windows on the same
+frame as everything else (§14.1). The labels — `hue`, `sat`, `val` — are
+furniture (`palette-8`), the muted the numbers wore as text, and the gap
+between two bars is painted in `background` exactly as the examples strip pads
+itself (§14.1): a chip's reset must not leave the terminal's own background
+showing under the label that follows it.
 
 The row keeps a ladder, because the row is one row and §15's budget is a
-contract: bars plus the short readout (`207° 59% 94%`) where both fit, bars
-alone where they do not, the numbers the bars replace — `hue 207.0  sat 59.4%
-val 93.7%` — where even the bars do not, and no reading at all where the row
-cannot hold one whole: a cut-off number is worse than none, and the hex above
-it is the value either way. The ladder is measured on the strings the slot
-actually produces, so a rung is never chosen and then clipped. The hue bar
-flexes (10 to 30 cells) and saturation and value keep six each, so a wide
-terminal spends its columns on the axis that needs them and a narrow one still
-reads. Nothing here costs a row: the readout replaces a string on a row the
-frame already drew.
+contract. `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the
+columns, `HSV_COMPACT` (11, 7, 7) where it has nearly enough, the numbers the
+bars replace — `hue 207.0  sat 59.4%  val 93.7%` — where even the compact bars
+do not fit, and no reading at all where the row cannot hold one whole: a
+cut-off number is worse than none, and the hex above it is the value anyway.
+The ladder is measured on the strings this slot produces, so a rung is never
+chosen and then clipped. Nothing here costs a row: the readout replaces a
+string on a row the frame already drew.
 
 ## 9. Non-functional requirements
 

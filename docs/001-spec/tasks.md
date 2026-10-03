@@ -496,3 +496,29 @@ the reason the frame at 60 no longer ends in `val 9`.
 The bars are computed, not read from a slot: no slot holds a hue sweep, only
 the reading of one. They are still live-everything (§14.1) because every
 cell is derived from the buffer's own hex on the call.
+
+## P10b — a reset reopens the floor (spec §8.2)
+
+- [x] `render.backdrop` repaints the fill after *every* reset in a row, not
+      only at its head
+- [x] tests: `unpainted(row)` in `tests/test_editor.py` walks a drawn row
+      the way a terminal would and returns the columns that would show the
+      terminal's own background; it is empty for the editor frame and the
+      picker frame at five sizes, and it fails (columns 3–15 of the header
+      row) without the fix
+- [x] spec §8.2
+
+Notes: the screenshot that prompted this is the whole bug in one picture — a
+green `background` with grey rectangles where `uebox`, the three header
+parentheticals and the code block's trailing blank line should be. `SGR 0`
+clears the background as well as the foreground, and a frame row is mostly
+resets: every chrome run ends with one and the wordmark is one run per
+letter. Painting the fill once per row was enough for rows that paint their
+own background (swatches, the examples strip, the bars) and wrong for every
+row that does not.
+
+The test is a walk rather than a regex on purpose: the invariant is "no
+column of the frame is unpainted", which is a statement about the order of
+paints and resets, not about any particular escape sequence. It is the first
+test in the suite that would have caught this, and it is worth keeping for
+whatever paints a row next.
