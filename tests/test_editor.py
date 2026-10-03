@@ -17,7 +17,7 @@ from huebox import editor  # noqa: E402
 from huebox.color import (NAMED, SLOTS, hex_to_rgb,  # noqa: E402
                          rgb_to_hsv)
 from huebox.render import (BOLD, ESCAPE_END, HSV_COMPACT,  # noqa: E402
-                           HSV_FULL, HSV_LABELS, RESET, bg, fg, hsv_numbers,
+                           HSV_FULL, HSV_TIGHT, RESET, bg, fg, hsv_numbers,
                            visible)
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -221,17 +221,15 @@ class Floor(unittest.TestCase):
 
 
 class Readout(unittest.TestCase):
-    """The selected row's reading: bars wearing their value, or numbers."""
+    """The selected row's reading: bars with the numbers beside them (§8.3)."""
 
     SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
                  **{"palette-4": "#61afef"})
-    WIDE, COMPACT = HSV_LABELS + sum(HSV_FULL), HSV_LABELS + sum(HSV_COMPACT)
     # the narrowest row that can still carry each part, computed from the
-    # strings rather than remembered: the subject on one, the specimen on
-    # the other (§8.3)
+    # strings rather than remembered: the subject and the readings' own
+    # chrome on one, the specimen on the other (§8.3)
     SUBJECT = len("  selected  palette-4  #61afef   ")
     SPECIMEN = len("    AaBbCc 0123 ")
-    BARS = SUBJECT + COMPACT
     EXACT = SPECIMEN + len(hsv_numbers(207 / 360, 0.594, 0.937)) + 3
 
     def selected(self, cols, rows=30, sel=4, slots=None, painted=False):
@@ -240,11 +238,21 @@ class Readout(unittest.TestCase):
                    if plain(line).startswith("  selected"))
         return row if painted else plain(row)
 
-    def bars(self, cols, slots=None):
-        """Every bar cell of the selected row, painted, in order."""
-        return re.findall(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
-                          r"\x1b\[38;2;(\d+);(\d+);(\d+)m(.)",
-                          self.selected(cols, slots=slots, painted=True))
+    CELL = re.compile(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
+                      r"(?:\x1b\[38;2;(\d+);(\d+);(\d+)m)?([^\x1b])")
+    FILL = hex_to_rgb("#101014")        # SLOTS' background, the floor of §8.2
+
+    def bars(self, cols, slots=None, row=None):
+        """Every bar cell of the selected row, painted, in order.
+
+        A bar cell carries no ink unless it is the hairline, so the
+        foreground is optional — which is also how the frame says so. The
+        row's own floor is painted in the same background and is not a bar.
+        """
+        painted = row or self.selected(cols, slots=slots, painted=True)
+        return [cell for cell in self.CELL.findall(painted)
+                if (tuple(int(v) for v in cell[:3]) != self.FILL
+                    or cell[6] != " ")]
 
     def specimen(self, cols, rows=30, slots=None, painted=False):
         row = next(line for line in lines(frame(cols, rows, sel=4,
@@ -256,67 +264,60 @@ class Readout(unittest.TestCase):
         """The reading as the frame spells it out, below the bars."""
         return hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
 
+    def narrowest(self):
+        """The first terminal width at which the row still draws bars."""
+        return next(cols for cols in range(40, 130)
+                    if self.bars(cols))
+
     def test_both_readings_are_on_screen_where_the_row_fits(self):
         # the bars are the glance, the exact numbers are the truth, and
         # neither of them gives up a row for the other (§8.3)
         wide = self.selected(100)
-        self.assertIn("hue", wide)
-        self.assertIn("sat", wide)
-        self.assertIn("val", wide)
         self.assertEqual(len(self.bars(100)), sum(HSV_FULL))
+        for reading in ("hue 207°", "sat 59%", "val 94%"):
+            self.assertIn(reading, wide)          # beside its bar
         self.assertIn(self.exact(), self.specimen(100))
         self.assertNotIn(self.exact(), wide)
+
+    def test_a_bar_carries_the_sweep_and_the_line_and_nothing_else(self):
+        # the arrangement that lets the number and the hairline both be
+        # complete: the reading is beside its bar, so the bar has only the
+        # sweep and the line in it, and there is nothing for the line to take
+        cells = self.bars(100)
+        self.assertEqual(len(cells), sum(HSV_FULL))
+        self.assertEqual({cell[6] for cell in cells} - {" "}, {"\u258f"})
+        # the hairline is the only ink in a bar, and it is one per bar
+        self.assertEqual(len([cell for cell in cells if cell[3]]), 3)
 
     def test_the_two_readings_appear_and_yield_in_their_own_time(self):
         # the numbers never move row: they are under the bars when the bars
         # are there, and under a bare subject when they are not
-        for cols, bars in ((120, True), (100, True), (90, True), (82, True),
-                           (80, True), (self.BARS, True),
-                           (self.BARS - 1, False), (self.EXACT, False),
+        edge = self.narrowest()
+        for cols, bars in ((120, True), (100, True), (edge, True),
+                           (edge - 1, False), (self.EXACT, False),
                            (self.EXACT - 1, False)):
             with self.subTest(size=(cols, 30)):
                 self.assertEqual(bool(self.bars(cols)), bars)
                 self.assertEqual(self.exact() in self.specimen(cols),
                                  cols >= self.EXACT)
+        # and the subject is never the thing that gets cut
+        for cols in (120, 100, 80, 66, 60, 50, 45, 40):
+            with self.subTest(size=(cols, 30)):
+                text = self.selected(cols)
+                self.assertLessEqual(visible(text), cols)
+                self.assertIn("#61afef", text)
+                self.assertLess(text.index("palette-4"), text.index("#61afef"))
 
     def test_the_reading_is_never_on_screen_twice(self):
-        for cols in (120, 100, 90, 80, 74, 70, 60, 50):
+        for cols in (120, 100, 90, 80, 66, 60, 50):
             with self.subTest(size=(cols, 30)):
                 body = "".join(plain_rows(frame(cols, 30, sel=4,
                                                 slots=self.SLOTS)))
                 self.assertEqual(body.count(self.exact()), 1)
 
-    def test_the_bars_start_where_the_row_has_room_for_them(self):
-        # the ladder is measured on the row, so the subject — name and hex —
-        # is never the thing that gets cut
-        for cols, room in ((120, self.WIDE), (100, self.WIDE),
-                           (80, self.COMPACT), (70, 0)):  # noqa: E501
-            with self.subTest(size=(cols, 30)):
-                text = self.selected(cols)
-                self.assertLessEqual(visible(text), cols)
-                self.assertLess(text.index("palette-4"),
-                                text.index("#61afef"))
-                self.assertEqual(len(self.bars(cols)),
-                                 sum(HSV_FULL if cols >= 90 else HSV_COMPACT)
-                                 if room else 0)
-
-    def test_the_bars_are_a_sweep_with_the_reading_printed_on_top(self):
-        # the bar is the axis; the number is the reading, centred on it
-        own = hex_to_rgb("#61afef")
-        cells = self.bars(100)
-        at = 0
-        for width in HSV_FULL:
-            with self.subTest(width=width):
-                self.assertEqual(len(cells), sum(HSV_FULL))
-                self.assertNotEqual(cells[at + width // 2][0], own)
-            at += width
-        # and the exact reading is on the row below, where the frame spells
-        # it out for itself
-        self.assertIn(hsv_numbers(*rgb_to_hsv(own)), self.specimen(100))
-
-    def test_nudging_the_hue_moves_the_number_and_the_other_two_bars(self):
-        # the wheel is the whole wheel and does not move; the reading on it
-        # does, and so do the two bars painted at the slot's hue (§14.1)
+    def test_nudging_the_hue_moves_the_line_and_the_exact_reading(self):
+        # the wheel is the whole wheel and does not move; the hairline on it
+        # does, and so does the reading below (§14.1)
         before = self.selected(100)
         st = editor.EditorState(dict(self.SLOTS), lambda values: None)
         st.sel, st.grid = 4, editor.grid_geometry(100)
@@ -326,24 +327,23 @@ class Readout(unittest.TestCase):
         self.assertNotEqual(before, after)
         self.assertNotIn("#61afef", after)              # the hex moved
         self.assertNotEqual(self.bars(100), self.bars(100, slots=st.slots))
-        # ... and the exact reading below followed it
         self.assertNotEqual(hsv_numbers(*rgb_to_hsv(hex_to_rgb("#61afef"))),
                             hsv_numbers(*rgb_to_hsv(hex_to_rgb(
                                 st.slots["palette-4"]))))
 
     def test_no_column_of_the_row_shows_the_terminals_own_background(self):
-        # §8.2 — a chip is a run of resets, and every one of them has to be
-        # followed by the fill again or the gaps show through
+        # §8.2 — a bar is a run of cells with one hairline in it, and every
+        # reset in the row has to be followed by the fill again
         for cols in (100, 80, 70, 60):
             with self.subTest(size=(cols, 30)):
-                row = self.selected(cols, painted=True)
-                self.assertEqual(unpainted(row), [])
+                self.assertEqual(unpainted(self.selected(cols, painted=True)),
+                                 [])
 
     def test_the_readout_never_costs_a_row(self):
         # §15 — the readout is a string on a row the frame already drew, so
-        # two sizes a rung apart (80 draws bars, 70 spells them out) keep the
-        # same frame and the same widget lines
-        wide, narrow = frame(80, 24), frame(70, 24)
+        # two sizes a rung apart keep the same frame and the same widgets
+        wide, narrow = frame(100, 30), frame(90, 30)
+        self.assertNotEqual(len(self.bars(100)), len(self.bars(90)))
         self.assertEqual(len(lines(wide)), len(lines(narrow)))
         self.assertEqual(code_lines(lines(wide)), code_lines(lines(narrow)))
         self.assertEqual(example_rows(lines(wide)),

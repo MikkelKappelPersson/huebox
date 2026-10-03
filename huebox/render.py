@@ -222,18 +222,21 @@ def backdrop(line: str, slots, cols: int) -> str:
 # and because the eight other sevenths of the cell keep showing the sweep.
 MARK = "\u258f"                   # LEFT ONE EIGHTH BLOCK
 
-# A bar is a sweep of its whole axis — a legend of what the axis means, with
-# the reading printed on top of it. The hue bar is the wheel at the slot's
-# own saturation and value, so `a`/`s` and `z`/`x` repaint every cell of it
-# at once and a colour with no saturation shows as the grey bar it is; the
-# saturation bar runs grey -> colour and the value bar black -> colour, each
-# painted at the slot's own hue. Widths are the two rungs of the ladder, and
-# both are odd so the number on top can be centred on the bar.
+# A bar is a sweep of its whole axis — a legend of what the axis means,
+# with the reading printed *beside* it and the hairline drawn on it. The
+# hue bar is the wheel at the slot's own saturation and value, so `a`/`s` and
+# `z`/`x` repaint every cell of it at once and a colour with no saturation
+# shows as the grey bar it is; the saturation bar runs grey -> colour and the
+# value bar black -> colour, each painted at the slot's own hue.
+#
+# Three rungs of the ladder (§8.3): the numbers sit outside the bars now, so
+# their chrome is paid for at every size, and the bars are what gives way as
+# the row narrows.
 HSV_FULL = (15, 9, 9)                # hue, sat, val on a wide row
 HSV_COMPACT = (11, 7, 7)             # on a nearly-wide one
+HSV_TIGHT = (7, 5, 5)                # and on an ordinary 80-column one
+HSV_LADDER = (HSV_FULL, HSV_COMPACT, HSV_TIGHT)
 HSV_LONG = "hue {:5.1f}  sat {:4.1f}%  val {:4.1f}%"
-# `hue `, `  sat `, `  val ` — the labels and the gaps between the bars
-HSV_LABELS = 16
 
 
 def hsv_numbers(hue: float, sat: float, val: float) -> str:
@@ -283,57 +286,62 @@ def _marker(at: float, width: int) -> dict:
     return {cell: MARK}
 
 
-def _chip(slots, colour, width: int, text: str, at: float) -> str:
-    """One bar: a sweep of the axis, the reading on it, and its hairline.
+def _chip(slots, colour, width: int, at: float) -> str:
+    """One bar: a sweep of the axis with the reading's hairline on it.
 
-    Three things in `width` cells: the sweep (what the axis means), the
-    hairline (where the reading is), the number (what the reading is). The
-    number takes one ink for the whole number, the hairline the readable ink
-    of the cell it is drawn into — the same rule, applied to a line that is
-    eight times thinner than a character (§8.3).
+    Two things in `width` cells and nothing else: the sweep (what the axis
+    means) and the line (where the reading is). The reading itself is the
+    number beside the bar, which is why nothing here has to give up a cell
+    to it — the number and the line can both be complete, always (§8.3).
+
+    The hairline's ink is the readable side of the cell it is drawn into,
+    the same rule the palette cells' own labels follow (§8.1).
     """
     cells = [rgb_to_hex(colour(step)) for step in _sweep(width)]
-    first = max(0, (width - len(text) + 1) // 2)
     marks = _marker(at, width)
-    ink = _ink(cells[first:first + len(text)] or cells)
-    line = _ink([cells[i] for i in marks])   # one cell, one ink
-    out = []
-    for i, cell in enumerate(cells):
-        if i in marks:
-            out.append(f"{bg(cell)}{line}{marks[i]}{RESET}")
-            continue
-        char = text[i - first] if first <= i < first + len(text) else " "
-        out.append(f"{bg(cell)}{ink}{char}{RESET}")
-    return "".join(out)
+    line = _ink([cells[i] for i in marks])
+    return "".join(
+        f"{bg(cell)}{line if i in marks else ''}"
+        f"{marks[i] if i in marks else ' '}{RESET}"
+        for i, cell in enumerate(cells))
 
 
 def hsv_readout(slots, value: str, cols: int) -> str:
-    """The slot's hue, saturation and value: three bars (§8.3).
+    """The slot's hue, saturation and value: a reading and a bar each.
 
-    Pure like every widget here: every cell of every bar is computed from
-    `value` and every colour of chrome from `slots`, on the call, so one
-    keystroke repaints them on the same frame as everything else (§14.1).
-    `cols` is the room the row has left, and the ladder it answers with is
-    the one §8.3 records: the full bars, the compact ones, or nothing —
-    never a rung chosen and then cut. Nothing here is ever wider than
-    `cols`, and the row that carries it is a row the frame already spends
-    (§15). The exact reading is not this row's business: the frame spells it
-    out on the row below, next to the specimen (§8.3).
+    `hue 207° [bar] sat 59% [bar] val 94% [bar]` — the name, the reading and
+    the axis, in that order, so the hairline never has to share a cell with a
+    digit (§8.3). Pure like every widget here: every cell of every bar is
+    computed from `value` and every colour of chrome from `slots`, on the
+    call, so one keystroke repaints them on the same frame as everything else
+    (§14.1). `cols` is the room the row has left: the ladder in §8.3 picks
+    the first rung of `HSV_LADDER` that fits it — chrome and all — and when
+    none does the reading is the exact one on the row below and nothing else.
+
+    The exact reading is not this row's business: the frame spells it out
+    beside the specimen, so a narrow row loses the bars rather than showing
+    the same numbers twice.
     """
     hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
-    width = next((sizes for sizes in (HSV_FULL, HSV_COMPACT)
-                  if cols >= HSV_LABELS + sum(sizes)), None)
+    axes = (("hue", hue, f"{hue * 360:.0f}°",
+             lambda t: hsv_to_rgb(t, sat, val)),
+            ("sat", sat, f"{sat * 100:.0f}%",
+             lambda t: hsv_to_rgb(hue, t, val)),
+            ("val", val, f"{val * 100:.0f}%",
+             lambda t: hsv_to_rgb(hue, sat, t)))
+    # `hue 207° ` + bar, with two spaces between the axes — measured on the
+    # strings this slot produces, so a rung is never chosen and then cut
+    labels = sum(len(label) + len(number) + 2
+                 for label, _, number, _ in axes) + 2 * (len(axes) - 1)
+    width = next((sizes for sizes in HSV_LADDER
+                  if cols >= labels + sum(sizes)), None)
     if width is None:
         return ""
-    axes = (("hue", hue, width[0], f"{hue * 360:.0f}°",
-             lambda t: hsv_to_rgb(t, sat, val)),
-            ("sat", sat, width[1], f"{sat * 100:.0f}%",
-             lambda t: hsv_to_rgb(hue, t, val)),
-            ("val", val, width[2], f"{val * 100:.0f}%",
-             lambda t: hsv_to_rgb(hue, sat, t)))
     return "  ".join(chrome(label, CHROME_MUTED, slots) + " "
-                     + _chip(slots, colour, cells, text, reading * (cells - 1))
-                     for label, reading, cells, text, colour in axes)
+                     + chrome(number, CHROME_MUTED, slots) + " "
+                     + _chip(slots, colour, cells, reading * (cells - 1))
+                     for (label, reading, number, colour), cells
+                     in zip(axes, width))
 
 
 # --------------------------------------------------------------------------

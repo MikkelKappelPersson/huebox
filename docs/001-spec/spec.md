@@ -419,63 +419,57 @@ when the frame cannot fit anything else. And `show`'s static preview keeps the
 terminal's background (§15.5): its output is meant to be piped, and a
 full-width block of colour in a pager's output is worse than the alternative.
 
-### 8.3 The selected slot's readout — the value in its own bar
+### 8.3 The selected slot's readout — a number and a bar, per axis
 
 The `selected` row ends in a reading of the slot's own colour: hue, saturation
 and value. Numbers alone make every edit blind — `q` moves the hue and the only
-thing that changes is a digit — so where the row has room, the reading is three
-bars and the numbers live *on* them.
+thing that changes is a digit — so where the row has room, each axis gets two
+things: a **number** saying what the reading is, and a **bar** saying what the
+axis is and where the reading sits on it.
 
-**A bar is a sweep of its whole axis.** The hue bar is the wheel at the slot's
-own saturation and value, so `a`/`s` and `z`/`x` repaint every one of its cells
-at once, and a colour with no saturation shows as the grey bar it is. The
-saturation bar runs grey → colour and the value bar black → colour, each
-painted at the slot's own hue. The bar is a legend of what its axis means.
+    hue 120° [wheel]  sat 48% [grey → colour]  val 48% [black → colour]
 
-**The reading is a hairline on that sweep**: `MARK`, a left one-eighth block
-— the thinnest line a cell can draw — set an eighth into the cell the reading
-falls nearest. It is not a block, because a block is a third of a nine-cell
-saturation bar painted over, and a bar with a third of it painted over is no
-longer a sweep. It is not two half-cells either, which is a *full* cell of ink
-however thin each half looks on its own.
+**The bar is a sweep of its whole axis.** The hue bar is the wheel at the
+slot's own saturation and value, so `a`/`s` and `z`/`x` repaint every one of
+its cells at once, and a colour with no saturation shows as the grey bar it is.
+The saturation bar runs grey → colour and the value bar black → colour, each
+painted at the slot's own hue.
 
-The glyph is anchored to the cell's edge rather than centred in it, so the
-line's position inside the cell is the bar's sub-cell resolution: it is never
-more than half a cell off, and the other seven eighths of its cell keep
-showing the sweep. Its ink is the readable side of the cell it is drawn into,
-the same rule the number follows.
+**The reading is a hairline on the bar**: `MARK`, a left one-eighth block —
+the thinnest line a cell can draw — set an eighth into the cell the reading
+falls nearest, never more than half a cell off, and in the end cell at either
+end of an axis. Its ink is the readable side of the cell it is drawn into,
+the same rule the palette cells' own labels follow (§8.1). It is not a block
+(a block is a third of a nine-cell bar painted over) and it is not two halves
+either, which is a *full* cell of ink however thin each half looks alone.
 
-A cell holds one character, so the line costs whatever character is in that
-cell — one digit of the number when the reading falls inside it, which is the
-price of a line thinner than a character and the reason the exact reading is
-on the row below.
+**The number sits beside its bar, never inside it.** A terminal cell holds one
+character, so a number printed on the bar and a line drawn on the bar cannot
+both be complete: the line takes whichever digit is in its cell, and for the
+hue axis that is every reading between about 120° and 231°. Beside it, both
+are whole all the time — and the number, being off the gradient, is ordinary
+chrome in the muted the labels wear (§8.1), which is also the ink the exact
+reading below it wears.
 
-**The value is printed centred on its bar**, in one ink for the whole
-number: `readable_fg` of the average of the cells it covers —
-the rule the palette cells' own labels already follow (§8.1). Choosing it per
-character turns a sweep into two numbers: the digits go light over the dark
-half of the gradient and dark over the light half, and the number stops
-reading as one thing. The bars are odd widths so the number can sit on the
-middle cell, which keeps the row's optical balance — three bars of different
-lengths, each with its own reading in the same place on it.
-
-**The exact reading has its own line, under the bars.** A number on a bar is
-rounded to a degree and a percent, which is the wrong precision for a frame
-you are steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%` sits on
-the specimen row below, in the same muted the labels wear. The two readings
-answer different questions and neither gives up a row for the other: the bars
-and the block are the glance, the numbers are the truth. Where the row below
-cannot hold them they go, and what is left is the hex — which is the value
-either way.
+**The exact reading has its own line, under the bars.** A number is rounded to
+a degree and a percent, which is the wrong precision for a frame you are
+steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%` sits on the
+specimen row below. The two readings answer different questions and neither
+gives up a row for the other: the bars, the line and the numbers are the
+glance, the exact numbers are the truth. Where the row below cannot hold them
+they go, and what is left is the hex — which is the value either way.
 
 The bars keep a ladder, because the row is one row and §15's budget is a
-contract: `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the
-columns, `HSV_COMPACT` (11, 7, 7) where it has nearly enough, and nothing
-where even the compact bars do not fit. The ladder is measured on the strings
-this slot produces, so a rung is never chosen and then clipped, and the
-subject — the slot's name and hex — is never the thing that gets cut. Nothing
-here costs a row: the readout replaces the string that was on a row the frame
-already drew.
+contract. With the numbers outside them, their chrome is paid for at every
+size, and the bars are what gives way as the row narrows: `HSV_FULL` (hue 15,
+saturation 9, value 9) where the row has the columns, `HSV_COMPACT` (11, 7, 7)
+where it has nearly enough, `HSV_TIGHT` (7, 5, 5) on an ordinary 80-column
+terminal, and nothing where even that does not fit — at which point the exact
+reading below is the whole reading. The ladder is measured on the strings this
+slot produces, chrome included, so a rung is never chosen and then clipped, and
+the subject — the slot's name and hex — is never the thing that gets cut.
+Nothing here costs a row: the readout replaces the string that was on a row the
+frame already drew.
 
 ## 9. Non-functional requirements
 

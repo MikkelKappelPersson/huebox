@@ -681,3 +681,28 @@ rather than in the middle of one.
 
 One character is all a thinner-than-character line can cost: the cell it is
 drawn into is the cell whose character it replaces.
+
+## P17 — the number moves out of the bar (spec §8.3)
+
+- [x] `render.py`: `_chip` loses its text — a bar is the sweep and the
+      hairline, and nothing else; `hsv_readout` lays out `hue 120° [bar] sat
+      48% [bar] val 48% [bar]` in the muted the labels wear
+- [x] the ladder gains a third rung, `HSV_TIGHT` (7, 5, 5), because the
+      readings' chrome is now paid for at every size: full 62 columns,
+      compact 54, tight 46 — an 80-column terminal still gets bars
+- [x] `HSV_LABELS` is gone; the chrome is measured on the strings the slot
+      produces, labels and two-space joins included
+- [x] tests: the number beside its bar and never inside it, a bar holding
+      only the sweep and the line, and each rung picked at the narrowest row
+      that fits it
+- [x] spec §8.3, README
+
+Notes: this is the answer to "can we have both the number and the marker".
+Not in the same cell — one cell, one character — but beside it, where both are
+whole all the time. It also settles the ink question: the number is off the
+gradient now, so it is ordinary muted chrome like the exact reading below it,
+and the single-ink-per-number rule goes away with the overlap that caused it.
+
+The numbers cost width, which is why the ladder grew a rung: `HSV_TIGHT`
+keeps bars on an ordinary 80-column terminal, and below it the exact reading
+on the specimen row is the whole reading — the same numbers, spelled out.
