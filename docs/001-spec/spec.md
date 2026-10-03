@@ -424,48 +424,45 @@ full-width block of colour in a pager's output is worse than the alternative.
 The `selected` row ends in a reading of the slot's own colour: hue, saturation
 and value. Numbers alone make every edit blind — `q` moves the hue and the only
 thing that changes is a digit — so where the row has room, the reading is three
-bars and the numbers live *inside* them.
+bars and the numbers live *on* them.
 
-**A bar is a window on its axis, centred on the reading.** The hue bar shows
-`HSV_HUE_SPAN` degrees either side of the slot's own hue at the slot's own
-saturation and value; the saturation bar shows `HSV_AXIS_SPAN` either side of
-its own; the value bar likewise. **The middle cell of every bar is the slot's
-exact colour** — so `q` slides a wheel under a number that never moves, `a`/`s`
-and `z`/`x` slide the other two the same way, and there is no playhead that
-could land on top of a digit. Saturation and value clamp at zero because there
-is nothing below zero; hue wraps, because the wheel does.
+**A bar is a sweep of its whole axis.** The hue bar is the wheel at the slot's
+own saturation and value, so `a`/`s` and `z`/`x` repaint every one of its cells
+at once, and a colour with no saturation shows as the grey bar it is. The
+saturation bar runs grey → colour and the value bar black → colour, each
+painted at the slot's own hue. The bar is a legend of what its axis means; the
+reading is what the number on it says, and the exact reading is the row below.
 
-**The value is printed centred over its window**, one cell at a time in
-`readable_fg` of that cell — black or white, whichever stays legible — which is
-the same rule the palette cells' own labels follow. A number on a gradient is
-legible at every point of it, and the centring is what says *this cell*: the
-centre of the bar is the reading, and the number is where the reading is.
+**The value is printed centred on its bar**, one cell at a time. The bars are
+odd widths so the number can sit on the middle cell, which keeps the row's
+optical balance — three bars of different lengths, each with its own reading
+sitting in the same place on it.
 
-Every cell is computed from the slot's hex, so the bars are a function of the
-buffer and not a decoration on it: one keystroke slides the windows on the same
-frame as everything else (§14.1). The labels — `hue`, `sat`, `val` — are
-furniture (`palette-8`), the muted the numbers wore as text, and the gap
-between two bars is painted in `background` exactly as the examples strip pads
-itself (§14.1): a chip's reset must not leave the terminal's own background
-showing under the label that follows it.
+**A number takes one ink for the whole number.** The ground it is read against
+is the cells it covers, so the ink is `readable_fg` of their average — the rule
+the palette cells' own labels already follow (§8.1). Choosing it per character
+turns a sweep into two numbers: the digits go light over the dark half of the
+gradient and dark over the light half, and the number stops reading as one
+thing. It is the one place in the frame where the ink is chosen from computed
+colours rather than from a slot, and it has to be: the gradient is computed,
+and no slot holds one.
 
-The row keeps a ladder, because the row is one row and §15's budget is a
-contract. `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the
+**The exact reading has its own line, under the bars.** A number on a bar is
+rounded to a degree and a percent, which is the wrong precision for a frame
+you are steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%` sits on
+the specimen row below, in the same muted the labels wear. The two readings
+answer different questions and neither gives up a row for the other: the bars
+are the glance, the numbers are the truth. Where the row below cannot hold
+them they go, and what is left is the hex — which is the value either way.
+
+The bars keep a ladder, because the row is one row and §15's budget is a
+contract: `HSV_FULL` (hue 15, saturation 9, value 9) where the row has the
 columns, `HSV_COMPACT` (11, 7, 7) where it has nearly enough, and nothing
 where even the compact bars do not fit. The ladder is measured on the strings
-this slot produces, so a rung is never chosen and then clipped. Nothing here
-costs a row: the readout replaces a string on a row the frame already drew.
-
-**The exact reading has its own line, under the bars.** A bar's in-cell value
-is rounded to a degree and a percent, which is the wrong precision for a
-frame you are steering a colour with — so `hue 207.0  sat 59.4%  val 93.7%`
-sits on the specimen row below, in the same muted the labels wear. The two
-readings answer different questions and neither gives up a row for the other:
-the bars are the glance, the numbers are the truth. The bars are drawn only
-while the row below can carry the numbers, so the reading is never on screen
-twice and never moves from one row to the other as the terminal narrows; when
-the row below can no longer hold them the numbers go too, and what is left is
-the hex — which is the value either way.
+this slot produces, so a rung is never chosen and then clipped, and the
+subject — the slot's name and hex — is never the thing that gets cut. Nothing
+here costs a row: the readout replaces the string that was on a row the frame
+already drew.
 
 ## 9. Non-functional requirements
 

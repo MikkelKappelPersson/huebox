@@ -308,30 +308,36 @@ class Readout(unittest.TestCase):
                                  sum(HSV_FULL if cols >= 90 else HSV_COMPACT)
                                  if room else 0)
 
-    def test_the_value_sits_where_the_reading_is(self):
-        # the middle cell of each bar is the slot's own colour, and the
-        # number is printed over it — so the digits never move
+    def test_the_bars_are_a_sweep_with_the_reading_printed_on_top(self):
+        # the bar is the axis; the number is the reading, centred on it
         own = hex_to_rgb("#61afef")
         cells = self.chips(100)
         at = 0
         for width in HSV_FULL:
             with self.subTest(width=width):
-                self.assertEqual(
-                    tuple(int(v) for v in cells[at + width // 2][:3]), own)
+                self.assertEqual(len(cells), sum(HSV_FULL))
+                self.assertNotEqual(cells[at + width // 2][0], own)
             at += width
+        # and the exact reading is on the row below, where the frame spells
+        # it out for itself
+        self.assertIn(hsv_numbers(*rgb_to_hsv(own)), self.specimen(100))
 
-    def test_nudging_the_hue_slides_the_bar_under_a_still_number(self):
-        # `q` moves the colour; the digits stay centred and the cells move
+    def test_nudging_the_hue_moves_the_number_and_the_other_two_bars(self):
+        # the wheel is the whole wheel and does not move; the reading on it
+        # does, and so do the two bars painted at the slot's hue (§14.1)
         before = self.selected(100)
         st = editor.EditorState(dict(self.SLOTS), lambda values: None)
         st.sel, st.grid = 4, editor.grid_geometry(100)
-        editor.apply_key("f", st)            # x5: 5 degrees is a visible step
-        editor.apply_key("q", st)
+        for key in ("f", "f", "q"):
+            editor.apply_key(key, st)
         after = self.selected(100, slots=st.slots)
         self.assertNotEqual(before, after)
-        self.assertNotIn("#61afef", after)          # the hex moved
-        self.assertEqual(after.index("20"), before.index("20"))   # digits hold
+        self.assertNotIn("#61afef", after)              # the hex moved
         self.assertNotEqual(self.chips(100), self.chips(100, slots=st.slots))
+        # ... and the exact reading below followed it
+        self.assertNotEqual(hsv_numbers(*rgb_to_hsv(hex_to_rgb("#61afef"))),
+                            hsv_numbers(*rgb_to_hsv(hex_to_rgb(
+                                st.slots["palette-4"]))))
 
     def test_no_column_of_the_row_shows_the_terminals_own_background(self):
         # §8.2 — a chip is a run of resets, and every one of them has to be

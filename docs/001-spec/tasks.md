@@ -580,3 +580,30 @@ print the reading on both rows, or move it from one to the other as the
 terminal narrowed — which reads as a bug even though each frame was right.
 Both thresholds are computed from the strings in the test rather than
 remembered (74 columns for the compact bars, 50 for the numbers).
+
+## P13 — the bar is a sweep again, and one ink per number (spec §8.3)
+
+- [x] `render.py`: `_window` → `_sweep`; a bar is its whole axis again, with
+      the reading printed centred on top of it
+- [x] the hue bar is the wheel at the slot's own sat/val; the sat bar grey →
+      colour and the val bar black → colour, each at the slot's own hue
+- [x] `_chip` picks **one** foreground for the whole number —
+      `readable_fg` of the average of the cells it covers — instead of one
+      per character, which turned a sweep into two numbers
+- [x] `hsv_readout` lost its numbers rung: the exact reading belongs to the
+      row below and is drawn there, so the readout is bars or nothing
+- [x] tests: `HsvReadout` and `Readout` rewritten around the sweep ends and
+      the single ink
+- [x] spec §8.3, README
+
+Notes: the window was mine, not the design. A bar that sweeps ±60° around the
+reading shows the neighbourhood and never the colour's own place in the wheel
+— which is the one thing a hue bar is for. What the window bought was "the
+middle cell is the slot's colour", and what it cost was the axis.
+
+The per-character ink was the bug worth naming: `readable_fg` per cell is
+right for a swatch whose label sits on one colour, and wrong for a number
+straddling a gradient, where it renders `207°` as three digits and a degree
+sign in two different inks. A number is one thing and takes one ink; the ink
+comes from the average of the cells underneath, which is the ground it is
+actually read against.

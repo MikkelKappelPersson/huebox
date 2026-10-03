@@ -348,17 +348,14 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # §8.3 — the reading of the slot's own colour comes in two parts: the
     # bars, which are the glance, on this row, and the exact numbers — `hue
     # 207.0  sat 59.4%  val 93.7%`, which are the truth and cost a degree
-    # and a percent of rounding — on the specimen row below. The bars draw
-    # only when the row below can carry the numbers, so the reading is never
-    # on screen twice and never jumps between the two rows as the terminal
-    # narrows. Neither part costs a row (§15).
+    # and a percent of rounding — on the specimen row below. Neither part
+    # costs a row, and neither gives up a row for the other.
     exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
     specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
-    under = len(exact) + 3 <= cols - visible(specimen)
-    body.append(subject + hsv_readout(slots, value, cols - visible(subject),
-                                      numbers=not under))
+    body.append(subject + hsv_readout(slots, value, cols - visible(subject)))
     body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
-                            if under else ""))
+                            if len(exact) + 3 <= cols - visible(specimen)
+                            else ""))
     body.append("")
 
     # §8.1 — the hints are `(key, what)` pairs: the key is the bright half,

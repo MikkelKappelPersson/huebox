@@ -128,17 +128,15 @@ the ground under the palette grid, the air between the widgets, the column
 after the last hint — is painted in `background`, so the frame is a sample
 of the theme rather than a preview beside it.
 
-The `selected` row ends in a reading of the slot's own colour: three
-bars, each a window on one axis — hue across ±60° of its own hue at its own
-saturation and value, saturation and value likewise — with the value printed
-in the middle of its own bar, because the middle cell *is* the value. Press
-`q` and the wheel slides under a number that does not move; press `a`/`s` and
-the saturation window slides too, black on white or white on black as the
-cell underneath needs. The exact reading — `hue 207.0  sat 59.4%  val 93.7%`,
-to the precision you are actually steering with — sits on the row below,
-beside the specimen; the bars are the glance, the numbers are the truth, and
-neither gives up a row for the other. On a terminal too narrow for the bars,
-only the numbers are left. Quit with
+The `selected` row ends in a reading of the slot's own colour: three bars,
+each a sweep of one axis — the whole hue wheel at the slot's own saturation
+and value, saturation grey → colour, value black → colour — with the reading
+printed in the middle of each bar. The bars say what the axis means, the
+number says where you are, and the exact reading — `hue 207.0  sat 59.4%
+val 93.7%`, to the precision you are actually steering with — sits on the row
+below beside the specimen. Press `a`/`s` or `z`/`x` and the whole hue wheel
+repaints; press `q` and the wheel holds still while the number moves, because
+a sweep is a legend and not a playhead. Quit with
 unsaved changes and huebox asks for a second `Esc` first; `r` throws the
 buffer away and goes back to your last save.
 

@@ -215,15 +215,13 @@ def backdrop(line: str, slots, cols: int) -> str:
 # the hsv readout (§8.3)
 # --------------------------------------------------------------------------
 
-# A bar is a window on its axis, centred on the reading: the hue bar shows
-# HSV_HUE_SPAN degrees either side of the slot's own hue at the slot's own
-# saturation and value, and saturation and value HSV_AXIS_SPAN either side of
-# theirs. The middle cell of every bar is the slot's exact colour, so the
-# number printed over it never moves and `q`/`a`/`s`/`z`/`x` slide the window
-# under it. Widths are the two rungs of the ladder, all of them odd so the
-# middle cell really is the centre.
-HSV_HUE_SPAN = 60                    # degrees either side of the reading
-HSV_AXIS_SPAN = 0.3                  # the same idea, in saturation/value
+# A bar is a sweep of its whole axis — a legend of what the axis means, with
+# the reading printed on top of it. The hue bar is the wheel at the slot's
+# own saturation and value, so `a`/`s` and `z`/`x` repaint every cell of it
+# at once and a colour with no saturation shows as the grey bar it is; the
+# saturation bar runs grey -> colour and the value bar black -> colour, each
+# painted at the slot's own hue. Widths are the two rungs of the ladder, and
+# both are odd so the number on top can be centred on the bar.
 HSV_FULL = (15, 9, 9)                # hue, sat, val on a wide row
 HSV_COMPACT = (11, 7, 7)             # on a nearly-wide one
 HSV_LONG = "hue {:5.1f}  sat {:4.1f}%  val {:4.1f}%"
@@ -232,78 +230,69 @@ HSV_LABELS = 16
 
 
 def hsv_numbers(hue: float, sat: float, val: float) -> str:
-    """`hue 207.0  sat 59.4%  val 93.7%` — the reading the bars replace."""
+    """`hue 207.0  sat 59.4%  val 93.7%` — the exact reading, below."""
     return HSV_LONG.format(hue * 360, sat * 100, val * 100)
 
 
-def _window(reading: float, span: float, width: int, wrap: bool) -> list:
-    """`width` readings of one axis, evenly spaced, centred on `reading`.
+def _sweep(width: int) -> list:
+    """`width` steps of an axis, first to last, whole — 0.0 to 1.0.
 
-    With an odd `width` the centre cell is the reading exactly, which is the
-    whole arrangement: the number sits on the value it names. Hue wraps at
-    the ends because the wheel does; saturation and value clamp at zero,
-    because there is nothing below zero and a clamp is the truth.
+    The bar is the axis, not a window onto where the reading happens to
+    sit: a hue bar that swept only the neighbourhood would show what is
+    beside the colour, and never the colour's own place in the wheel.
     """
-    step = 2 * span / (width - 1)
-    out = []
-    for i in range(width):
-        at = reading + (i - (width - 1) / 2) * step
-        out.append(at % 1.0 if wrap else min(1.0, max(0.0, at)))
-    return out
+    return [i / (width - 1) for i in range(width)]
 
 
-def _chip(slots, colour, reading, span, width, text, wrap=False) -> str:
-    """One bar: a window of the axis with `text` centred over it.
+def _chip(slots, colour, width: int, text: str) -> str:
+    """One bar: a sweep of the axis with `text` centred on top of it.
 
-    The text is drawn cell by cell in `readable_fg` of the cell underneath —
-    black or white, whichever stays legible — which is the rule the palette
-    cells' own labels follow and the reason a value can sit straight on a
-    gradient with no box around it. Nothing here paints a foreground of its
-    own: every cell answers from the value, so the chip is legible on any
-    theme, including the one whose colours are all the same.
+    The number takes **one** foreground for the whole number, not one per
+    character: digits that turn from white to black halfway along a sweep
+    read as two numbers rather than one. The ground a number is read
+    against is the cells it covers, so that is what the ink is chosen from —
+    their average, through `readable_fg`, the same rule the palette cells'
+    own labels follow (§8.1).
     """
-    cells = [rgb_to_hex(colour(at))
-             for at in _window(reading, span, width, wrap)]
-    start = (width - len(text) + 1) // 2
+    cells = [rgb_to_hex(colour(at)) for at in _sweep(width)]
+    start = max(0, (width - len(text) + 1) // 2)
+    covered = cells[start:start + len(text)] or cells
+    ink = fg(readable_fg(rgb_to_hex(tuple(
+        sum(hex_to_rgb(cell)[i] for cell in covered) / len(covered)
+        for i in range(3)))))
     return "".join(
-        f"{bg(cell)}{fg(readable_fg(cell))}"
+        f"{bg(cell)}{ink}"
         f"{text[i - start] if start <= i < start + len(text) else ' '}{RESET}"
         for i, cell in enumerate(cells))
 
 
-def hsv_readout(slots, value: str, cols: int, numbers: bool = True) -> str:
-    """The slot's hue, saturation and value: bars, or the numbers (§8.3).
+def hsv_readout(slots, value: str, cols: int) -> str:
+    """The slot's hue, saturation and value: three bars (§8.3).
 
     Pure like every widget here: every cell of every bar is computed from
     `value` and every colour of chrome from `slots`, on the call, so one
-    keystroke slides the windows on the same frame as everything else
-    (§14.1). `cols` is the room the row has left, and the ladder it answers
-    with is the one §8.3 records: the full bars, the compact ones, or the
-    numbers — never a rung chosen and then cut. Nothing here is ever wider
-    than `cols`, and the row that carries it is a row the frame already
-    spends (§15).
-
-    `numbers=False` asks for the bars or nothing. A caller that spells the
-    reading out elsewhere — the exact line under the bars — does not want it
-    here too, and the frame is the one place that knows which row is which.
+    keystroke repaints them on the same frame as everything else (§14.1).
+    `cols` is the room the row has left, and the ladder it answers with is
+    the one §8.3 records: the full bars, the compact ones, or nothing —
+    never a rung chosen and then cut. Nothing here is ever wider than
+    `cols`, and the row that carries it is a row the frame already spends
+    (§15). The exact reading is not this row's business: the frame spells it
+    out on the row below, next to the specimen (§8.3).
     """
     hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
-    spelled = hsv_numbers(hue, sat, val)
     width = next((sizes for sizes in (HSV_FULL, HSV_COMPACT)
                   if cols >= HSV_LABELS + sum(sizes)), None)
     if width is None:
-        if not numbers or cols < len(spelled):
-            return ""
-        return spelled
-    axes = (("hue", hue, width[0], HSV_HUE_SPAN / 360, True,
-             f"{hue * 360:.0f}°", lambda t: hsv_to_rgb(t, sat, val)),
-            ("sat", sat, width[1], HSV_AXIS_SPAN, False,
-             f"{sat * 100:.0f}%", lambda t: hsv_to_rgb(hue, t, val)),
-            ("val", val, width[2], HSV_AXIS_SPAN, False,
-             f"{val * 100:.0f}%", lambda t: hsv_to_rgb(hue, sat, t)))
-    return "  ".join(chrome(label, CHROME_MUTED, slots) + " " + _chip(
-        slots, colour, reading, span, cells, text, wrap)
-        for label, reading, cells, span, wrap, text, colour in axes)
+        return ""
+    axes = (("hue", width[0], f"{hue * 360:.0f}°",
+             lambda t: hsv_to_rgb(t, sat, val)),
+            ("sat", width[1], f"{sat * 100:.0f}%",
+             lambda t: hsv_to_rgb(hue, t, val)),
+            ("val", width[2], f"{val * 100:.0f}%",
+             lambda t: hsv_to_rgb(hue, sat, t)))
+    return "  ".join(chrome(label, CHROME_MUTED, slots) + " "
+                     + _chip(slots, colour, cells, text)
+                     for label, cells, text, colour in axes)
 
 
 # --------------------------------------------------------------------------
