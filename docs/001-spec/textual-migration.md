@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–1 landed, scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–2 landed, scroll defect fixed, no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -585,10 +585,15 @@ renames.
    `editor.REQUIRES` declaration with `cli`'s clean-failure guard, and §9's
    extras table. 395 tests green under `-W always`.
 2. Textual shell around the existing draw: App, keys, resize, raw mode.
-   `render.py` untouched; frame still painted by huebox. I1 green. **The
-   mechanism is already proven** (§5.5), so this phase is assembly rather than
-   discovery — with the caveat from §6.4 that the candidate's whole environment
-   has to be pinned before a single byte is trusted.
+   `render.py` untouched; frame still painted by huebox. I1 green. **Landed:**
+   `huebox/app.py` (one `Frame` widget over `draw_editor`'s captured rows,
+   arrow bindings through `move_slot`, `on_resize` re-deriving at the new
+   width), `tests/candidate.py` (the pty launcher with its environment pinned
+   per §6.4), and `tests/test_app.py` for the launch contract and the token
+   binding. `editor.REQUIRES` stays empty — `cli` still opens the stdlib
+   session until phase 3, so naming `textual` now would break `huebox edit`
+   for a module the command does not yet run. I1 and I2 both green at every
+   size and fixture; §4.5's probe confirmed live against the app.
 3. Phase A: the single custom widget, `render.py` per-row, `tui.py` retired,
    `MIN_COLS`/`MIN_ROWS` relocated. I1 + I2 green.
 4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
@@ -680,3 +685,45 @@ next person, not a fact to go look up.
    screen; the goldens are re-recorded and `TestFrameGeometry` asserts no rows
    lost rather than a height formula, since the height turns out to be
    content-dependent.
+## 14. What phase 2 actually found
+
+Four things, none of which were guessable from the spec and two of which would
+have been silent.
+
+**The Linux driver writes the UI to `sys.__stderr__`**
+(`textual/drivers/linux_driver.py:58`), on purpose, so that `print()` in an app
+still reaches stdout without corrupting the display. A harness that captures
+stdout gets an empty stream and reports *every colour as wrong* — which reads
+as a catastrophic failure rather than as the wrong file descriptor.
+
+**`pyte` replays the whole stream; no window needs cutting.** The plan was to
+split at cursor-home and parse the last region, to exclude Textual's setup
+chatter and its many damage repaints. Textual positions with `CSI row;col H`,
+not bare `CSI H`, so the split never matched and the entire stream came out as
+one region. Feeding everything to a real emulator lands on the settled screen
+with no regex and nothing to keep in step with Textual's output format.
+
+**The frame is not worth re-rendering.** `app.py` captures what
+`draw_editor` wrote rather than reimplementing the construction. That makes
+"the frame is unchanged" true by construction instead of by agreement, and it
+is why phase 2 could be assembled in one sitting from a proven mechanism.
+
+**Two values had to be shared or the hint row lies.** `draw_editor`'s `mult` is
+printed verbatim by the hint line, so the reference's `False` and the app's
+default `1` produced `f xFalse` against `f x1` — a genuine cell difference,
+reported as bold and colour rather than as the label it was. Both sides now
+take one constant from `harness`. The same review turned up the shell nudging
+HSV by `0.01` where huebox nudges by `1/360` and `0.02`: no test would have
+caught that, because it only shows up in a key press. The arithmetic now lives
+once in `color.step_hsv`, used by `editor._adjust` and by the shell.
+
+**Result.** I1 and I2 hold at all four sizes and all three fixtures: 0 of 1920
+cells differing at 80x24, 0 new colours anywhere, 0 unbacked cells. §4.5's
+probe, run against the real app rather than described, diverges in all 1920
+cells at 256-colour — so the comparison can still fail, which is the only thing
+that makes it mean anything.
+
+Cost: the suite goes from 4 seconds to about 17, all of it pty launches, cut
+from 34 to 22 by memoising captures. Without them the equivalence tests skip
+rather than compare the reference with itself, which would be green and
+meaningless.

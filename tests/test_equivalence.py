@@ -17,6 +17,9 @@ import harness  # noqa: E402
 
 needs_pyte = unittest.skipUnless(
     harness.pyte is not None, "pyte missing: pip install -e '.[test]'")
+needs_candidate = unittest.skipUnless(
+    harness.candidate_available(),
+    "textual missing: pip install -e '.[editor]'")
 
 
 class TestGoldenPresence(unittest.TestCase):
@@ -84,13 +87,20 @@ class TestFrameGeometry(unittest.TestCase):
 
 
 @needs_pyte
+@needs_candidate
 class TestEquivalence(unittest.TestCase):
-    """I1 proper: the candidate grid is the golden grid."""
+    """I1 proper: the Textual frame is the golden frame, cell for cell.
 
-    def _compare(self, fixture, cols, rows, sel=0):
+    This is the assertion the whole migration rests on. Through phase 1 the
+    candidate *was* the reference, so this was green by construction; phase 2
+    made it a real app in a real pty, and it still passes — 0 of 1920 cells
+    differing at 80x24, and 0 across all four sizes and three fixtures.
+    """
+
+    def _compare(self, fixture, cols, rows, sel=0, depth="truecolor"):
         golden = harness.load(fixture, cols, rows, sel)
         self.assertIsNotNone(golden, "no golden recorded")
-        raw = harness.candidate_bytes(fixture, cols, rows, sel)
+        raw = harness.candidate_bytes(fixture, cols, rows, sel, depth)
         actual = harness.parse(raw, cols, rows, golden["frame_rows"])
         self.assertEqual(actual, golden["cells"],
                          "frame changed:\n" + self._report(
@@ -112,16 +122,60 @@ class TestEquivalence(unittest.TestCase):
                     self._compare(fixture, cols, rows)
 
     def test_selection_at_each_grid_edge(self):
-        # 0 and 21 are the first and last of the 22 slots (§5); a move that
-        # repainted the wrong cell would show here and nowhere else.
+        """The selection walks, and the frame follows.
+
+        Compared against the **live reference** for each `sel`, not against the
+        frozen golden: `golden_path` has no `sel` in it, so the sel=0 record
+        would be asked to stand in for a frame that is not it — and the diff
+        would come back as attributes rather than as colours, which reads as a
+        compositor bug and is not one. The frozen golden still covers sel=0 at
+        every size and fixture in `test_every_fixture_matches_at_every_size`;
+        this asks a different question, and the two sides of it are still
+        independent (Textual's compositor versus huebox's own writer).
+        """
         for sel in (0, 21):
             for cols, rows in harness.SIZES:
                 with self.subTest(sel=sel, size=f"{cols}x{rows}"):
-                    golden = harness.record("distinct", cols, rows, sel)
-                    raw = harness.candidate_bytes("distinct", cols, rows, sel)
-                    actual = harness.parse(raw, cols, rows,
-                                           golden["frame_rows"])
-                    self.assertEqual(actual, golden["cells"])
+                    raw, height = harness.capture_reference("distinct", cols,
+                                                           rows, sel)
+                    expected = harness.parse(raw, cols, rows, height)
+                    actual = harness.parse(
+                        harness.candidate_bytes("distinct", cols, rows, sel),
+                        cols, rows, height)
+                    self.assertEqual(actual, expected,
+                                     "frame changed:\n" + self._report(
+                                         harness.diff(expected, actual, cols)))
+
+
+@needs_pyte
+@needs_candidate
+class TestDepthProbeAgainstTheApp(unittest.TestCase):
+    """§4.5, run against the real app rather than described.
+
+    The probe exists because `pyte` cannot see palette degradation: it normalises
+    `38;5;196` and `38;2;255;0;0` to the same hex. Phase 2 confirmed the hazard
+    is live — Textual reads `TEXTUAL_COLOR_SYSTEM` from the environment at
+    import time, defaulting to `auto`, and at 256 it renders the frame's colours
+    as their nearest xterm entries. So the same fixture, the same code, the same
+    golden, and a grid that is wrong in every cell.
+    """
+
+    def test_truecolor_matches_the_golden(self):
+        golden = harness.load("distinct", 80, 24)
+        raw = harness.candidate_bytes("distinct", 80, 24, depth="truecolor")
+        actual = harness.parse(raw, 80, 24, golden["frame_rows"])
+        self.assertEqual(actual, golden["cells"])
+
+    def test_256colour_does_not_match_it(self):
+        """The negative case. Without this the probe above proves nothing: a
+        comparison that passes at both depths is a comparison that cannot fail."""
+        golden = harness.load("distinct", 80, 24)
+        raw = harness.candidate_bytes("distinct", 80, 24, depth="256")
+        actual = harness.parse(raw, 80, 24, golden["frame_rows"])
+        differences = harness.diff(golden["cells"], actual, 80)
+        self.assertTrue(differences,
+                        "the 256-colour frame matched the golden: the probe "
+                        "can no longer see a degradation")
 
 
 @needs_pyte

@@ -20,13 +20,19 @@ from typing import NamedTuple
 
 #: Optional-dependency groups this editor needs to run, checked by `cli` before
 #: the session opens so a missing extra is an error line and an exit 1 rather
-#: than a traceback (AGENTS.md). Empty while the editor is still the stdlib one;
-#: the Textual migration turns it into `("textual",)` in its phase 3, and until
-#: then `huebox edit` keeps working on a bare install.
+#: than a traceback (AGENTS.md).
+#:
+#: Empty while the editor is the stdlib one. The Textual migration's phase 2
+#: makes `huebox/app.py` the editor, so `huebox edit` now needs Textual — but
+#: `cli` still opens `editor.edit`, the stdlib session, until phase 3 hands it
+#: the app. Setting the name here would break `huebox edit` for everyone who
+#: has not installed the extra, for a module the command does not yet use.
+#: Phase 3 sets this, and the deletion of `cli`'s `edit` path is the same
+#: commit, so the two cannot disagree about what `huebox edit` runs.
 REQUIRES: tuple = ()
 
-from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
-                    is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
+from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
+                    normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
 from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_numbers,
                      hsv_readout, sample_lines, title, visible, wordmark)
@@ -563,17 +569,9 @@ def save_state(st):
 
 def _adjust(st, key):
     name = SLOTS[st.sel]
-    value = st.slots[name]
-    hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
     channel, direction = ADJUST[key]
-    if channel == "h":
-        hue = (hue + direction / 360 * st.mult) % 1.0
-    elif channel == "s":
-        sat = max(0.0, min(1.0, sat + direction * 0.02 * st.mult))
-    else:
-        val = max(0.0, min(1.0, val + direction * 0.02 * st.mult))
-    st.undo.append((name, value))
-    st.slots[name] = rgb_to_hex(hsv_to_rgb(hue, sat, val))
+    st.undo.append((name, st.slots[name]))
+    st.slots[name] = step_hsv(st.slots[name], channel, direction, st.mult)
 
 
 def _prompt(st):

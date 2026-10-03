@@ -60,6 +60,15 @@ SIZES = ((100, 30), (80, 24), (60, 16), (40, 12))
 
 DEFAULT = "default"          # pyte's sentinel for "the terminal's own colour"
 
+#: The step size both sides of I1 are given. The hint line prints `x{mult}`
+#: verbatim, so this is a label as much as a value — the reference takes
+#: whatever `capture_reference` passes and the candidate takes the same string
+#: through `HUEBOX_MULT`. One constant, so the hint row cannot drift apart by a
+#: word and be mistaken for a colour difference.
+REFERENCE_MULT = False
+REFERENCE_STATUS = ""
+REFERENCE_UNDO: list = []
+
 
 def emitted_rows(text: str) -> int:
     """Rows the renderer wrote, from its own output.
@@ -147,7 +156,8 @@ def capture_reference(fixture, cols, rows, sel=0):
     try:
         with contextlib.redirect_stdout(buffer):
             editor.draw_editor("ghostty", spec["path"], spec["slots"], sel,
-                               [], "", False)
+                               REFERENCE_UNDO, REFERENCE_STATUS,
+                               REFERENCE_MULT)
     finally:
         editor.term_size = original
 
@@ -155,15 +165,36 @@ def capture_reference(fixture, cols, rows, sel=0):
     return raw.encode("utf-8"), emitted_rows(raw)
 
 
-def candidate_bytes(fixture, cols, rows, sel=0):
+def candidate_available() -> bool:
+    """Whether the Textual shell can be launched from this interpreter.
+
+    The equivalence tests skip without it rather than quietly falling back to
+    comparing the reference with itself, which would be green and meaningless.
+    """
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def candidate_bytes(fixture, cols, rows, sel=0, depth="truecolor"):
     """The candidate frame's bytes.
 
-    Phase 0 has no candidate: this is the reference. Phase 2 swaps the body for
-    a pty capture of the Textual app run under `color_depth_env` — which is why
-    the parameter exists now and is unused, rather than being threaded through
-    every test later.
+    Phase 2 made this real: it is `huebox/app.py` launched in a pty, with the
+    whole environment pinned (`candidate.py`, migration spec §6.4), read back as
+    the bytes the terminal would have received. Before phase 2 it returned the
+    reference's own bytes, which made I1 green by construction — the seam is
+    kept because it is the one place the migration's claim is cashed.
     """
-    return capture_reference(fixture, cols, rows, sel)[0]
+    import candidate
+
+    data = candidate.capture(fixture, cols, rows, sel, depth)
+    if data is None:
+        raise RuntimeError(
+            "the candidate produced no output: `python -m huebox.app` under a "
+            "pty wrote nothing (wrong fd, or it exited before painting)")
+    return data
 
 
 def color_depth_env(depth):

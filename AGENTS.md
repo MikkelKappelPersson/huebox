@@ -24,7 +24,8 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
 | `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
-| `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
+| `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
+| `huebox/app.py` | the Textual shell: the frame as one widget over `render`'s rows, keys, resize | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
@@ -32,8 +33,18 @@ Dependency rule, no exceptions: `color` imports nothing intra-package;
 `themes` imports `color` + `formats` + `detect` (push resolves its target
 through the same `resolve()` the CLI does, and the native export asks
 `detect` for the config holding the `theme =` line); `render` imports
-`color`; `editor` imports `render` + `tui` + `color`; `cli` imports
+`color`; `editor` imports `render` + `tui` + `color`; `app` imports
+`render` + `tui` + `color` + `editor` (it drives `editor`'s grid geometry and
+step arithmetic, and must not re-implement either); `cli` imports
 everything. No cycles. Every module header cites its spec section.
+
+**`app.py` reuses `draw_editor`'s rows, it does not re-render them.** It
+captures what the writer produced and hands it to Textual as a `Strip`. A
+second copy of the frame's construction would be a second chance to get it
+wrong, and the equivalence harness could then only say the two copies agreed —
+not that either matched what huebox used to do. Take the buffer as a file
+(`HUEBOX_SLOTS`): product code is handed its slots, and the fixtures stay in
+`tests/`.
 
 **Injected seams keep those edges clean.** `editor.py` reaches the outside
 world through four callables `cli.py` builds: the save callback
@@ -96,5 +107,18 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   a new format needs round-trip plus byte-identical no-op cases. Run it with
   `-W always` before calling a phase done — the warning count is part of the
   contract.
+- **The colour promise is a test, not a review habit.** Moving anything onto
+  Textual's compositor is gated on I1: the frame after the change must equal
+  the committed golden cell for cell, parsed through `pyte` from a real pty
+  (`tests/candidate.py`, `docs/001-spec/textual-migration.md` §4). Two
+  consequences: pin the whole environment when launching the app (Textual reads
+  eight variables at import time, §6.4), and never let a golden regenerate to
+  make a failure go away — the golden diff *is* the review artefact.
+- **Extras are not dependencies.** `pyproject` keeps one runtime dependency
+  (Pygments); `textual` is the `editor` group and `pyte` the `test` group, so
+  `show` / `list` / `use` / `new` / `import` install without either. The
+  equivalence tests skip without them rather than comparing the reference with
+  itself. `editor.REQUIRES` is what `cli` reads to say so — add a name there
+  only in the same commit that makes `huebox edit` use the module needing it.
 - Keep it single-purpose: colour slots in, colour slots out. Not a config
   editor, not a theme store (§3).
