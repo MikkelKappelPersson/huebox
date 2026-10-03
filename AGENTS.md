@@ -25,7 +25,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode | §15 |
 | `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session`; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
-| `huebox/app.py` | the Textual shell: the frame as one widget over `render`'s rows, keys, resize | migration §5.5 |
+| `huebox/app.py` | the Textual shell: the frame as one widget over `render`'s rows, keys, resize, click and wheel | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
@@ -103,6 +103,12 @@ get the line that is actually about them.
   `from __future__ import annotations` in every file).
 - **Errors to stderr, prefixed `huebox: `, exit 1.** No tracebacks for user
   errors: missing config, bad theme name, no colours found.
+- **A click is a keypress.** `on_click` resolves to a slot and then goes
+  through `apply_key`; it must never touch a colour or a frame. The clickable
+  cells are recorded by the rows that draw them (`draw_editor` / `theme_lines`
+  take `hits=`), never recomputed — a second copy of the layout is a second
+  chance to aim a click at the wrong cell, silently — and `test_editor`
+  cross-checks every hit against the painted frame.
 - **Layout goes through `clip` / `pack`.** No widget measures width itself;
   layout derives from `term_size()` every frame (§15). Below
   `MIN_COLS`×`MIN_ROWS` (in `tui.py`) the editor draws the too-small hint and

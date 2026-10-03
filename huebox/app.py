@@ -50,8 +50,8 @@ from textual.widget import Widget
 
 from .color import MISSING, SLOTS
 from .editor import (MULT_STEPS, EditorState, apply_key, draw_editor,
-                     grid_geometry, head_label, report_session, session_path,
-                     too_small_frame)
+                     grid_geometry, head_label, report_session,
+                     session_path, slot_at, theme_hits, too_small_frame)
 from .render import MIN_COLS, MIN_ROWS, visible
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
@@ -118,17 +118,22 @@ def load_slots() -> dict:
     return {name: given.get(name, MISSING) for name in SLOTS}
 
 
-def frame_rows(fmt, path, state, cols, head=None, overlay=None):
+def frame_rows(fmt, path, state, cols, head=None, overlay=None, hits=None):
     """The frame as a list of rows, captured from `draw_editor`.
 
     Returns the rows without the trailing-newline decision, which belongs to
     whoever writes them: `draw_editor` keeps that (and withholds the newline
     when the frame fills the screen, §4.8), Textual positions cells itself.
+
+    `hits` is filled with the clickable cells the frame painted — asked of the
+    drawing code rather than recomputed here, so a click cannot land a row away
+    from the swatch the user aimed at.
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
-                    state.status, state.mult, head=head, overlay=overlay)
+                    state.status, state.mult, head=head, overlay=overlay,
+                    hits=hits)
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -203,6 +208,8 @@ class Editor(App):
         # how the harness pins the header to the reference's arguments.
         self.head_override = head_override
         self.state = None
+        self.hits: list = []
+        self.rows_text: list = []
         super().__init__(**kwargs)
         # After `super()`, and in the constructor rather than `on_mount`: Textual
         # delivers a `Resize` during start-up, before `on_mount` runs, and
@@ -264,12 +271,15 @@ class Editor(App):
         # which move through the grid the user can see (§4.3)
         state.grid = grid_geometry(width)
 
+        self.hits = []
         if width < MIN_COLS or height < MIN_ROWS:
             rows_text = [too_small_frame(width)]
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
                                    width, head=self.head_for(state),
-                                   overlay=state.picker_frame())
+                                   overlay=state.picker_frame(),
+                                   hits=self.hits)
+        self.rows_text = rows_text
 
         for child in list(self.query(Frame)):
             child.remove()
@@ -305,6 +315,59 @@ class Editor(App):
 
     def action_slot(self, direction: str) -> None:      # pragma: no cover
         """Unused: `on_key` covers the arrows, so nothing is bound."""
+
+    # -- the mouse (§4.3.1) ------------------------------------------------
+
+    def on_click(self, event) -> None:
+        """Click a swatch or an interface cell to select it.
+
+        The frame widget starts at the screen origin, so a click's screen row is
+        its row in the frame; `slot_at` maps a column to a slot or to None for
+        the chrome. Clicking nothing is not an error and does not move the
+        selection — the header, the readings and the empty air are not controls,
+        and pretending otherwise would make the frame feel like a form.
+
+        The picker takes the click first, because it owns the whole frame while
+        it is up: a click on one of its rows opens that theme, which is Enter.
+        """
+        event.stop()
+        x, y = event.offset.x, event.offset.y
+        if self.state.overlay is not None:
+            rows = theme_hits(self.state.overlay, self.state.overlay_index,
+                              self.state.theme or "", self.size.width,
+                              self.size.height, slots=self.state.slots)
+            row = slot_at(rows, x, y)
+            if row is None:
+                return
+            # Move the selection onto the clicked row, then let apply_key do
+            # what it does for Enter — so a click and Enter cannot diverge.
+            self.state.overlay_index = row
+            apply_key("enter", self.state)
+            self.redraw()
+            return
+        target = slot_at(self.hits, x, y)
+        if target is None or target == self.state.sel:
+            return
+        self.state.sel = target
+        self.redraw()
+
+    def on_mouse_scroll_up(self, event) -> None:
+        self._scroll_picker("up", event)
+
+    def on_mouse_scroll_down(self, event) -> None:
+        self._scroll_picker("down", event)
+
+    def _scroll_picker(self, direction: str, event) -> None:
+        """Wheel the picker's selection, which is how a long library is walked.
+
+        Only in the picker: the editor frame itself does not scroll, so a wheel
+        notch does nothing a user could misread as having moved the colours.
+        """
+        event.stop()
+        if self.state.overlay is None:
+            return
+        apply_key(direction, self.state)
+        self.redraw()
 
     def prompt_text(self, label: str):
         """One line, with the terminal handed over for it (§4.3).

@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–3 landed, scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–4 landed, scroll defect fixed, no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -620,7 +620,24 @@ renames.
    promise that survives — a prompt hands the terminal back and cancels
    cleanly.
 4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
-   mouse changes input, not output.
+   mouse changes input, not output. **Landed.** `draw_editor` and
+   `theme_lines` now announce their own clickable cells (`hits=`), and
+   `frame_hits` / `theme_hits` / `slot_at` are thin readers of that. Clicking a
+   swatch or an interface cell sets the selection; clicking a picker row
+   moves the picker's selection and lets `apply_key` do what Enter does, so the
+   two cannot diverge; the wheel walks the picker and does nothing in the frame.
+   I1 needed no change — not one golden moved — which is the phase's whole
+   claim, asserted as a test (`a click that changes nothing paints nothing`,
+   byte for byte).
+
+   **Why the cells are announced rather than computed.** A second description of
+   the layout is a second chance to point a click at the wrong cell, and the
+   failure is silent — you select a colour you are not looking at and the log
+   says nothing. So the row that draws a swatch records it, `test_editor`
+   cross-checks every hit against the painted frame, and two cases that would
+   otherwise have shipped wrong are the reason: the hit map was built at the
+   *terminal's* width rather than the frame's, and a short frame's indices were
+   taken before the decoration row was deleted.
 5. Phase B: decomposition, one widget per commit, I1 + I2 before each next.
 6. Polish: panels, focus, borders, scrollbar styling — theme-closed or not
    used (§6.2).

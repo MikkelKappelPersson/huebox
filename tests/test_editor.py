@@ -1654,3 +1654,97 @@ class OverlayFrame(unittest.TestCase):
                 self.assertIn(HINT, out)
                 self.assertNotIn("theme-", out)
                 self.assertNotIn("Enter open", out)
+
+
+def _rows(cols, rows, sel, mult=False, status="", overlay=None):
+    """The editor frame's rows as plain text — what a click lands on."""
+    out = io.StringIO()
+    with mock.patch.object(sys, "stdout", out):
+        editor.draw_editor("ghostty", "", FULL_SLOTS, sel, [], status, mult,
+                           overlay=overlay, size=(cols, rows))
+    return plain_rows(out.getvalue())
+
+
+def _picker_rows(names, index, current, cols, rows):
+    """The picker frame's rows as plain text."""
+    return [plain(line) for line in
+            editor.theme_lines(names, index, current, cols, rows)]
+
+
+class HitMap(unittest.TestCase):
+    """Every clickable cell, cross-checked against the frame that paints it.
+
+    `frame_hits` is a second description of where the grids are, and that is a
+    real risk: a layout change that moves a row would leave it pointing at the
+    wrong cell, and clicking would select something the user is not looking at,
+    with nothing in the log. So no hit is believed until the painted frame is
+    asked — a hit counts only if the cell it claims carries that slot's marker.
+    """
+
+    def test_every_hit_claims_a_cell_the_frame_marks(self):
+        for cols, rows in ((120, 30), (100, 30), (80, 24), (60, 16), (40, 12)):
+            hits = editor.frame_hits(cols, rows)
+            # A short frame shows fewer slots, and a slot it does not show has
+            # no cell to click — 15 of 22 at 60x16, 12 at 40x12. The map is
+            # exactly the prefix the frame paints, and claiming a cell below the
+            # trim would mean selecting something the user cannot see.
+            self.assertEqual([hit.slot for hit in hits],
+                             list(range(len(hits))))
+            self.assertLessEqual(len(hits), len(SLOTS))
+            for hit in hits:
+                with self.subTest(cols=cols, slot=hit.slot):
+                    painted = _rows(cols, rows, hit.slot)
+                    self.assertLess(hit.y, len(painted),
+                                    "hit points past the end of the frame")
+                    cell = painted[hit.y][hit.x0 + 1:hit.x0 + 2]
+                    self.assertEqual(
+                        cell, ">",
+                        "row %d col %d does not carry the `>` marker for slot "
+                        "%d (%r)" % (hit.y, hit.x0, hit.slot, cell))
+
+    def test_a_hit_is_the_cell_that_cell_wide(self):
+        for cols in (120, 100, 80, 60, 40):
+            hits = {hit.slot: hit for hit in editor.frame_hits(cols, 30)}
+            grid = editor.grid_geometry(cols)
+            cellw = editor.CELL_FULL if grid.show_hex else editor.CELL_MIN
+            self.assertEqual(hits[0].x0, 2)
+            self.assertEqual(hits[1].x0, 2 + cellw)
+            self.assertEqual(hits[0].x1, hits[0].x0 + cellw - 1)
+
+    def test_the_interface_cells_sit_below_the_palette(self):
+        for cols in (120, 80, 40):
+            hits = {hit.slot: hit for hit in editor.frame_hits(cols)}
+            self.assertGreater(hits[len(editor.PALETTE)].y,
+                               hits[len(editor.PALETTE) - 1].y,
+                               "the interface grid overlaps the palette's")
+
+    def test_chrome_is_not_clickable(self):
+        hits = editor.frame_hits(80, 24)
+        for x, y in ((0, 0), (0, 1), (2, 2), (79, 0)):
+            self.assertIsNone(editor.slot_at(hits, x, y),
+                              "(%d,%d) is chrome, not a colour" % (x, y))
+
+    def test_a_click_anywhere_in_a_cell_selects_that_slot(self):
+        for cols in (120, 80, 40):
+            hits = editor.frame_hits(cols)
+            for hit in hits:
+                with self.subTest(cols=cols, slot=hit.slot):
+                    self.assertEqual(editor.slot_at(hits, hit.x0, hit.y),
+                                     hit.slot)
+                    self.assertEqual(editor.slot_at(hits, hit.x1, hit.y),
+                                     hit.slot,
+                                     "the last column of a cell must still "
+                                     "hit it, or it has a dead sliver")
+
+    def test_the_picker_windows_so_a_click_lands_on_what_is_shown(self):
+        names = [f"theme-{n:02d}" for n in range(40)]
+        for index in (0, 5, 20, 39):
+            hits = editor.theme_hits(names, index, "", 80, 24)
+            self.assertTrue(hits, "a 40-theme library must be clickable")
+            for hit in hits:
+                with self.subTest(index=index, row=hit.slot):
+                    painted = _picker_rows(names, index, "", 80, 24)
+                    self.assertIn(names[hit.slot], painted[hit.y])
+
+    def test_an_empty_picker_has_nothing_to_hit(self):
+        self.assertEqual(editor.theme_hits([], 0, "", 80, 24), [])

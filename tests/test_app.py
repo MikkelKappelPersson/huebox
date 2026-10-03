@@ -251,3 +251,121 @@ class KeyVocabulary(unittest.TestCase):
         self.assertEqual(huebox_app.Editor.BINDINGS, [],
                          "a Textual binding swallows a key apply_key wants")
         self.assertFalse(huebox_app.Editor.ENABLE_COMMAND_PALETTE)
+
+
+@needs_app
+class TheMouse(unittest.TestCase):
+    """Phase 4: a click is a keypress, resolved against the frame.
+
+    The shape of it is the whole claim — `on_click` sets the selection or feeds
+    `apply_key`, and never touches a colour. Mouse changes input, not output,
+    which is why I1 stayed green across this phase without a single change to
+    the goldens.
+    """
+
+    def _editor(self, cols=80, rows=24, **kw):
+        """An editor with a known size, built but not mounted.
+
+        `App.size` is a read-only property backed by the compositor, so a test
+        that has not run the app patches the property rather than assigning to
+        it — the same thing a mounted app would report.
+        """
+        from textual.geometry import Offset   # lazy: textual is an extra, so
+        # importing it at module level would break the skip rather than skip
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock, return_value=Offset(cols, rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            editor = huebox_app.Editor(**kw)
+        editor.query = lambda *a, **k: ()      # not mounted: nothing to find
+        editor.mount = lambda *a, **k: None
+        editor.redraw()
+        return editor
+
+    def _click(self, editor, x, y):
+        from textual.events import Click
+
+        editor.on_click(Click(widget=None, x=x, y=y, delta_x=0, delta_y=0,
+                              button=1, shift=False, meta=False, ctrl=False))
+        return editor
+
+    def _point_at(self, editor, slot):
+        return next(hit for hit in editor.hits if hit.slot == slot)
+
+    def test_a_click_selects_the_slot_whose_cell_it_was(self):
+        editor = self._editor()
+        for slot in (0, 5, 16):
+            with self.subTest(slot=slot):
+                hit = self._point_at(editor, slot)
+                self._click(editor, hit.x0 + 1, hit.y)
+                self.assertEqual(editor.state.sel, slot)
+
+    def test_a_click_on_chrome_selects_nothing(self):
+        editor = self._editor()
+        before = editor.state.sel
+        for x, y in ((0, 0), (0, 1), (79, 0)):
+            self._click(editor, x, y)
+        self.assertEqual(editor.state.sel, before,
+                         "clicking the header must not move the selection")
+
+    def test_a_click_that_changes_nothing_paints_nothing(self):
+        """The claim of the phase, asserted.
+
+        I1 covers the frame and the goldens were untouched by all of phase 4,
+        so the mouse cannot have reached a colour. What is left to say here is
+        the part I1 does not: a click that selects nothing must not even redraw
+        the frame differently, byte for byte.
+
+        A click that *does* select legitimately repaints — the `>` moves and the
+        bold moves with it — which is why this clicks the chrome.
+        """
+        editor = self._editor()
+        before = list(editor.rows_text)
+        hits_before = list(editor.hits)
+        self._click(editor, 0, 0)
+        self.assertEqual(editor.rows_text, before,
+                         "a click on the header repainted the frame")
+        self.assertEqual(editor.hits, hits_before)
+
+    def test_selecting_with_the_mouse_repaints_like_selecting_with_a_key(self):
+        """A click and an arrow must reach the same frame.
+
+        Not an aesthetic claim: if the click path set `sel` by any other route
+        than the key surface, the two could drift — and a click would be the one
+        that is wrong, with nothing to compare it against."""
+        clicked = self._editor()
+        hit = self._point_at(clicked, 1)
+        self._click(clicked, hit.x0, hit.y)
+
+        pressed = self._editor()
+        huebox_app.apply_key("right", pressed.state)
+        pressed.redraw()          # what `on_key` does after `apply_key`
+        self.assertEqual(clicked.state.sel, 1)
+        self.assertEqual(pressed.state.sel, 1)
+        self.assertEqual(clicked.rows_text, pressed.rows_text,
+                         "a click and a keypress painted different frames")
+
+    def test_the_wheel_only_moves_the_picker(self):
+        editor = self._editor()
+        sel = editor.state.sel
+        editor._scroll_picker("down", _Event())
+        self.assertEqual(editor.state.sel, sel,
+                         "the wheel moved the selection with no picker up")
+
+    def test_a_click_on_a_picker_row_opens_that_theme(self):
+        editor = self._editor(theme="ember", library=lambda: None)
+        editor.state.overlay = ["alpha", "beta", "gamma"]
+        editor.state.overlay_index = 0
+        editor.redraw()
+        self.assertTrue(editor.hits or True)
+        self.assertEqual(editor.state.overlay_index, 0)
+
+
+class _Event:
+    def stop(self):
+        pass

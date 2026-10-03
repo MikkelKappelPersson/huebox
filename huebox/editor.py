@@ -20,6 +20,8 @@ import, so a switch can re-target a save mid-session without a cycle.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import shutil
 import sys
@@ -244,7 +246,8 @@ def _theme_row(name: str, selected: bool, current: bool, slots: dict) -> str:
     return f"  {mark}{flag} {painted}"
 
 
-def theme_lines(names, index, current, cols, rows, status="", slots=None):
+def theme_lines(names, index, current, cols, rows, status="", slots=None,
+                hits=None):
     """The theme picker as a frame of lines (§13.7).
 
     Pure, like the editor frame: rows are the library's names, the session's
@@ -275,6 +278,11 @@ def theme_lines(names, index, current, cols, rows, status="", slots=None):
         start = max(0, min(index - room + 1, len(names) - room))
         for row in range(start, min(len(names), start + room)):
             name = names[row]
+            # the clickable cell, announced by the row that draws it — a second
+            # description of this window would drift from it the moment either
+            # changed, and a click would land on the wrong theme
+            if hits is not None:
+                hits.append(Hit(len(out), 2, cols - 1, row))
             out.append(_theme_row(name, row == index, name == current, slots))
         if start or len(names) > start + room:
             out.append("  " + chrome(f"{start + 1}-"
@@ -287,9 +295,63 @@ def theme_lines(names, index, current, cols, rows, status="", slots=None):
     return [clip(line, cols) for line in out[:rows]]
 
 
+class Hit(NamedTuple):
+    """One clickable cell: the frame row `y`, columns `x0`..`x1`, and the slot.
+
+    Column-inclusive at both ends, because a cell that answered to every column
+    but its last would leave a sliver no one can hit.
+    """
+    y: int
+    x0: int
+    x1: int
+    slot: int
+
+
+def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
+               sel=0, undo=(), status="", mult=1, head=None,
+               overlay=None) -> list:
+    """Every colour cell a frame `cols` wide draws, as `Hit`s.
+
+    The rows are the frame's own: `draw_editor` announces each cell as it paints
+    it (`hits=`), so a click and a swatch cannot disagree about where one is —
+    which is the whole risk of having a hit map at all.
+    """
+    found: list = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        draw_editor(fmt, path, slots or {}, sel, list(undo), status, mult,
+                    head=head, overlay=overlay, hits=found,
+                    size=(cols, rows or 24))
+    return found
+
+
+def theme_hits(names, index, current, cols, rows, slots=None, status="") -> list:
+    """Every picker row, as `Hit`s whose `slot` is the row in the library."""
+    found: list = []
+    theme_lines(names, index, current, cols, rows, status=status,
+                slots=slots, hits=found)
+    return found
+
+
+def slot_at(hits, x: int, y: int):
+    """The slot a click at (`x`, `y`) lands on, or None for the chrome."""
+    for hit in hits:
+        if hit.y == y and hit.x0 <= x <= hit.x1:
+            return hit.slot
+    return None
+
+
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                overlay=None, grid=None):
-    cols, rows = term_size()
+                overlay=None, grid=None, hits=None, size=None):
+    """The frame, written to stdout.
+
+    `size` overrides the terminal query. Textual knows the size it was given —
+    the pty's — and passing it is both cheaper and more honest than asking the
+    terminal a second time, and it is what lets `frame_hits(cols)` describe the
+    frame at `cols` rather than at whatever the terminal happens to be. Without
+    it the hit map and the frame disagreed at every width but one, which the
+    cross-check in `test_editor` caught.
+    """
+    cols, rows = size or term_size()
     sys.stdout.write("\033[H\033[2J")
     if cols < MIN_COLS or rows < MIN_ROWS:
         # No layout fits: say so instead of drawing a garbled frame.
@@ -332,9 +394,18 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     body.append("  " + title("palette", slots))
     for start in range(0, len(PALETTE), per_row):
+        # `len(body)` is this row's index in the frame: `out` is `body` plus
+        # whatever follows, so the index holds. Announcing the cell here rather
+        # than recomputing it elsewhere is what keeps a click and a swatch from
+        # disagreeing about where one is.
+        y = len(body)
+        cells = [i for i in range(start, start + per_row) if i < len(PALETTE)]
         body.append(("  " + "".join(
-            swatch(i, sel == i) for i in range(start, start + per_row)
-            if i < len(PALETTE))).rstrip())
+            swatch(i, sel == i) for i in cells)).rstrip())
+        if hits is not None:
+            for column, index in enumerate(cells):
+                x0 = 2 + column * cellw
+                hits.append(Hit(y, x0, x0 + cellw - 1, index))
     legend = chrome(PALETTE_LEGEND, CHROME_MUTED, slots)
     body.append(legend)
     body.append("")
@@ -342,6 +413,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     per = grid.named_cols
     body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
+        y = len(body)
         cells = []
         for key in NAMED[start:start + per]:
             index = SLOTS.index(key)
@@ -351,6 +423,11 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             cells.append(f"{bg(value)}{fg(readable_fg(value))}{style}"
                          f" {mark}{key:<21} {value} {RESET}")
         body.append(("  " + "  ".join(cells)).rstrip())
+        if hits is not None:
+            for column in range(len(cells)):
+                x0 = 2 + column * (NAMED_COL_W + 2)
+                hits.append(Hit(y, x0, x0 + NAMED_COL_W - 1,
+                                len(PALETTE) + start + column))
     body.append("")
 
     key = SLOTS[sel]
@@ -401,7 +478,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # the legend is a courtesy (the grid is numbered), so the blanks
         # are the decoration proper — nearest the widgets first, leaving
         # the air at the top of the frame
-        del body[decoration[-1]]
+        dropped = decoration[-1]
+        del body[dropped]
+        # A cell recorded above the deleted row keeps its index; one below it
+        # moves up by one. Without this a short frame's hit map points a row
+        # past where its cells were painted, and clicking selects whatever is
+        # actually there — a silent wrong answer, which is what the cross-check
+        # in `test_editor` exists to catch.
+        if hits is not None:
+            for index, hit in enumerate(hits):
+                if hit.y > dropped:
+                    hits[index] = hit._replace(y=hit.y - 1)
         spare += 1
 
     extra = []
@@ -460,6 +547,11 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     out = body + extra + tail
     if len(out) > rows:
         out = out[:rows - len(tail)] + tail
+    if hits is not None:
+        # The trim happened after the cells announced themselves, so a short
+        # frame still claims rows it never painted — and a click there would
+        # select something the user cannot see. Off they go.
+        del hits[len(out):]
     # CRLF: raw mode disables ONLCR, so a bare \n would not reset the column
     # §8.2 — every row stands on the buffer's own background, so the frame
     # *is* the theme: the floor, the air between widgets and the column after
