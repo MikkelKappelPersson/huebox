@@ -40,11 +40,13 @@ import contextlib
 import io
 import json
 import os
+from functools import partial
 
 from rich.console import Console
 from rich.segment import Segment
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.strip import Strip
 from textual.widget import Widget
 
@@ -55,6 +57,19 @@ from .editor import (MULT_STEPS, EditorState, apply_key, backdrop,
 from .render import MIN_COLS, MIN_ROWS, visible
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
+#: The blocks a click and an arrow both act on — the two grids. They are one
+#: logical control split across two rows of the frame, which is why focus moves
+#: between them rather than sitting in one.
+GRID_BLOCKS = ("palette", "interface")
+
+#: The keys the grid binds for itself. `Editor.on_key` steps over them when a
+#: grid has focus, because Textual does not guarantee the two run in one order:
+#: the App's key handler and the focused widget's binding both see every key,
+#: and with both acting on an arrow the selection moved *two* slots for one
+#: press. One handler per key is the invariant, and
+#: `test_an_arrow_moves_one_slot_when_the_grid_has_focus` is the guard.
+GRID_KEYS = ("left", "right", "up", "down")
+
 KEYS = {
     "escape": "esc",
     "ctrl+c": "\x03",
@@ -118,12 +133,20 @@ def load_slots() -> dict:
     return {name: given.get(name, MISSING) for name in SLOTS}
 
 
-def frame_rows(fmt, path, state, cols, head=None, hits=None, regions=None):
+def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
+               regions=None):
     """The frame as a list of rows, captured from `draw_editor`.
 
     Returns the rows without the trailing-newline decision, which belongs to
     whoever writes them: `draw_editor` keeps that (and withholds the newline
     when the frame fills the screen, §4.8), Textual positions cells itself.
+
+    `rows` is passed to `draw_editor` as its `size`, and that is not tidiness.
+    The frame's layout is a function of both dimensions — the row count decides
+    which widgets get rows at all — and the compositor's size is the only one
+    that is right. Asking the terminal as well means two numbers for the same
+    quantity, and when they disagree the frame is laid out for a window that
+    is not on screen: a 24-row frame in a 12-row terminal, scrollbar and all.
 
     `hits` is filled with the clickable cells the frame painted, and `regions`
     with the frame's blocks as `(name, first row, rows)`. Both are asked of the
@@ -135,7 +158,7 @@ def frame_rows(fmt, path, state, cols, head=None, hits=None, regions=None):
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
                     state.status, state.mult, head=head, hits=hits,
-                    regions=regions)
+                    regions=regions, size=(cols, rows))
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -164,10 +187,6 @@ class Frame(Widget):
         self.rows_text = rows_text
         self._cache = [Text.from_ansi(row) for row in rows_text]
 
-    def on_mount(self) -> None:
-        self.can_focus = True
-        self.focus()
-
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         if width <= 0:
@@ -181,6 +200,48 @@ class Frame(Widget):
             # column shows the terminal's background
             segments.append(Segment(" " * (width - filled)))
         return Strip(segments, width)
+
+
+class Swatches(Frame):
+    """The palette and interface grids: focusable, and holding their own keys.
+
+    Phase 5's first extraction gave every block its own widget but left the keys
+    on the app, which meant the grid was a picture of a control rather than a
+    control. Here it is the control: the arrows are *its* bindings, so they are
+    routed to it by Textual and never reach the app's `on_key` — one key
+    surface, asked in one place, instead of the app deciding on every keypress
+    which of its widgets wanted it.
+
+    The grid's navigation is not reimplemented. `apply_key` still does it, for
+    three reasons worth keeping: `move_slot` is §4.3's contract and is tested
+    there; the arrow keys, the mouse and the click handler must agree about
+    where `sel` moves to; and a session driven headlessly (`tests/session.py`)
+    has no compositor at all, so a binding here would be a second, untested
+    implementation of the same walk.
+
+    Focus follows the selection rather than sitting still. The two grids are one
+    logical widget split across two rows of the frame, so which of them holds the
+    selected cell decides which one has focus — and when the arrows walk out of
+    the palette into the interface, focus moves with them.
+    """
+
+    can_focus = True
+
+    BINDINGS = [Binding(key, "slot('%s')" % key, key, show=False)
+                for key in GRID_KEYS]
+
+    def action_slot(self, direction: str) -> None:
+        app = self.app
+        apply_key(direction, app.state)
+        app.redraw()
+        app.focus_grid(app.state.sel)
+
+    def on_click(self, event) -> None:
+        # The app handles every click itself, from the frame's announced cells —
+        # one place answers "what did you point at", rather than each widget
+        # working out whether the point was its own business.
+        event.stop()
+        self.app.on_click(event)
 
 
 class Picker(Frame):
@@ -205,7 +266,13 @@ class Picker(Frame):
     is a scrollbar: seven of Textual's 168 design tokens exist only for it, and
     I2's whole job is to reject exactly that. The wheel moves the selection,
     which moves the window, which is what a user pressing a wheel key means.
+
+    Focusable, because §13.7 says the picker owns the surface while it is up:
+    focus left on a grid underneath would let an arrow move the *colour*
+    selection behind a list the user is reading.
     """
+
+    can_focus = True
 
 
 class Editor(App):
@@ -334,7 +401,7 @@ class Editor(App):
                                                  hits=self.hits)]
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
-                                   width, head=self.head_for(state),
+                                   width, height, head=self.head_for(state),
                                    hits=self.hits, regions=self.regions)
         self.rows_text = rows_text
 
@@ -345,37 +412,104 @@ class Editor(App):
         # to exactly the frame's height and not one row more: a stack taller than
         # the screen would give the screen a scrollbar, which is seven of
         # Textual's 168 design tokens arriving in the frame's first paint.
-        if picker is not None:
-            blocks = [Picker(rows_text, width)]
-        elif self.regions:
-            blocks = [Frame(rows_text[first:first + count], width)
-                      for _name, first, count in self.regions]
-        else:
-            blocks = [Frame(rows_text, width)]
-        for block in blocks:
+        named = ([("picker", 0, len(rows_text))] if picker is not None
+                 else list(self.regions)
+                 or [("frame", 0, len(rows_text))])
+        for name, first, count in named:
+            rows_here = rows_text[first:first + count]
+            kind = Picker if name == "picker" else (
+                Swatches if name in GRID_BLOCKS else Frame)
+            # `name` is a constructor argument, not a settable property — which
+            # is Textual saying the name is part of a widget's identity.
+            block = kind(rows_here, width, name=name)
             block.styles.width = width
-            block.styles.height = len(block.rows_text)
+            block.styles.height = len(rows_here)
             block.styles.padding = 0
             block.styles.margin = 0
             self.mount(block)
-        _debug("redraw %dx%d: %d rows, sel=%d, widest=%d"
-               % (width, height, len(rows_text), state.sel,
+        # `mount` is a request, not a fact: the widgets do not exist yet, so
+        # focus has to wait for the next refresh. Done inline it would query an
+        # empty tree and quietly leave the focus wherever it was — which, with
+        # seven blocks each asking for it on mount, was the last block in the
+        # frame. Every block used to steal focus in `on_mount`; now only the two
+        # grids can take it, and only the one holding the selection does.
+        settle = partial(self.place_focus, picker is not None, state.sel)
+        if self.is_running:
+            self.call_after_refresh(settle)
+        else:
+            settle()
+        _debug("redraw %dx%d: %d rows, %d blocks, sel=%d, widest=%d"
+               % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
+
+    def place_focus(self, picker_up: bool, sel: int) -> None:
+        """Hand focus to whichever block owns it, once the tree exists.
+
+        §13.7 — the picker owns the surface while it is up, so it takes focus.
+        Focus left on a grid underneath would let an arrow move the *colour*
+        selection behind a list the user is reading, which is the one thing
+        §13.7 says cannot happen.
+        """
+        # `focused` and `set_focus` both reach for a screen, which an app that
+        # has never run does not have. A frame drawn outside Textual — the
+        # headless suites, and `tests/session.py` — has no focus to place.
+        if not self.is_running:
+            return
+        if picker_up:
+            for block in self.query(Picker):
+                block.focus()
+                return
+        self.focus_grid(sel)
+
+    def focus_grid(self, sel: int) -> None:
+        """Give focus to the grid block that holds the selected cell.
+
+        `sel` is a slot, not a row, so the row it is drawn on is looked up in
+        the frame's own hit map rather than computed from the grid — the same
+        rule as the click, and for the same reason.
+
+        A short frame can leave the selected slot in no block at all: 40x12 shows
+        twelve of the twenty-two slots, and selecting the twenty-second puts the
+        selection below the fold. Then *focus is dropped*, rather than left
+        where it was — because `on_key` steps over the arrows while a grid holds
+        focus, and a grid still holding focus with the selection off it would
+        leave the arrows moving a selection the user cannot see, or not moving
+        at all. Dropping it hands the keys back to the app.
+        """
+        target = next((hit for hit in self.hits if hit.slot == sel), None)
+        for name, first, count in self.regions:
+            if name in GRID_BLOCKS and target is not None \
+                    and first <= target.y < first + count:
+                for block in self.query(Swatches):
+                    if block.name == name:
+                        block.focus()
+                        return
+        if isinstance(self.focused, Swatches):
+            self.set_focus(None)
 
     def on_mount(self) -> None:
         self.title = "huebox"
         self.redraw()
 
     def on_resize(self, event) -> None:
+        # The frame is laid out from `self.size`, and during `on_resize` that is
+        # still the *old* size: Textual applies the new one in the layout pass
+        # that follows. Redrawing here drew the frame for the window the user
+        # just left — a 24-row frame in a 12-row terminal, one resize behind,
+        # forever. `call_after_refresh` is the first moment both agree.
         _debug("resize to %s" % (event.size,))
         if self.state is not None:
-            self.redraw()
+            self.call_after_refresh(self.redraw)
 
     # -- input -------------------------------------------------------------
 
     def on_key(self, event) -> None:
-        # Every key, unhandled by Textual, straight to the one key surface.
+        # Every key, unhandled by Textual, straight to the one key surface —
+        # except the four the grid binds for itself while it has focus, which
+        # are already on their way to `Swatches.action_slot`.
         event.stop()
+        if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
+            return
         apply_key(translate(event.key), self.state)
         if self.state.quit:
             self.exit()

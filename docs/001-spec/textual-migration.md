@@ -433,8 +433,41 @@ Three extractions have landed:
 | Extraction | Commit | What changed |
 | --- | --- | --- |
 | The picker | `9ecd8a9` | `draw_editor`'s `overlay=` mode is gone; `draw_editor` has one caller shape again |
-| The frame's blocks | this one | Nine `Frame`s stacked, from a map `draw_editor` reports |
-| The palette/interface grids | not yet | |
+| The frame's blocks | `d70c2af` | Nine `Frame`s stacked, from a map `draw_editor` reports |
+| The palette/interface grids | this one | `Swatches`: focusable, holding the arrows as its own bindings |
+
+**Focus is where decomposition starts paying, and it is not free.** Giving the
+grids their own bindings immediately exposed a fact about Textual that a unit
+test cannot reach: the app's `on_key` and the focused widget's binding *both*
+see every key, and with both acting on an arrow the selection moved two slots
+per press. Both handlers were "correct"; nothing had promised an order. The fix
+is `GRID_KEYS` — an explicit list the app steps over — and the guard is
+`test_an_arrow_moves_one_slot_when_the_grid_has_focus`, which can only be a
+pilot test, because the whole question is what happens between the terminal and
+`apply_key`. `run_test` costs 0.13s, which is affordable; a real terminal would
+not have been.
+
+Two more things only a running app could find:
+
+- **Focus must be dropped, not left.** `on_key` steps over the arrows while a
+  grid holds focus. A short frame puts the selected slot below the fold — 40x12
+  shows twelve of twenty-two — so with focus left where it was, the arrows
+  either moved a selection the user cannot see or did nothing at all.
+- **The picker takes focus.** Focus left on a grid underneath it let an arrow
+  move the *colour* selection behind a list the user is reading, which is the
+  one thing §13.7 says cannot happen.
+
+**And a bug I1 was structurally unable to see.** `redraw` read the frame's
+height from the compositor and `draw_editor` read it from the terminal: one
+number, two sources. The harness sets a pty's window size *before* launching,
+so the two always agreed there and no golden could disagree. On a resize they
+did not — and `on_resize` fires *before* Textual applies the new size, so the
+frame was drawn for the window the user had just left, one resize behind,
+forever. Three separate mistakes stacked in one line: two sources for one
+number, no `size=` passed down, and a redraw in the wrong moment of the
+refresh. `TheFrameIsSizedByTheCompositor` drives real resizes through
+`pilot.resize_terminal` — a posted `Resize` event would have passed against the
+very bug it is for, since it changes nothing the compositor agrees with.
 
 **The map is the load-bearing part, and it is easy to get wrong.** A block's
 first row is not knowable while the frame is being built: §15 spends decoration

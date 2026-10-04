@@ -25,7 +25,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode | §15 |
 | `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session`; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
-| `huebox/app.py` | the Textual shell: the frame as one widget over `render`'s rows, keys, resize, click and wheel | migration §5.5 |
+| `huebox/app.py` | the Textual shell: the frame as one widget per block over `render`'s rows, keys, focus, resize, click and wheel | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
@@ -103,6 +103,18 @@ get the line that is actually about them.
   `from __future__ import annotations` in every file).
 - **Errors to stderr, prefixed `huebox: `, exit 1.** No tracebacks for user
   errors: missing config, bad theme name, no colours found.
+- **One handler per key.** A key the focused widget binds is the widget's
+  business and the app's `on_key` steps over it. Textual does not promise a
+  binding consumes a key before the app's own handler sees it, and when both
+  acted on an arrow the selection moved two slots per press.
+- **Focus is placed deliberately, after the tree exists.** `mount` is a
+  request, so focusing inline queries an empty tree; and `self.size` during
+  `on_resize` is still the *old* size, so a frame drawn there is laid out for
+  the window the user just left. Both want `call_after_refresh`.
+- **One size, one number.** The frame is laid out from the compositor's size,
+  passed down as `draw_editor`'s `size=`. Asking the terminal as well gives two
+  numbers for one quantity, and the harness cannot see the disagreement: it sets
+  the pty size before launching, so they only diverge on a resize.
 - **A click is a keypress.** `on_click` resolves to a slot and then goes
   through `apply_key`; it must never touch a colour or a frame. The clickable
   cells are recorded by the rows that draw them (`draw_editor` / `theme_lines`

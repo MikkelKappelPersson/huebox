@@ -170,7 +170,7 @@ class TestFrameRowsMatchTheWriter(unittest.TestCase):
             written.pop()
 
         self.assertEqual(
-            huebox_app.frame_rows("ghostty", "", state, 80), written)
+            huebox_app.frame_rows("ghostty", "", state, 80, 24), written)
 
 
 if __name__ == "__main__":
@@ -469,3 +469,198 @@ class TheFrameIsWidgets(unittest.TestCase):
         painted = [row for block in mounted for row in block.rows_text]
         self.assertEqual(painted, editor.rows_text,
                          "the blocks do not reassemble the frame in order")
+
+
+@needs_app
+class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
+    """Phase 5: the grid is a control, and only a running app can prove it.
+
+    Everything here is about Textual's *dispatch* — which node sees a key, in
+    what order, and how many times. None of it can be reached by calling
+    `apply_key` in a unit test, because the whole question is what happens
+    between the terminal and `apply_key`. `run_test` costs about 0.13s, which
+    is affordable; a real terminal would not have been.
+
+    The bug these were written for: the App's `on_key` and the grid's binding
+    both act on an arrow, and the selection moved two slots per press. Both
+    handlers were "correct"; Textual simply does not promise that a binding
+    consumes a key before the app's own handler sees it.
+    """
+
+    async def _app(self, cols=100, rows=30):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            app = huebox_app.Editor()
+            return app
+
+    async def _press(self, app, pilot, *keys):
+        """A key the way a terminal sends it.
+
+        `pilot.press` goes through the driver, and the headless driver's input
+        path does not deliver — so the key is posted to the app, which is the
+        same queue a real key arrives on.
+        """
+        from textual import events
+
+        for key in keys:
+            event = events.Key(key, None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+
+    async def test_the_grid_holds_focus(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertIsInstance(app.focused, huebox_app.Swatches,
+                                  "the grid is not focused, so no key is routed "
+                                  "to it by Textual")
+            self.assertEqual(app.focused.name, "palette")
+
+    async def test_an_arrow_moves_one_slot_when_the_grid_has_focus(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertEqual(app.state.sel, 0)
+            await self._press(app, pilot, "right")
+            self.assertEqual(app.state.sel, 1,
+                             "one press moved the selection more than one "
+                             "slot: two handlers acted on one key")
+
+    async def test_an_arrow_still_moves_when_no_grid_is_focused(self):
+        """The App's own handler is the fallback, and it must still work.
+
+        40x12 shows twelve of the twenty-two slots, in a grid one column wide.
+        Selecting `selection-foreground` puts the selection below the fold,
+        where no grid block can hold focus — and the keys have to keep working,
+        or the frame would trap the user on the slots it can show.
+
+        `up`, not `left`: at one column wide the last slot is also the leftmost
+        and the rightmost, so `left` and `right` correctly do nothing there
+        (§4.3 — a key that runs off the end of the row stays put), and a test
+        asserting otherwise would be asserting a bug.
+        """
+        app = await self._app()
+        async with app.run_test(size=(40, 12)) as pilot:
+            await pilot.pause()
+            app.state.sel = 21              # below the fold at this size
+            app.focus_grid(21)
+            await pilot.pause()
+            self.assertNotIsInstance(app.focused, huebox_app.Swatches,
+                                     "a grid kept focus with the selection off "
+                                     "it, so on_key would skip the arrows")
+            await self._press(app, pilot, "up")
+            self.assertEqual(app.state.sel, 20,
+                             "the keys stopped working once the selection "
+                             "was off the grid")
+
+    async def test_focus_follows_the_selection_across_the_two_grids(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertEqual(app.focused.name, "palette")
+            # §4.3 — right stays in the row, so seventeen rights is not
+            # seventeen slots. `down` is the key that crosses blocks.
+            await self._press(app, pilot, *["down"] * 2)
+            self.assertEqual(app.state.sel, len(harness.FIXTURES["distinct"]
+                                                ["slots"]) - 6)
+            self.assertEqual(app.focused.name, "interface",
+                             "focus did not follow the selection out of the "
+                             "palette")
+
+    async def test_focus_moves_back_into_the_palette(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await self._press(app, pilot, *["down"] * 2)
+            self.assertEqual(app.focused.name, "interface")
+            await self._press(app, pilot, *["up"] * 2)
+            self.assertEqual(app.state.sel, 0)
+            self.assertEqual(app.focused.name, "palette")
+
+    async def test_the_picker_has_no_grid_to_focus(self):
+        """§13.7 — the picker takes the surface, and it has no arrows.
+
+        If focus stayed on a grid underneath it, an arrow would move the
+        *colour* selection behind a list the user is reading, which is the one
+        thing §13.7 says cannot happen."""
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ,
+                             {"HUEBOX_SLOTS": path, "HUEBOX_PICKER": "1",
+                              "HUEBOX_PICKER_NAMES": "ash,ember",
+                              "HUEBOX_PICKER_INDEX": "1"}):
+            app = huebox_app.Editor()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertIsInstance(app.focused, huebox_app.Picker)
+            before = app.state.sel
+            await self._press(app, pilot, "right")
+            self.assertEqual(app.state.sel, before,
+                             "an arrow moved the colour selection behind the "
+                             "picker")
+            self.assertEqual(app.state.overlay_index, 1,
+                             "the arrow did not move the picker's own row")
+
+
+@needs_app
+class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
+    """The frame's size is the compositor's, and not also the terminal's.
+
+    This is a bug I1 could not see, which is the whole reason it is worth a
+    test. The harness sets a pty's window size *before* launching, so the
+    terminal and the compositor always agreed there and the two numbers never
+    diverged. Resize afterwards — which is every resize, and is what a user
+    dragging a window edge does — and `draw_editor` was still asking the
+    terminal for a frame the compositor had already sized: a 24-row frame in a
+    12-row terminal, with a scrollbar the theme has no colour for.
+
+    Two sources of truth for one number, and §15's whole row budget decided by
+    whichever one was asked.
+
+    `pilot.resize_terminal` rather than a posted `Resize` event, because a
+    posted event says nothing about the size the compositor actually has — the
+    frame would then be measured against a number nothing else agrees with,
+    which is how this test would have passed against the very bug it is for.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    async def test_a_resize_lays_the_frame_out_at_the_new_size(self):
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for cols, rows in ((40, 12), (100, 30), (60, 16)):
+                with self.subTest(size=f"{cols}x{rows}"):
+                    await pilot.resize_terminal(cols, rows)
+                    await pilot.pause()
+                    self.assertEqual((app.size.width, app.size.height),
+                                     (cols, rows),
+                                     "the compositor did not take the size")
+                    self.assertLessEqual(len(app.rows_text), rows,
+                                         "the frame is taller than the window "
+                                         "it is drawn in")
+
+    async def test_the_frame_and_the_regions_agree_at_every_size(self):
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for cols, rows in ((40, 12), (60, 16), (100, 30)):
+                with self.subTest(size=f"{cols}x{rows}"):
+                    await pilot.resize_terminal(cols, rows)
+                    await pilot.pause()
+                    # the last block ends exactly where the frame does — a
+                    # frame laid out for the wrong height would leave the
+                    # blocks short or long by the difference
+                    self.assertTrue(app.regions)
+                    last = app.regions[-1]
+                    self.assertEqual(last[1] + last[2], len(app.rows_text))
+                    self.assertEqual(sum(count for _, _, count in app.regions),
+                                     len(app.rows_text))
