@@ -329,3 +329,131 @@ class TestHarnessHasTeeth(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+@needs_pyte
+class TestPickerGoldenPresence(unittest.TestCase):
+    """The picker's goldens, on the same terms as the frame's (§4.4).
+
+    These were recorded from the direct-mode editor before the picker became a
+    widget, which is the only order in which "the picker is unchanged" means
+    anything — a golden recorded after the change would agree with the change.
+    """
+
+    def test_every_picker_scenario_has_a_golden(self):
+        missing = [(fixture, cols, rows, scene)
+                   for cols, rows in harness.SIZES
+                   for fixture in sorted(harness.FIXTURES)
+                   for scene in sorted(harness.PICKERS)
+                   if harness.load_picker(fixture, cols, rows, scene) is None]
+        self.assertEqual(missing, [], "missing picker goldens — run: "
+                                       "python3 tests/harness.py --record-picker")
+
+    def test_a_short_library_is_not_padded_to_the_screen(self):
+        """The picker is `len(overlay) + 3` rows, not `rows` rows.
+
+        Worth pinning because it is the case a `ScrollView` gets wrong: a
+        scrolling container fills its viewport, so the natural widget version of
+        this change paints sixteen rows of background where the golden has eight
+        — visually identical, and sixteen cells that I1 would never forgive."""
+        golden = harness.load_picker("distinct", 80, 24, "short")
+        self.assertLess(golden["frame_rows"], 24)
+        self.assertGreater(golden["frame_rows"], 0)
+
+    def test_a_long_library_scrolls_and_the_golden_says_so(self):
+        """The `long` scenario is what phase 5's scrolling widget has to match.
+
+        Recorded with the selection at `t25` of 34, which puts the window
+        partway down the list, so a golden pinned to the top — the shape a
+        widget that never scrolled would produce — cannot agree with it.
+        Without this the scenario would still pass against a picker that
+        ignored `index` entirely."""
+        golden = harness.load_picker("distinct", 80, 24, "long")
+        names = harness.PICKERS["long"]["names"]
+        text = ["".join(cell[0] for cell in row) for row in golden["cells"]]
+        shown = [name for name in names
+                 if any((" %s " % name) in line for line in text)]
+        self.assertLess(len(shown), len(names),
+                        "the whole library fits — the scenario cannot tell a "
+                        "scroll from a no-scroll")
+        self.assertNotIn(names[0], shown,
+                         "the window starts at the top of the list")
+        self.assertIn(names[25], shown,
+                      "the selected row is not on screen: a picker that cannot "
+                      "scroll to its own selection is the defect this pins")
+
+    def test_the_header_survives_a_library_that_fills_the_screen(self):
+        """The picker's trailing-newline defect, as a regression guard.
+
+        Recorded from a golden that had already lost the header: at 60x16 with
+        34 themes the frame filled the screen, the trailing CRLF scrolled the
+        terminal, and the top row — the picker saying what it is — fell off. A
+        blank row took its place, so the library appeared to begin one row lower
+        than it did and the header was simply gone. Same defect as the editor
+        frame's, fixed in `draw_editor`'s overlay branch."""
+        golden = harness.load_picker("distinct", 60, 16, "long")
+        self.assertEqual(golden["frame_rows"], 16, "the frame must fill it")
+        top = "".join(cell[0] for cell in golden["cells"][0])
+        self.assertIn("themes", top, "the picker's header scrolled off")
+
+
+@needs_pyte
+@needs_candidate
+class TestPickerEquivalence(unittest.TestCase):
+    """I1 for the picker: the shell's picker frame is the direct-mode one.
+
+    Same claim as `TestEquivalence`, for the second frame. Phase 5 replaces
+    `theme_lines`' own windowing with a real scrolling widget, and this is the
+    test that says whether that replacement is invisible.
+    """
+
+    def _compare(self, fixture, cols, rows, scene):
+        golden = harness.load_picker(fixture, cols, rows, scene)
+        self.assertIsNotNone(golden, "no picker golden recorded")
+        raw = harness.candidate_picker_bytes(fixture, cols, rows, scene)
+        actual = harness.parse(raw, cols, rows, golden["frame_rows"])
+        self.assertEqual(actual, golden["cells"],
+                         "picker changed:\n" + _report(
+                             harness.diff(golden["cells"], actual, cols)))
+
+    def test_every_scenario_matches_at_every_size(self):
+        tiers = ([("distinct", cols, rows, scene)
+                  for cols, rows in harness.SIZES
+                  for scene in sorted(harness.PICKERS)]
+                 + [(fixture, cols, rows, "long")
+                    for fixture in ("dark", "missing")
+                    for cols, rows in ((100, 30), (80, 24))])
+        for fixture, cols, rows, scene in tiers:
+            with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
+                              picker=scene):
+                self._compare(fixture, cols, rows, scene)
+
+    def test_the_candidate_actually_draws_the_picker(self):
+        """The negative guard on the whole class.
+
+        If the app ignored `HUEBOX_PICKER` it would paint the *editor* frame
+        instead, and `test_every_scenario_matches_at_every_size` would fail —
+        but with a diff nobody would read. This says in one assertion what the
+        capture is: a frame whose top row is the picker's header, with a row
+        per visible theme. Without it, a broken launch and a broken picker look
+        the same in the failure output."""
+        golden = harness.load_picker("distinct", 80, 24, "long")
+        top = "".join(cell[0] for cell in golden["cells"][0])
+        self.assertIn("themes", top)
+        raw = harness.candidate_picker_bytes("distinct", 80, 24, "long")
+        actual = harness.parse(raw, 80, 24, golden["frame_rows"])
+        self.assertEqual("".join(cell[0] for cell in actual[0]), top)
+        names = harness.PICKERS["long"]["names"]
+        shown = sum(1 for name in names
+                    if any(name in "".join(cell[0] for cell in row)
+                           for row in actual))
+        self.assertGreaterEqual(shown, 3,
+                                "the candidate frame does not show themes")
+
+
+def _report(differences):
+    lines = []
+    for y, x, was, now in differences[:12]:
+        lines.append("  row %-3d col %-3d  %s -> %s" % (y, x, was, now))
+    if len(differences) > 12:
+        lines.append("  ... and %d more" % (len(differences) - 12))
+    return "\n".join(lines)

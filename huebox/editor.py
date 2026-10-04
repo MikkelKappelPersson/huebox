@@ -366,10 +366,16 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # editor's minimum size, so the too-small check above already said
         # what to do when there is no room for either.
         names, index, current = overlay
+        lines = theme_lines(names, index, current, cols, rows, status, slots)
+        # §8.2, and the same rule the editor frame follows below: the trailing
+        # CRLF is withheld when the rows fill the screen. Written on the bottom
+        # row it scrolls the terminal, and the frame loses its top row — here
+        # the picker's own header, at 60x16 with a library long enough to fill
+        # it. A blank row replaces it, so the library appeared to start one
+        # row lower than it did.
         sys.stdout.write("\r\n".join(
-            backdrop(line, slots, cols)
-            for line in theme_lines(names, index, current, cols, rows,
-                                    status, slots)) + "\r\n")
+            backdrop(line, slots, cols) for line in lines)
+            + ("\r\n" if len(lines) < rows else ""))
         sys.stdout.flush()
         return
     body = []

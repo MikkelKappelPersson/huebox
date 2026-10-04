@@ -122,3 +122,71 @@ class TestClosure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@needs_pyte
+@needs_candidate
+class TestPickerClosure(unittest.TestCase):
+    """I2 for the picker.
+
+    Phase 5 turns the picker into a scrolling widget, and a scrollbar is the
+    single most likely place for a new colour source in this whole codebase:
+    seven of Textual's 168 design tokens exist only for it. So the picker's
+    closure is pinned before the widget exists, not after.
+
+    The `*` and `>` rows carry no colour of their own — the picker's colours are
+    the theme's name in the foreground — so the closure is small and a scrollbar
+    thumb would stand out in it immediately.
+    """
+
+    def _assert_closed(self, raw, cols, rows, height, allowed, label):
+        found = set(harness.closure(raw, cols, rows, height))
+        self.assertEqual(sorted(found - allowed), [],
+                         "%s: colours the picker never painted" % label)
+
+    def test_the_reference_picker_stays_inside_its_own_closure(self):
+        for cols, rows in SIZES:
+            for fixture in sorted(harness.FIXTURES):
+                for scene in sorted(harness.PICKERS):
+                    golden = harness.load_picker(fixture, cols, rows, scene)
+                    raw, _ = harness.capture_reference_picker(
+                        fixture, cols, rows, scene)
+                    with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
+                                      picker=scene):
+                        self._assert_closed(raw, cols, rows,
+                                            golden["frame_rows"],
+                                            set(golden["closure"]), "reference")
+
+    def test_the_candidate_picker_stays_inside_the_recorded_closure(self):
+        for cols, rows in SIZES:
+            for fixture in sorted(harness.FIXTURES):
+                for scene in sorted(harness.PICKERS):
+                    golden = harness.load_picker(fixture, cols, rows, scene)
+                    raw = harness.candidate_picker_bytes(fixture, cols, rows,
+                                                        scene)
+                    with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
+                                      picker=scene):
+                        self._assert_closed(raw, cols, rows,
+                                            golden["frame_rows"],
+                                            set(golden["closure"]), "candidate")
+
+    def test_the_picker_has_no_colour_a_scrollbar_could_join(self):
+        """The closure today is the theme's own foreground and background.
+
+        Stated as a fact about today rather than a rule to keep — a future
+        scrollbar that is genuinely coloured from the theme is fine, and I2 is
+        what would have to accept it. What this rules out is discovering the
+        extra colour *after* the widget lands, which is what §6.2's token list
+        exists to prevent.
+        """
+        golden = harness.load_picker("distinct", 100, 30, "long")
+        recorded = set(golden["closure"])
+        # slots carry their `#`; the closure is read out of a terminal, which
+        # does not. Compared raw, this is the emptiest assertion in the file.
+        slots = {value.lstrip("#")
+                 for value in harness.FIXTURES["distinct"]["slots"].values()}
+        self.assertTrue(recorded <= slots,
+                        "the picker paints a colour no slot holds: %s"
+                        % sorted(recorded - slots))
+        self.assertGreaterEqual(len(recorded), 2,
+                                "an empty closure would pass the check above")

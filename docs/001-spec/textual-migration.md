@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–4 landed, scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–4 landed, picker pinned and its scroll defect fixed, no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -397,6 +397,28 @@ Only after A is byte-identical is the frame split into real widgets: palette
 grid, interface grid, code sample, examples strip, picker list. Each extraction
 lands as its own commit and must re-pass I1 and I2 before the next. A widget
 that cannot be made theme-closed is not extracted.
+
+**I1 covered one frame of two.** Phase 4 found the gap the hard way: the
+picker's own frame is drawn by `theme_lines`, has its own windowing, and had
+been free to change without anything noticing. So before any widget work the
+picker was pinned the same way the frame was — 36 goldens, 3 scenarios × 3
+fixtures × 4 sizes, and I2's closure over them (`--record-picker`). The three
+scenarios are chosen by what they can catch:
+
+| Scenario | Library | What it is for |
+| --- | --- | --- |
+| `short` | 3 themes, 7 rows | A picker **shorter** than the screen. The case a `ScrollView` gets wrong: a scrolling container fills its viewport, so the natural widget version paints sixteen rows of background where the golden has seven. Visually identical, and seven cells I1 will not forgive. |
+| `edge` | 20 themes, exactly 24 rows at 80x24 | Fills the screen to the row — where a trailing newline scrolls. |
+| `long` | 34 themes, selection at `t25` | Overflows at every size, with the window partway down the list. A golden pinned to the top cannot tell a scroll from a no-scroll. The current theme is `t20` and the selection `t25`, so `*` and `>` are **different rows** — the case where a scrolling widget conflates "selected" with "current" and quietly opens the wrong theme. |
+
+Pinning it found a defect immediately. The overlay branch of `draw_editor`
+wrote its trailing CRLF unconditionally, so a picker that filled the screen
+scrolled the terminal and lost its top row — the `huebox  themes` header, at
+60x16 with 34 themes. Same defect as the editor frame's (phase 0, `4b239fe`),
+same fix: withhold the newline when the rows fill the screen. The picker
+goldens were recorded once before the fix, which captured the bug, and
+re-recorded after — the one legitimate §4.4 re-record, and it is why
+`test_the_header_survives_a_library_that_fills_the_screen` exists.
 
 The payoff of B is the polish — real focus, real scrolling, real hit targets —
 but it is strictly optional. If B stalls, A is a shippable huebox with mouse

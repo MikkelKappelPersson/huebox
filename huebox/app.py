@@ -241,6 +241,20 @@ class Editor(App):
         state.sel = int(os.environ.get("HUEBOX_SEL", "0"))
         state.mult = os.environ.get("HUEBOX_MULT", str(MULT_STEPS[0]))
         state.status = os.environ.get("HUEBOX_STATUS", "")
+        scene = os.environ.get("HUEBOX_PICKER")
+        if scene:
+            # The harness needs the picker up on the *first* paint: a capture
+            # that had to send a keypress would be racing the frame it is
+            # measuring. The names come from the launch contract, not from a
+            # theme directory, so a capture reads the same list whatever
+            # happens to be in the user's ~/.local/share/huebox/themes.
+            names = os.environ.get("HUEBOX_PICKER_NAMES", "").split(",")
+            names = [name for name in names if name]
+            if not names:
+                names = [os.environ.get("HUEBOX_PICKER_THEME", "theme")]
+            state.overlay = names
+            state.overlay_index = min(int(os.environ.get("HUEBOX_PICKER_INDEX",
+                                                         "0")), len(names) - 1)
         self.state = state
         return state
 
@@ -411,7 +425,8 @@ def main() -> int:
     head = os.environ.get("HUEBOX_HEAD")
     Editor(fmt=os.environ.get("HUEBOX_FMT", "ghostty"),
            path=os.environ.get("HUEBOX_PATH", "/tmp/huebox.conf"),
-           head_override=head).run()
+           head_override=head,
+           theme=os.environ.get("HUEBOX_PICKER_THEME")).run()
     return 0
 
 

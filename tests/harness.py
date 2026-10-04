@@ -136,6 +136,27 @@ FIXTURES = {
 }
 
 
+#: The picker's own scenarios (§13.7), pinned the same way the frame is.
+#:
+#: The frame goldens only ever covered the editor. The picker — a different
+#: frame, drawn by `theme_lines`, with its own windowing and its own scroll —
+#: was free to change without anything noticing, which meant the phase that
+#: turns it into a scrolling widget could have moved every cell of it and still
+#: called I1 green. These are that gap, closed *before* the picker is touched:
+#: a library that fits, one exactly at the window edge, and one long enough to
+#: scroll, each captured mid-list so the window is not simply its top.
+PICKERS = {
+    # Three shapes, and the sizes make the difference between them visible:
+    # `short` never scrolls anywhere; `edge` fills 80x24 to the row, which is
+    # where the trailing-newline bug lived; `long` overflows at all four sizes,
+    # so a widget that scrolled and one that never scrolled cannot agree.
+    "short": {"names": ["ember", "paper", "dusk"], "index": 1},
+    "edge": {"names": ["a%d" % i for i in range(20)], "index": 0},
+    "long": {"names": ["t%02d" % i for i in range(34)], "index": 25},
+}
+
+
+
 # --------------------------------------------------------------------------
 # capture
 # --------------------------------------------------------------------------
@@ -174,6 +195,40 @@ def capture_reference(fixture, cols, rows, sel=0):
     return raw.encode("utf-8"), emitted_rows(raw)
 
 
+def capture_reference_picker(fixture, cols, rows, picker="long", status=None):
+    """The picker as the editor writes it today, no framework involved.
+
+    Same direct-mode session as `capture_reference`, with the overlay the way
+    `draw_editor` takes it: `(names, index, current)`. The current theme is the
+    fixture's, so the picker is looking at a theme that is in its own list —
+    which is what makes the `*` marker appear at all.
+    """
+    import huebox.editor as editor
+
+    spec = FIXTURES[fixture]
+    scene = PICKERS[picker]
+    original = editor.term_size
+    editor.term_size = lambda default=(80, 24): (cols, rows)
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            editor.draw_editor("ghostty", "", spec["slots"], 0, [], status,
+                               REFERENCE_MULT,
+                               overlay=(scene["names"], scene["index"],
+                                        CURRENT_THEME))
+    finally:
+        editor.term_size = original
+    raw = buffer.getvalue()
+    return raw.encode("utf-8"), emitted_rows(raw)
+
+
+#: The theme the picker is "looking at". It is in `PICKERS["long"]` at `t20`
+#: while the selection sits on `t25`, so the current row and the selected row
+#: are *different* rows — the case where a scrolling widget is most likely to
+#: conflate "selected" with "current" and quietly load the wrong theme.
+CURRENT_THEME = "t20"
+
+
 def candidate_available() -> bool:
     """Whether the Textual shell can be launched from this interpreter.
 
@@ -202,6 +257,20 @@ def candidate_bytes(fixture, cols, rows, sel=0, depth="truecolor"):
     if data is None:
         raise RuntimeError(
             "the candidate produced no output: `python -m huebox.app` under a "
+            "pty wrote nothing (wrong fd, or it exited before painting)")
+    return data
+
+
+def candidate_picker_bytes(fixture, cols, rows, picker="long",
+                           depth="truecolor", status=None):
+    """The candidate's picker bytes — the same seam as `candidate_bytes`."""
+    import candidate
+
+    data = candidate.capture_picker(fixture, cols, rows, picker, depth,
+                                    status)
+    if data is None:
+        raise RuntimeError(
+            "the candidate painted no picker: `python -m huebox.app` under a "
             "pty wrote nothing (wrong fd, or it exited before painting)")
     return data
 
@@ -337,6 +406,36 @@ def golden_path(fixture, cols, rows):
     return os.path.join(GOLDEN_ROOT, "%dx%d" % (cols, rows), fixture + ".json")
 
 
+def picker_golden_path(fixture, cols, rows, picker):
+    return os.path.join(GOLDEN_ROOT, "picker-%dx%d" % (cols, rows),
+                        "%s-%s.json" % (fixture, picker))
+
+
+def record_picker(fixture, cols, rows, picker="long", status=None):
+    """The picker frame as a golden, on the same terms as `record`."""
+    raw, height = capture_reference_picker(fixture, cols, rows, picker, status)
+    return {
+        "fixture": fixture,
+        "cols": cols,
+        "rows": rows,
+        "picker": picker,
+        "frame_rows": height,
+        "closure": closure(raw, cols, rows, height),
+        "cells": parse(raw, cols, rows, height),
+    }
+
+
+def load_picker(fixture, cols, rows, picker="long", status=None):
+    """The recorded picker golden, or None — never regenerates (§4.4)."""
+    import json
+
+    path = picker_golden_path(fixture, cols, rows, picker)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def record(fixture, cols, rows, sel=0):
     """Capture the reference frame as a golden. Phase 0's one write (§4.4)."""
     raw, height = capture_reference(fixture, cols, rows, sel)
@@ -362,7 +461,11 @@ def load(fixture, cols, rows, sel=0):
 
 
 def write(golden):
-    path = golden_path(golden["fixture"], golden["cols"], golden["rows"])
+    return _write(golden, golden_path(golden["fixture"], golden["cols"],
+                                      golden["rows"]))
+
+
+def _write(golden, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(golden, handle, separators=(",", ":"), sort_keys=True)
@@ -371,9 +474,25 @@ def write(golden):
 
 
 def _main(argv):
-    if argv[:1] != ["--record"]:
-        sys.stderr.write("usage: python3 tests/harness.py --record [fixture]\n")
+    if argv[:1] not in (["--record"], ["--record-picker"]):
+        sys.stderr.write(
+            "usage: python3 tests/harness.py --record[-picker] [fixture]\n")
         return 2
+    if argv[:1] == ["--record-picker"]:
+        only = argv[1:2]
+        for cols, rows in SIZES:
+            for name in sorted(FIXTURES):
+                if only and name not in only:
+                    continue
+                for scene in sorted(PICKERS):
+                    golden = record_picker(name, cols, rows, scene)
+                    path = _write(golden, picker_golden_path(
+                        name, cols, rows, scene))
+                    print("%-9s %-8s %-6s frame_rows=%-3d colours=%-3d %s"
+                          % ("%dx%d" % (cols, rows), name, scene,
+                             golden["frame_rows"], len(golden["closure"]),
+                             os.path.relpath(path)))
+        return 0
     only = argv[1:2]
     for cols, rows in SIZES:
         for name in sorted(FIXTURES):

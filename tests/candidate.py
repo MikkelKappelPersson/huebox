@@ -92,6 +92,22 @@ DRAIN = 0.5                     # seconds more to read whatever is left
 _CAPTURES: dict = {}
 
 
+def capture_picker(fixture, cols, rows, picker="long", depth="truecolor",
+                   status=None):
+    """The candidate's picker bytes, memoised on the same terms as `capture`.
+
+    `HUEBOX_PICKER` names a scenario in `harness.PICKERS`; the app opens it and
+    paints the picker frame before its first draw, so the capture is a settled
+    screen with the picker up rather than a keypress timed against a race.
+    """
+    key = ("picker", fixture, cols, rows, picker, depth, status)
+    if key not in _CAPTURES:
+        data, _ = run_in_pty(fixture, cols, rows, 0, depth,
+                             picker=picker, status=status)
+        _CAPTURES[key] = frame_bytes(data)
+    return _CAPTURES[key]
+
+
 def capture(fixture, cols, rows, sel=0, depth="truecolor"):
     """The candidate's output bytes, or `None` if it painted nothing.
 
@@ -111,7 +127,8 @@ def uncached_capture(fixture, cols, rows, sel=0, depth="truecolor"):
     return frame_bytes(data)
 
 
-def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None):
+def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None,
+                  picker=None, status=None):
     """The environment the candidate is launched with: pinned, then told.
 
     `HUEBOX_*` is the launch contract (`huebox/app.py`): the slots to render and
@@ -137,6 +154,15 @@ def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None
     env["HUEBOX_HEAD"] = ""
     env["HUEBOX_MULT"] = str(harness.REFERENCE_MULT)
     env["HUEBOX_STATUS"] = str(harness.REFERENCE_STATUS)
+    if picker is not None:
+        env["HUEBOX_PICKER"] = picker
+        env["HUEBOX_PICKER_NAMES"] = ",".join(harness.PICKERS[picker]["names"])
+        env["HUEBOX_PICKER_INDEX"] = str(harness.PICKERS[picker]["index"])
+        env["HUEBOX_PICKER_THEME"] = harness.CURRENT_THEME
+    else:
+        env.pop("HUEBOX_PICKER", None)
+    if status is not None:
+        env["HUEBOX_STATUS"] = status
     env["HUEBOX_FMT"] = "ghostty"
     env["HUEBOX_PATH"] = harness.FIXTURES[fixture]["path"]
     env["PYTHONPATH"] = _ROOT + os.pathsep + env.get("PYTHONPATH", "")
@@ -155,7 +181,8 @@ def write_slots(fixture, directory):
     return path
 
 
-def run_in_pty(fixture, cols, rows, sel=0, depth="truecolor"):
+def run_in_pty(fixture, cols, rows, sel=0, depth="truecolor", picker=None,
+               status=None):
     """Launch the app in a pty of the given size; return everything it wrote.
 
     A pty rather than a pipe, because the app must believe it is on a terminal:
@@ -164,7 +191,8 @@ def run_in_pty(fixture, cols, rows, sel=0, depth="truecolor"):
     """
     with tempfile.TemporaryDirectory() as directory:
         slots_path = write_slots(fixture, directory)
-        env = candidate_env(fixture, cols, rows, sel, depth, slots_path)
+        env = candidate_env(fixture, cols, rows, sel, depth, slots_path,
+                            picker, status)
         env["HOME"] = directory
 
         master, slave = pty.openpty()
