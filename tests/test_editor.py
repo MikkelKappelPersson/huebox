@@ -1765,3 +1765,81 @@ class HitMap(unittest.TestCase):
 
     def test_an_empty_picker_has_nothing_to_hit(self):
         self.assertEqual(editor.theme_hits([], 0, "", 80, 24), [])
+
+
+class Regions(unittest.TestCase):
+    """The frame names its blocks, and names them where they are (§5.6).
+
+    Phase 5 mounts one widget per block. The only thing standing between that
+    and a frame whose widgets disagree with the frame is this map, so it is
+    pinned hard: the blocks must tile the frame exactly — first at row 0, no
+    gaps, no overlaps, no block reaching past the bottom — at every size and
+    with and without a status line, because the status line is the one block
+    that appears and disappears.
+    """
+
+    def _regions(self, cols, rows, status=""):
+        found = []
+        original = editor.term_size
+        editor.term_size = lambda default=(80, 24): (cols, rows)
+        try:
+            with mock.patch.object(sys, "stdout", io.StringIO()):
+                editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [],
+                                   status, 1, regions=found,
+                                   size=(cols, rows))
+        finally:
+            editor.term_size = original
+        return found
+
+    def test_the_blocks_tile_the_frame(self):
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            for status in ("", "reverted to start"):
+                with self.subTest(size=f"{cols}x{rows}", status=status):
+                    found = self._regions(cols, rows, status)
+                    self.assertTrue(found, "no regions reported")
+                    self.assertEqual(found[0][1], 0,
+                                     "the first block does not start at row 0")
+                    for before, after in zip(found, found[1:]):
+                        self.assertEqual(
+                            before[1] + before[2], after[1],
+                            "%s and %s are not adjacent" % (before[0], after[0]))
+
+    def test_no_block_reaches_past_the_bottom(self):
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            for status in ("", "reverted to start"):
+                with self.subTest(size=f"{cols}x{rows}", status=status):
+                    for name, first, count in self._regions(cols, rows, status):
+                        self.assertGreater(count, 0,
+                                           "%s is an empty block" % name)
+                        self.assertLessEqual(first + count, rows,
+                                             "%s reaches past the frame" % name)
+
+    def test_the_blocks_total_the_rows_the_frame_painted(self):
+        """The count is the frame's height, not the screen's.
+
+        These differ: at 60x16 the frame is fifteen rows and the screen is
+        sixteen. Asserting the blocks reach the bottom of the *screen* would
+        demand a row the frame never drew — which is precisely the failure the
+        second test above exists to forbid."""
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            with self.subTest(size=f"{cols}x{rows}"):
+                painted = len(lines(frame(cols, rows)))
+                found = self._regions(cols, rows)
+                self.assertEqual(sum(count for _, _, count in found), painted)
+
+    def test_a_status_line_is_its_own_block_and_the_last(self):
+        found = self._regions(80, 24, "reverted to start")
+        names = [name for name, _, _ in found]
+        self.assertIn("status", names)
+        self.assertEqual(names[-1], "status")
+        self.assertNotIn("status",
+                         [name for name, _, _ in self._regions(80, 24)])
+
+    def test_a_short_frame_drops_its_widgets_before_its_grid(self):
+        """§15 — the frame spends decoration before it spends a widget.
+
+        At 40x12 there is no room for the code sample or the examples strip, so
+        the blocks stop after the grids. A map that reported them anyway would
+        be a map describing a frame that is not the one on screen."""
+        names = [name for name, _, _ in self._regions(40, 12)]
+        self.assertEqual(names, ["header", "palette", "interface"])

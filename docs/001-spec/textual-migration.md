@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–4 landed, picker pinned and its scroll defect fixed, no TODOs open** · Plans spec:
+Status: **phases 0–4 landed, picker pinned and its scroll defect fixed, phase 5 started (picker, then the frame's blocks), no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -420,9 +420,48 @@ goldens were recorded once before the fix, which captured the bug, and
 re-recorded after — the one legitimate §4.4 re-record, and it is why
 `test_the_header_survives_a_library_that_fills_the_screen` exists.
 
-The payoff of B is the polish — real focus, real scrolling, real hit targets —
-but it is strictly optional. If B stalls, A is a shippable huebox with mouse
-and scrolling. That is the point of the ordering.
+**What B actually buys, said honestly.** The frame is an absolute, static
+layout: nothing in it scrolls, and the only interactive thing in it is the
+palette grid, which the arrows already walk. So decomposition is not buying
+focus rings or smooth scrolling — it is buying *structure*: one widget per
+block, each owning its own rows, so a change to the frame no longer means
+changing a 200-line function that writes to stdout. The honest summary is that
+B is a refactor with a test harness attached, not a feature.
+
+Three extractions have landed:
+
+| Extraction | Commit | What changed |
+| --- | --- | --- |
+| The picker | `9ecd8a9` | `draw_editor`'s `overlay=` mode is gone; `draw_editor` has one caller shape again |
+| The frame's blocks | this one | Nine `Frame`s stacked, from a map `draw_editor` reports |
+| The palette/interface grids | not yet | |
+
+**The map is the load-bearing part, and it is easy to get wrong.** A block's
+first row is not knowable while the frame is being built: §15 spends decoration
+rows before it spends widget rows, and dropping one moves everything below it
+up. So the map is reported *after* the frame has given up its decoration and
+trimmed itself — the same trap the hit map fell into in phase 4, and the same
+answer (ask the rows that draw the thing, never recompute).
+
+The first version kept a dropped checkpoint in the list instead of removing
+it. That is invisible for every block *after* it and catastrophic for the one
+before: a checkpoint past the bottom is also every later block's *end*, so
+keeping it gave the block below a height reaching past the frame. At 40x12 that
+was the difference between six widgets and ten, four of them hanging off the
+bottom of the screen. `test_the_blocks_tile_the_frame` is the guard.
+
+Two traps found on the way, both silent:
+
+- The blocks must tile the frame **exactly**. One row more and the screen is
+  taller than its viewport, which gives it a scrollbar — and seven of
+  Textual's 168 design tokens exist only for scrollbars. I2 would have caught
+  it; the assertion that catches it earlier is
+  `test_the_widgets_stack_to_the_frame_and_no_further`.
+- A test that watched `draw_editor` to see what each frame said stopped seeing
+  picker frames once the picker had its own path, and the blocked-switch
+  status is *reported on a picker frame*. A test asserting that message existed
+  passed for the wrong reason. Second time a hook that could not see a thing
+  has produced a green test that meant nothing; worth a standing rule.
 
 ## 6. Colour model → Textual
 

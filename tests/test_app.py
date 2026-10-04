@@ -409,3 +409,63 @@ class ThePickersMinimum(unittest.TestCase):
                 for name in ("ash", "ember", "frost"):
                     self.assertNotIn(name, body,
                                      "the picker drew through the hint")
+
+
+@needs_app
+class TheFrameIsWidgets(unittest.TestCase):
+    """§5.6 — the frame is a stack of block widgets, not one opaque thing.
+
+    Asserted against the mounted tree rather than the drawing call, because the
+    claim is about what Textual has. A future change that quietly collapsed
+    them back into one `Frame` would paint identically and pass every colour
+    test; this is the test that notices.
+    """
+
+    def _mounted(self, cols=100, rows=30, status=""):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size", new_callable=mock.PropertyMock,
+            return_value=Offset(cols, rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        mounted = []
+
+        with mock.patch.dict(os.environ,
+                             {"HUEBOX_SLOTS": path, "HUEBOX_STATUS": status}):
+            editor = huebox_app.Editor()
+            editor.query = lambda *a, **k: ()
+            editor.mount = lambda widget: mounted.append(widget)
+            editor.redraw()
+        return editor, mounted
+
+    def test_one_widget_per_block(self):
+        _editor, mounted = self._mounted()
+        regions = _editor.regions
+        self.assertEqual(len(mounted), len(regions))
+        self.assertGreater(len(mounted), 3,
+                           "the frame collapsed back into a single widget")
+        names = [name for name, _, _ in regions]
+        for name in ("header", "palette", "interface", "selected", "hints"):
+            self.assertIn(name, names,
+                          "the frame no longer names its %s block" % name)
+
+    def test_the_widgets_stack_to_the_frame_and_no_further(self):
+        """A stack taller than the screen gives the screen a scrollbar.
+
+        That is not a hypothetical: seven of Textual's 168 design tokens exist
+        only for scrollbars, and I2's whole job is to reject a colour that was
+        not the theme's. The blocks tile the frame exactly (tested in
+        `test_editor.Regions`), so their heights must too."""
+        editor, mounted = self._mounted(cols=100, rows=30)
+        total = sum(len(block.rows_text) for block in mounted)
+        self.assertEqual(total, len(editor.rows_text))
+        self.assertLessEqual(total, 30, "the stack is taller than the screen")
+
+    def test_every_block_paints_only_its_own_rows(self):
+        editor, mounted = self._mounted()
+        painted = [row for block in mounted for row in block.rows_text]
+        self.assertEqual(painted, editor.rows_text,
+                         "the blocks do not reassemble the frame in order")

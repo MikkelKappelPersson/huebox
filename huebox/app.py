@@ -118,21 +118,24 @@ def load_slots() -> dict:
     return {name: given.get(name, MISSING) for name in SLOTS}
 
 
-def frame_rows(fmt, path, state, cols, head=None, hits=None):
+def frame_rows(fmt, path, state, cols, head=None, hits=None, regions=None):
     """The frame as a list of rows, captured from `draw_editor`.
 
     Returns the rows without the trailing-newline decision, which belongs to
     whoever writes them: `draw_editor` keeps that (and withholds the newline
     when the frame fills the screen, §4.8), Textual positions cells itself.
 
-    `hits` is filled with the clickable cells the frame painted — asked of the
+    `hits` is filled with the clickable cells the frame painted, and `regions`
+    with the frame's blocks as `(name, first row, rows)`. Both are asked of the
     drawing code rather than recomputed here, so a click cannot land a row away
-    from the swatch the user aimed at.
+    from the swatch the user aimed at and a widget cannot claim a row the frame
+    did not draw.
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
-                    state.status, state.mult, head=head, hits=hits)
+                    state.status, state.mult, head=head, hits=hits,
+                    regions=regions)
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -158,6 +161,7 @@ class Frame(Widget):
         self.console = Console(file=io.StringIO(), force_terminal=True,
                                color_system="truecolor", legacy_windows=False,
                                markup=False, highlight=False)
+        self.rows_text = rows_text
         self._cache = [Text.from_ansi(row) for row in rows_text]
 
     def on_mount(self) -> None:
@@ -310,6 +314,7 @@ class Editor(App):
         state.grid = grid_geometry(width)
 
         self.hits = []
+        self.regions = []
         # §13.7 — the picker owns the surface while it is up, and it shares the
         # editor's minimum size, so the too-small check covers both frames and
         # is asked once, here, rather than twice inside `draw_editor`.
@@ -330,18 +335,29 @@ class Editor(App):
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
                                    width, head=self.head_for(state),
-                                   hits=self.hits)
+                                   hits=self.hits, regions=self.regions)
         self.rows_text = rows_text
 
         for child in list(self.query(Frame)):
             child.remove()
-        frame = Picker(rows_text, width) if picker is not None \
-            else Frame(rows_text, width)
-        frame.styles.width = width
-        frame.styles.height = len(rows_text)
-        frame.styles.padding = 0
-        frame.styles.margin = 0
-        self.mount(frame)
+        # §5.6 — one widget per block of the frame. The blocks are the rows
+        # `draw_editor` reported, in order and without gaps, so the widgets stack
+        # to exactly the frame's height and not one row more: a stack taller than
+        # the screen would give the screen a scrollbar, which is seven of
+        # Textual's 168 design tokens arriving in the frame's first paint.
+        if picker is not None:
+            blocks = [Picker(rows_text, width)]
+        elif self.regions:
+            blocks = [Frame(rows_text[first:first + count], width)
+                      for _name, first, count in self.regions]
+        else:
+            blocks = [Frame(rows_text, width)]
+        for block in blocks:
+            block.styles.width = width
+            block.styles.height = len(block.rows_text)
+            block.styles.padding = 0
+            block.styles.margin = 0
+            self.mount(block)
         _debug("redraw %dx%d: %d rows, sel=%d, widest=%d"
                % (width, height, len(rows_text), state.sel,
                   max((visible(row) for row in rows_text), default=0)))

@@ -344,7 +344,7 @@ def slot_at(hits, x: int, y: int):
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                grid=None, hits=None, size=None):
+                grid=None, hits=None, size=None, regions=None):
     """The frame, written to stdout.
 
     `size` overrides the terminal query. Textual knows the size it was given —
@@ -369,12 +369,21 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # frame it used to be handed on the side is now `theme_lines`, which is
     # what it always was underneath.
     body = []
+    # Checkpoints: `(name, first row of the frame)`, each block running until
+    # the next. `at_body` counts rows in `body`; `at_extra` counts rows in the
+    # widgets, which are appended after `body` and so are offset by its length.
+    # Shifted with the hits when decoration is dropped, resolved to spans once
+    # the frame is final.
+    marks = []
+    at_body = lambda: len(body)                      # noqa: E731
+    at_extra = lambda: len(body) + len(extra)        # noqa: E731
 
     label = fmt if head is None else head
     first = "  " + wordmark(slots) + "  " + chrome(label, "foreground", slots,
                                                     bold=True)
     if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
         first += "  " + chrome(path, CHROME_MUTED, slots)
+    marks.append(("header", at_body()))
     body.append(first)
     body.append("")
 
@@ -388,6 +397,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         return (f"{bg(value)}{fg(readable_fg(value))}"
                 f"{BOLD if selected else ''}{label.ljust(cellw)}{RESET}")
 
+    marks.append(("palette", at_body()))
     body.append("  " + title("palette", slots))
     for start in range(0, len(PALETTE), per_row):
         # `len(body)` is this row's index in the frame: `out` is `body` plus
@@ -406,6 +416,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     body.append(legend)
     body.append("")
 
+    marks.append(("interface", at_body()))
     per = grid.named_cols
     body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
@@ -426,6 +437,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                                 len(PALETTE) + start + column))
     body.append("")
 
+    marks.append(("selected", at_body()))
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     # §8.3 — the reading of the slot's own colour. It is bars where the row
@@ -485,6 +497,9 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             for index, hit in enumerate(hits):
                 if hit.y > dropped:
                     hits[index] = hit._replace(y=hit.y - 1)
+        for index, (_name, row) in enumerate(marks):
+            if row > dropped:
+                marks[index] = (_name, row - 1)
         spare += 1
 
     extra = []
@@ -494,6 +509,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
     if examples >= EXAMPLES_FLOOR:
+        marks.append(("examples", at_extra()))
         extra.append("  " + title("examples", slots,
                              "(live buffer: background / selection / cursor)"))
         extra.extend(example_lines(slots, cols - 2)[:examples - 1])
@@ -525,6 +541,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             # a hunk row to buy either
             lead = 1 if spare_rows - rows_left - 1 >= 2 else 0
             if rows_left >= DIFF_FLOOR - 1:
+                marks.append(("diff", at_extra() + (1 if lead else 0)))
                 if lead:
                     extra.append("")
                 diff = ["  " + title("live diff", slots,
@@ -533,6 +550,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 if spare_rows - lead - rows_left - 1 >= 1:   # a row to spare
                     diff.append("")   # the separator is a row of its own
             extra.extend(diff)      # the hunk draws above the sample
+            marks.append(("sample", at_extra()))
             extra.append("  " + title("live code", slots,
                                   "(truecolor, no reload needed)"))
             extra.extend("    " + line.replace(RESET, RESET + "    ")
@@ -540,9 +558,28 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             if room_left() - take >= 2:  # rows to spare: the separator
                 extra.append("")
 
+    # The hints and the status are last, and `extra` is not known until the
+    # widgets have had their rows, so these two checkpoints can only be taken
+    # here rather than where the rows themselves are built.
+    marks.append(("hints", at_extra()))
+    if status:
+        marks.append(("status", at_extra() + len(tail) - 1))
+
     out = body + extra + tail
     if len(out) > rows:
         out = out[:rows - len(tail)] + tail
+    if regions is not None:
+        # A checkpoint past the last row is a block the frame cut off. It is
+        # dropped from the list rather than merely not reported, because it is
+        # also every later block's *end*: keeping it would give the block below
+        # a height reaching past the frame, which is a widget claiming rows the
+        # frame never painted — the unpainted-cell failure §8.2 exists to
+        # prevent, one level up. At 40x12 that is the difference between a
+        # frame of six widgets and one of nine, four of them off the bottom.
+        live = [(name, row) for name, row in marks if row < len(out)]
+        edges = [row for _, row in live] + [len(out)]
+        regions.extend((name, row, stop - row)
+                       for (name, row), stop in zip(live, edges[1:]))
     if hits is not None:
         # The trim happened after the cells announced themselves, so a short
         # frame still claims rows it never painted — and a click there would
