@@ -48,6 +48,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.strip import Strip
+from textual.style import Style
 from textual.widget import Widget
 
 from .color import MISSING, SLOTS
@@ -69,6 +70,7 @@ GRID_BLOCKS = ("palette", "interface")
 #: press. One handler per key is the invariant, and
 #: `test_an_arrow_moves_one_slot_when_the_grid_has_focus` is the guard.
 GRID_KEYS = ("left", "right", "up", "down")
+
 
 KEYS = {
     "escape": "esc",
@@ -103,6 +105,19 @@ TOKEN_SLOTS = {
     "scrollbar-background-hover": "background",
     "scrollbar-background-active": "background",
     "scrollbar-corner-color": "background",
+    # §6.2 — the text selection. `Selectable` blocks (the code sample and the
+    # diff) are selectable, and Textual composites the selection on the screen
+    # in a `.screen--selection` overlay painted with these two. They are the
+    # theme's own selection slots, which is the same pair the picker marks a
+    # theme with, so a selection reads as part of the theme rather than as a
+    # blue someone else's palette brought with it. `input-selection-*` is bound
+    # beside them for the same reason: nothing uses an input today, and the day
+    # a prompt is a real widget rather than a suspended terminal this is where
+    # its selection colour will come from.
+    "screen-selection-background": "selection-background",
+    "screen-selection-foreground": "selection-foreground",
+    "input-selection-background": "selection-background",
+    "input-selection-foreground": "selection-foreground",
 }
 
 
@@ -175,6 +190,15 @@ class Frame(Widget):
     re-encoding rather than an interpretation.
     """
 
+    # Textual makes *every* widget selectable by default, and the screen checks
+    # the app's `ALLOW_SELECT` to decide whether a drag selects text. So a
+    # plain block — a swatch, a header, a hint — would begin a text selection
+    # when clicked, and clicking a swatch is how a colour is selected. Off
+    # here, on for the two blocks whose text is meant to be taken away.
+    # `test_the_palette_grid_is_not_selectable` guards it, because the failure
+    # is silent: the selection looks like nothing happened.
+    ALLOW_SELECT = False
+
     DEFAULT_CSS = """
     Frame { background: $background; color: $foreground; }
     """
@@ -187,13 +211,48 @@ class Frame(Widget):
         self.rows_text = rows_text
         self._cache = [Text.from_ansi(row) for row in rows_text]
 
+    def selection_for(self, y: int):
+        """The theme's selection style over this row's selected span, or None.
+
+        §6.2 — Textual paints a selection inside `Visual.to_strips`, which is
+        the path a widget with a `render()` takes. This widget has none: its
+        rows are already-parsed `Text`, and `render_line` is the whole story. So
+        the selection has to be applied here, from the screen's
+        `screen--selection` component styles — which is where the theme's
+        `selection-background` and `selection-foreground` arrive. Skip this and
+        a drag highlights nothing at all; use a colour of your own and it
+        highlights in something that is not the theme, which I2 rejects.
+        """
+        if not self.ALLOW_SELECT:
+            return None
+        selection = self.text_selection
+        if selection is None:
+            return None
+        span = selection.get_span(y)
+        if span is None:
+            return None
+        # `Text.stylize` takes a *rich* Style, and Textual's `Style` is a
+        # different thing wearing the same name; `rich_style` is the bridge.
+        # Handing one to the other does not raise, it tries to parse the object
+        # as a style definition and fails deep inside rich.
+        style = Style.from_styles(
+            self.screen.get_component_styles("screen--selection")).rich_style
+        start, end = span
+        return style, start, len(self._cache[y].plain) if end < 0 else end
+
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         if width <= 0:
             return Strip([])
         if y >= len(self._cache):
             return Strip([Segment(" " * width)], width)
-        segments = list(self._cache[y].render(self.console, end=""))
+        row = self._cache[y]
+        marked = self.selection_for(y)
+        if marked is not None:
+            style, start, end = marked
+            row = row.copy()
+            row.stylize(style, start, end)
+        segments = list(row.render(self.console, end=""))
         filled = sum(segment.cell_length for segment in segments)
         if filled < width:
             # §8.2 — the row reaches the edge in the buffer's own fill, so no
@@ -244,6 +303,53 @@ class Swatches(Frame):
         self.app.on_click(event)
 
 
+class Selectable(Frame):
+    """A block of the frame the user can select text out of.
+
+    The code sample and the live diff are the two blocks whose whole point is
+    that their text can leave the editor: sample a colour somewhere, copy the
+    hex, paste the new value. As a painted row they were inert — the glyphs were
+    right and there was no way to reach them.
+
+    `ALLOW_SELECT` is the entire mechanism. Textual composites the selection on
+    the *screen*, in a `.screen--selection` overlay, so `Frame.render_line` is
+    untouched and I1 does not move: a capture never has a selection down, and a
+    frame with one down is the same frame plus an overlay.
+
+    Which is also the risk. The overlay's two colours are design tokens like any
+    other, and Textual would otherwise supply its own — so `TOKEN_SLOTS` binds
+    them to the theme's `selection-background` and `selection-foreground`, the
+    slots the picker already shows itself. I2 is what proves the binding holds;
+    without it, a user selecting a line would get Textual's blue.
+    """
+
+    ALLOW_SELECT = True
+
+    def get_selection(self, selection):
+        """The selected text, read from the rows the widget painted.
+
+        `Widget.get_selection` asks the widget to `render()` a Visual and selects
+        from that. This widget has no `render()` — its content is the rows
+        `draw_editor` wrote, already parsed — so the default finds nothing and a
+        drag selects an empty string: the highlight would paint and the
+        clipboard would be blank, which is the worst of both.
+
+        `Text.plain` is the same parse `render_line` already did, so the text
+        handed to a selection is the text on screen, escape codes and all the
+        SGR in the row included.
+        """
+        return selection.extract("\n".join(row.plain
+                                            for row in self._cache)), "\n"
+
+
+class Sample(Selectable):
+    """The live code sample: Zig, pygments-highlighted, in truecolor (§14)."""
+
+
+class Diff(Selectable):
+    """The live diff — the hunk that appeared since the last save (§14)."""
+
+
 class Picker(Frame):
     """The theme picker as a widget of its own (§13.7, migration §5.6).
 
@@ -273,6 +379,15 @@ class Picker(Frame):
     """
 
     can_focus = True
+
+
+#: Which widget draws which block. Everything not named here is a plain `Frame`:
+#: a picture of a thing, with nothing to press. The two grids and the two text
+#: blocks are the ones that are controls — and the distinction is worth making
+#: explicitly, because "a widget per block" sounds like they are all the same
+#: and only these four answer to the user.
+BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
+                 "sample": Sample, "diff": Diff}
 
 
 class Editor(App):
@@ -417,8 +532,8 @@ class Editor(App):
                  or [("frame", 0, len(rows_text))])
         for name, first, count in named:
             rows_here = rows_text[first:first + count]
-            kind = Picker if name == "picker" else (
-                Swatches if name in GRID_BLOCKS else Frame)
+            kind = BLOCK_WIDGETS.get(name, Frame) if name != "picker" \
+                else Picker
             # `name` is a constructor argument, not a settable property — which
             # is Textual saying the name is part of a widget's identity.
             block = kind(rows_here, width, name=name)

@@ -664,3 +664,145 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(last[1] + last[2], len(app.rows_text))
                     self.assertEqual(sum(count for _, _, count in app.regions),
                                      len(app.rows_text))
+
+
+@needs_app
+class SelectableBlocks(unittest.IsolatedAsyncioTestCase):
+    """The code sample and the diff are text you can take away (§14).
+
+    `ALLOW_SELECT` on its own was not enough, and the two halves it needs are
+    both invisible in a screenshot:
+
+    - **The text.** `Widget.get_selection` asks the widget to `render()` and
+      selects from that Visual. This widget has no `render()` — its rows are
+      already-parsed `Text` — so the default found nothing and a drag
+      highlighted the screen while the clipboard stayed empty.
+    - **The paint.** Textual applies the selection style inside
+      `Visual.to_strips`, the path a widget with a `render()` takes.
+      `render_line` is the whole story here, so the style had to be applied by
+      hand or a drag would show nothing at all.
+
+    And the colour it uses had to be the theme's. Textual would otherwise
+    supply its own, which is §6.2's whole subject and I2's whole job.
+    """
+
+    SLOTS = harness.FIXTURES["distinct"]["slots"]
+
+    async def _app(self):
+        path = _slots_file(self.SLOTS)
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    async def _drag(self, app, pilot, widget, start, end):
+        await pilot.mouse_down(widget, offset=start)
+        await pilot.hover(widget, offset=end)
+        await pilot.pause()
+        await pilot.mouse_up(widget, offset=end)
+        await pilot.pause()
+
+    async def _blocks(self, app, kind):
+        return [w for w in app.query(kind)]
+
+    async def test_the_sample_and_the_diff_are_the_selectable_blocks(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            names = [w.name for w in app.query(huebox_app.Selectable)]
+            self.assertIn("sample", names)
+            for other in ("header", "palette", "interface", "selected",
+                          "examples", "hints"):
+                self.assertNotIn(other, [w.name for w in
+                                         app.query(huebox_app.Selectable)],
+                                 "%s should not be selectable" % other)
+
+    async def test_dragging_over_the_sample_gives_you_the_code(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            sample = (await self._blocks(app, huebox_app.Sample))[0]
+            await self._drag(app, pilot, sample, (4, 1), (30, 1))
+            chosen = app.screen.get_selected_text()
+            self.assertTrue(chosen.strip(), "a drag selected nothing")
+            self.assertNotIn("\033", chosen,
+                             "the escapes came out with the text")
+
+    async def test_a_selection_is_painted_in_the_theme_s_own_slots(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            sample = (await self._blocks(app, huebox_app.Sample))[0]
+            before = sample.render_line(1)
+            await pilot.mouse_down(sample, offset=(4, 1))
+            await pilot.hover(sample, offset=(24, 1))
+            await pilot.pause()
+            during = sample.render_line(1)
+            await pilot.mouse_up(sample, offset=(24, 1))
+            await pilot.pause()
+
+            wanted = self.SLOTS["selection-background"].lower()
+            got = {_hex(seg.style.bgcolor) for seg in during._segments
+                   if seg.style is not None and seg.style.bgcolor is not None}
+            self.assertIn(wanted, got,
+                          "the selection is painted in something that is not "
+                          "the theme's selection-background: %s" % sorted(got))
+            self.assertNotEqual(before._segments, during._segments,
+                                "the drag changed nothing on screen")
+
+    async def test_every_colour_a_selection_paints_is_a_theme_slot(self):
+        """I2, for a frame that is not the frame the goldens captured.
+
+        The goldens never have a selection down, so nothing in the harness can
+        see what a drag paints. This is the same closure check applied to the
+        one frame the harness does not cover: nothing Textual's own, or the
+        selection would be a blue in a theme that has no blue.
+        """
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            sample = (await self._blocks(app, huebox_app.Sample))[0]
+            await pilot.mouse_down(sample, offset=(2, 1))
+            await pilot.hover(sample, offset=(40, 2))
+            await pilot.pause()
+            slots = {value.lower() for value in self.SLOTS.values()}
+            painted = set()
+            for row in range(len(sample.rows_text)):
+                for seg in sample.render_line(row)._segments:
+                    if seg.style is None:
+                        continue
+                    painted.update(part for part in (_hex(seg.style.color),
+                                                     _hex(seg.style.bgcolor))
+                                   if part)
+            await pilot.mouse_up(sample, offset=(40, 2))
+            self.assertTrue(painted)
+            self.assertEqual(sorted(painted - slots), [],
+                             "a selection painted a colour the theme does "
+                             "not have")
+
+    async def test_the_palette_grid_is_not_selectable(self):
+        """A grid that swallows a drag cannot be clicked.
+
+        `ALLOW_SELECT` is on the app for Textual's own reasons and off per
+        widget; if the grid were selectable, every click on a swatch would
+        begin a text selection instead of selecting the colour."""
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            grid = (await self._blocks(app, huebox_app.Swatches))[0]
+            self.assertFalse(grid.allow_select)
+
+
+def _hex(color):
+    """A rich colour as `#rrggbb`, or None when it is not one.
+
+    `str(Color)` gives the whole `Color('#313244', ColorType.TRUECOLOR, ...)`
+    repr, which is neither a hex string nor comparable to one — so a test that
+    compares colours has to ask for the triplet, and a test that does not will
+    pass vacuously against a set that never matches anything.
+    """
+    if color is None or color.is_default:
+        return None
+    try:
+        return "#%02x%02x%02x" % tuple(color.get_truecolor())
+    except (ValueError, AttributeError):          # not a truecolor: a named or
+        return None                               # ANSI colour, not a theme one

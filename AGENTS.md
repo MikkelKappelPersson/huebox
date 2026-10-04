@@ -115,6 +115,10 @@ get the line that is actually about them.
   passed down as `draw_editor`'s `size=`. Asking the terminal as well gives two
   numbers for one quantity, and the harness cannot see the disagreement: it sets
   the pty size before launching, so they only diverge on a resize.
+- **A widget that answers to the user says so.** `Frame.ALLOW_SELECT` is off
+  and only the sample and the diff turn it on: Textual makes every widget
+  selectable by default, and a swatch that began a text selection when clicked
+  would swallow the click.
 - **A click is a keypress.** `on_click` resolves to a slot and then goes
   through `apply_key`; it must never touch a colour or a frame. The clickable
   cells are recorded by the rows that draw them (`draw_editor` / `theme_lines`

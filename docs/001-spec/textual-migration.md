@@ -434,7 +434,8 @@ Three extractions have landed:
 | --- | --- | --- |
 | The picker | `9ecd8a9` | `draw_editor`'s `overlay=` mode is gone; `draw_editor` has one caller shape again |
 | The frame's blocks | `d70c2af` | Nine `Frame`s stacked, from a map `draw_editor` reports |
-| The palette/interface grids | this one | `Swatches`: focusable, holding the arrows as its own bindings |
+| The palette/interface grids | `ff7dc07` | `Swatches`: focusable, holding the arrows as its own bindings |
+| The code sample and the diff | this one | `Sample`, `Diff`: selectable, so their text can be copied |
 
 **Focus is where decomposition starts paying, and it is not free.** Giving the
 grids their own bindings immediately exposed a fact about Textual that a unit
@@ -456,6 +457,35 @@ Two more things only a running app could find:
 - **The picker takes focus.** Focus left on a grid underneath it let an arrow
   move the *colour* selection behind a list the user is reading, which is the
   one thing §13.7 says cannot happen.
+
+**The last extraction is the first one a user would notice.** The code sample
+and the live diff are blocks whose whole point is that their text *leaves* the
+editor — sample a colour, copy the hex — and as painted rows they were inert.
+`ALLOW_SELECT` is the entire mechanism, and it needed two halves that no
+screenshot shows:
+
+- **The text.** `Widget.get_selection` asks the widget to `render()` and selects
+  out of that Visual. These widgets have no `render()` — their rows are
+  already-parsed `Text` — so the default found nothing: the screen highlighted
+  while the clipboard stayed blank.
+- **The paint.** Textual applies the selection style inside
+  `Visual.to_strips`, the path a widget *with* a `render()` takes.
+  `render_line` is the whole story here, so the style had to be applied by
+  hand from the screen's `screen--selection` component styles. Skip it and a
+  drag shows nothing at all.
+
+And the colour is the theme's, because `TOKEN_SLOTS` now binds
+`screen-selection-*` to `selection-background` / `selection-foreground` — the
+same pair the picker marks a theme with. A selection in a theme editor that is
+not the theme's colour is the whole subject of §6.2, and I2 cannot see it: the
+goldens never have a selection down.
+
+**One thing `ALLOW_SELECT = True` would have broken.** Textual makes *every*
+widget selectable by default and the screen checks the *app's* `ALLOW_SELECT`,
+so a plain block — a swatch, a header, a hint — would start a text selection
+when clicked, and clicking a swatch is how a colour is selected. `Frame` turns
+it off and `Selectable` turns it on. The failure would have been silent: the
+selection looks like nothing happened.
 
 **And a bug I1 was structurally unable to see.** `redraw` read the frame's
 height from the compositor and `draw_editor` read it from the terminal: one
