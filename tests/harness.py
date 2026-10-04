@@ -196,30 +196,31 @@ def capture_reference(fixture, cols, rows, sel=0):
 
 
 def capture_reference_picker(fixture, cols, rows, picker="long", status=None):
-    """The picker as the editor writes it today, no framework involved.
+    """The picker as the direct-mode editor wrote it, no framework involved.
 
-    Same direct-mode session as `capture_reference`, with the overlay the way
-    `draw_editor` takes it: `(names, index, current)`. The current theme is the
-    fixture's, so the picker is looking at a theme that is in its own list —
-    which is what makes the `*` marker appear at all.
+    The two steps below are what `draw_editor`'s overlay branch did and what
+    `app.Picker` does now: `theme_lines` for the rows, `backdrop` to fill each
+    one out to the last column in the buffer's own background (§8.2). They are
+    written out rather than called because that branch is gone, and it is right
+    that it is — the reference has to be the picker *as a frame*, not as a
+    second mode of the editor's frame, or deleting the mode would delete the
+    reference along with it.
+
+    Returns `(raw, written_rows)`, the same shape as `capture_reference`.
     """
-    import huebox.editor as editor
+    from huebox.editor import backdrop, theme_lines
 
     spec = FIXTURES[fixture]
     scene = PICKERS[picker]
-    original = editor.term_size
-    editor.term_size = lambda default=(80, 24): (cols, rows)
-    buffer = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buffer):
-            editor.draw_editor("ghostty", "", spec["slots"], 0, [], status,
-                               REFERENCE_MULT,
-                               overlay=(scene["names"], scene["index"],
-                                        CURRENT_THEME))
-    finally:
-        editor.term_size = original
-    raw = buffer.getvalue()
+    lines = [backdrop(line, spec["slots"], cols)
+             for line in theme_lines(scene["names"], scene["index"],
+                                     CURRENT_THEME, cols, rows, status,
+                                     spec["slots"])]
+    # §8.2, and the same rule `draw_editor` follows: the trailing CRLF is
+    # withheld when the rows fill the screen, or it scrolls the top row off.
+    raw = "\r\n".join(lines) + ("\r\n" if len(lines) < rows else "")
     return raw.encode("utf-8"), emitted_rows(raw)
+
 
 
 #: The theme the picker is "looking at". It is in `PICKERS["long"]` at `t20`

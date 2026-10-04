@@ -18,6 +18,8 @@ read the same as they did.
 
 from __future__ import annotations
 
+import sys
+
 from huebox import editor, tui
 
 
@@ -66,11 +68,20 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
             # points, which is how the suites capture it — `editor.edit` wrote to
             # the real stdout too, and swallowing it into a throwaway would make
             # every status-line assertion see nothing.
-            paint(fmt, editor.session_path(state), state.slots,
-                  state.sel, state.undo, state.status, state.mult,
-                  head=editor.head_label(state),
-                  overlay=state.picker_frame(),
-                  grid=state.grid)
+            if state.picker_frame() is not None:
+                # §13.7 — the picker is its own frame since phase 5, and this
+                # harness paints whichever frame is up, exactly as the shell
+                # does. `app.Picker`: `theme_lines`, then `backdrop`.
+                overlay = state.picker_frame()
+                for line in editor.theme_lines(*overlay, size[0], size[1],
+                                               state.status, state.slots):
+                    sys.stdout.write(editor.backdrop(line, state.slots, size[0])
+                                     + "\r\n")
+            else:
+                paint(fmt, editor.session_path(state), state.slots,
+                      state.sel, state.undo, state.status, state.mult,
+                      head=editor.head_label(state),
+                      grid=state.grid)
             try:
                 key = next_key()
             except StopIteration:

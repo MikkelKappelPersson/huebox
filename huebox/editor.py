@@ -308,8 +308,7 @@ class Hit(NamedTuple):
 
 
 def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
-               sel=0, undo=(), status="", mult=1, head=None,
-               overlay=None) -> list:
+               sel=0, undo=(), status="", mult=1, head=None) -> list:
     """Every colour cell a frame `cols` wide draws, as `Hit`s.
 
     The rows are the frame's own: `draw_editor` announces each cell as it paints
@@ -319,13 +318,17 @@ def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
     found: list = []
     with contextlib.redirect_stdout(io.StringIO()):
         draw_editor(fmt, path, slots or {}, sel, list(undo), status, mult,
-                    head=head, overlay=overlay, hits=found,
-                    size=(cols, rows or 24))
+                    head=head, hits=found, size=(cols, rows or 24))
     return found
 
 
 def theme_hits(names, index, current, cols, rows, slots=None, status="") -> list:
-    """Every picker row, as `Hit`s whose `slot` is the row in the library."""
+    """Every picker row, as `Hit`s whose `slot` is the row in the library.
+
+    The window is the point of this one: a row's frame position depends on how
+    far down the library it is, so asking this at the wrong moment describes a
+    picker that is not the one on screen.
+    """
     found: list = []
     theme_lines(names, index, current, cols, rows, status=status,
                 slots=slots, hits=found)
@@ -341,7 +344,7 @@ def slot_at(hits, x: int, y: int):
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                overlay=None, grid=None, hits=None, size=None):
+                grid=None, hits=None, size=None):
     """The frame, written to stdout.
 
     `size` overrides the terminal query. Textual knows the size it was given —
@@ -361,23 +364,10 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     if grid is None:
         grid = grid_geometry(cols)      # §4.3 — what this frame draws, and
                                         # what the arrows step through
-    if overlay is not None:
-        # §13.7 — the picker owns the frame while it is up. It shares the
-        # editor's minimum size, so the too-small check above already said
-        # what to do when there is no room for either.
-        names, index, current = overlay
-        lines = theme_lines(names, index, current, cols, rows, status, slots)
-        # §8.2, and the same rule the editor frame follows below: the trailing
-        # CRLF is withheld when the rows fill the screen. Written on the bottom
-        # row it scrolls the terminal, and the frame loses its top row — here
-        # the picker's own header, at 60x16 with a library long enough to fill
-        # it. A blank row replaces it, so the library appeared to start one
-        # row lower than it did.
-        sys.stdout.write("\r\n".join(
-            backdrop(line, slots, cols) for line in lines)
-            + ("\r\n" if len(lines) < rows else ""))
-        sys.stdout.flush()
-        return
+    # §13.7 — the picker is no longer a second mode of this function. It was
+    # `overlay=` for the whole migration, and phase 5 gave it a widget; the
+    # frame it used to be handed on the side is now `theme_lines`, which is
+    # what it always was underneath.
     body = []
 
     label = fmt if head is None else head
@@ -584,7 +574,7 @@ class EditorState:
     a theme switch (decision 12).
 
     `theme` is the name of the theme being edited (`None` in a legacy
-    direct-mode session), `overlay` the picker's rows while it is up, and
+    direct-mode session), and
     `library` the injected seam the picker asks for themes. Each of those
     can change mid-session, which is why the writer is bound to the state
     and not to `edit()`'s arguments. `grid` is the frame's shape: the

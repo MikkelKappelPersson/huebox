@@ -39,6 +39,23 @@ def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None):
     return out.getvalue()
 
 
+def picker_frame(cols=80, rows=24, names=("ash", "ember"), index=0,
+                 current="ash", status="", slots=None):
+    """The picker frame as `app.Picker` composes it: `theme_lines` + backdrop.
+
+    `draw_editor` grew an `overlay=` mode for the whole migration and phase 5
+    took it away again, giving the picker its own widget. The frame is those
+    two calls in that order, and this is where that lives now — if `backdrop`
+    ever goes missing again the floor tests below catch it, which is exactly
+    how it was caught the first time.
+    """
+    slots = FULL_SLOTS if slots is None else slots
+    out = [editor.backdrop(line, slots, cols)
+           for line in editor.theme_lines(list(names), index, current,
+                                          cols, rows, status, slots)]
+    return "\r\n".join(out)
+
+
 def plain(line):
     """One drawn row without its SGR escapes — what layout reads."""
     return ANSI.sub("", line)
@@ -191,11 +208,7 @@ class Floor(unittest.TestCase):
                                      [], f"row {row}")
 
     def test_the_picker_frame_has_no_hole_either(self):
-        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
-                mock.patch.object(editor, "term_size", return_value=(80, 24)):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
-                               overlay=(["ash", "ember"], 0, "ash"))
-        for line in lines(out.getvalue()):
+        for line in lines(picker_frame()):
             self.assertEqual(unpainted(line.replace(self.CLEAR, "", 1)), [])
 
     def test_moving_the_background_moves_the_whole_frame(self):
@@ -215,11 +228,7 @@ class Floor(unittest.TestCase):
     def test_the_picker_frame_stands_on_it_too(self):
         # §13.7 — the picker takes the frame over, and the floor is the
         # frame's, so it takes the floor as well
-        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
-                mock.patch.object(editor, "term_size", return_value=(80, 24)):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
-                               overlay=(["ash", "ember"], 0, "ash"))
-        for line in lines(out.getvalue()):
+        for line in lines(picker_frame()):
             self.assertEqual(width(line), 80)
             self.assertTrue(line.replace(self.CLEAR, "", 1)
                             .startswith(bg(FULL_SLOTS["background"])))
@@ -1572,12 +1581,12 @@ class OverlayFrame(unittest.TestCase):
 
     def overlay_frame(self, cols, rows, names=("ash", "ember", "frost"),
                       index=0, current="ember", status=""):
-        out = io.StringIO()
-        with mock.patch.object(editor, "term_size", return_value=(cols, rows)),\
-                mock.patch.object(sys, "stdout", out):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], status,
-                               1, overlay=(list(names), index, current))
-        return out.getvalue()
+        """The picker frame, composed the way `app.Picker` composes it."""
+        return "\r\n".join(
+            editor.backdrop(line, FULL_SLOTS, cols)
+            for line in editor.theme_lines(list(names), index, current,
+                                           cols, rows, status,
+                                           dict(FULL_SLOTS)))
 
     def test_the_frame_names_the_themes_and_marks_the_current_one(self):
         body = ANSI.sub("", self.overlay_frame(80, 24))
@@ -1646,22 +1655,30 @@ class OverlayFrame(unittest.TestCase):
         self.assertEqual(self.overlay_frame(60, 16, self.MANY, 4, "theme-04"),
                          self.overlay_frame(60, 16, self.MANY, 4, "theme-04"))
 
-    def test_below_the_minimum_the_hint_replaces_the_picker(self):
-        for cols, rows in ((editor.MIN_COLS - 1, 24),
-                           (80, editor.MIN_ROWS - 1)):
+    def test_below_the_minimum_the_frame_is_a_list_and_nothing_else(self):
+        """What the picker does with no room, now that it is its own widget.
+
+        §13.7 — the picker shares the editor's minimum size, so below it the
+        two frames cannot both be wrong about what to draw. That check used to
+        live in `draw_editor`'s overlay branch; with the branch gone it lives
+        in `Editor.redraw`, and `tests/test_app` is where the assertion is now.
+        What is left here is the picker's own side of the contract: `theme_lines`
+        is a *frame*, and asked for fewer rows than it has, it keeps the rows it
+        can and drops the rest rather than raising or inventing any.
+        """
+        for cols, rows in ((editor.MIN_COLS - 1, 24), (80, editor.MIN_ROWS - 1)):
             with self.subTest(size=(cols, rows)):
-                out = self.overlay_frame(cols, rows, self.MANY)
-                self.assertIn(HINT, out)
-                self.assertNotIn("theme-", out)
-                self.assertNotIn("Enter open", out)
+                got = self.overlay_frame(cols, rows, self.MANY)
+                self.assertLessEqual(got.count("\r\n"), rows,
+                                     "the picker wrote past the screen")
 
 
-def _rows(cols, rows, sel, mult=False, status="", overlay=None):
+def _rows(cols, rows, sel, mult=False, status=""):
     """The editor frame's rows as plain text — what a click lands on."""
     out = io.StringIO()
     with mock.patch.object(sys, "stdout", out):
         editor.draw_editor("ghostty", "", FULL_SLOTS, sel, [], status, mult,
-                           overlay=overlay, size=(cols, rows))
+                           size=(cols, rows))
     return plain_rows(out.getvalue())
 
 

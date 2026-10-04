@@ -369,3 +369,43 @@ class TheMouse(unittest.TestCase):
 class _Event:
     def stop(self):
         pass
+
+
+@needs_app
+class ThePickersMinimum(unittest.TestCase):
+    """§13.7 — below the minimum, both frames are the same hint.
+
+    The check used to sit inside `draw_editor`'s overlay branch, so the picker
+    inherited it for free while the editor had it in a different place. With
+    the picker a widget the two frames have separate mounts and the check has
+    to be asked once, by whichever frame is up — which is the only way a frame
+    added later cannot forget it.
+    """
+
+    def test_below_the_minimum_the_hint_replaces_the_picker(self):
+        from huebox.render import MIN_COLS, MIN_ROWS
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        for cols, rows in ((MIN_COLS - 1, 24), (80, MIN_ROWS - 1)):
+            with self.subTest(size=f"{cols}x{rows}"):
+                patcher = mock.patch.object(
+                    huebox_app.Editor, "size", new_callable=mock.PropertyMock,
+                    return_value=Offset(cols, rows))
+                patcher.start()
+                self.addCleanup(patcher.stop)
+                with mock.patch.dict(
+                        os.environ,
+                        {"HUEBOX_SLOTS": path, "HUEBOX_PICKER": "1",
+                         "HUEBOX_PICKER_NAMES": "ash,ember,frost",
+                         "HUEBOX_PICKER_INDEX": "1"}):
+                    editor = huebox_app.Editor()
+                    editor.query = lambda *a, **k: ()
+                    editor.mount = lambda *a, **k: None
+                    editor.redraw()
+                body = "".join(row for row in editor.rows_text)
+                self.assertIn("too small", body)
+                for name in ("ash", "ember", "frost"):
+                    self.assertNotIn(name, body,
+                                     "the picker drew through the hint")
