@@ -919,3 +919,101 @@ async def _key(app, pilot, name):
     event.set_sender(app)
     app.post_message(event)
     await pilot.pause()
+
+
+@needs_app
+class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
+    """The frame is the window. It cannot scroll, at any size.
+
+    You reported it: the editor could be scrolled when everything already fit,
+    and scrolling revealed a stale copy of the header and the palette. A stale
+    rendering is what a scroll offset makes: the cells a scroll exposes were
+    painted for a window that no longer exists, and nothing repaints them
+    because nothing believes they changed.
+
+    I could not reproduce the trigger — a bare pty at seven sizes never scrolls
+    the terminal and never leaves pre-existing content visible — so these are
+    the *consequences* made impossible, not the cause found. Two things do it:
+    the screen is told it cannot scroll (§15 fills the window exactly, and
+    nothing in the frame scrolls — the picker scrolls by selection, because a
+    viewport moving on its own would move the `8-26 of 34` counter and I1 would
+    see it), and any scroll offset left from a resize is cleared.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    async def test_no_size_offers_a_scroll(self):
+        app = await self._app()
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            for cols, rows in ((150, 50), (120, 40), (100, 30), (80, 24),
+                               (200, 60), (60, 16), (40, 12)):
+                with self.subTest(size=f"{cols}x{rows}"):
+                    await pilot.resize_terminal(cols, rows)
+                    await pilot.pause()
+                    self.assertEqual(app.screen.max_scroll_y, 0,
+                                     "the frame is taller than the window at "
+                                     "%dx%d" % (cols, rows))
+                    self.assertLessEqual(app.screen.virtual_size.height, rows,
+                                         "virtual size exceeds the window")
+                    self.assertEqual(app.screen.scroll_y, 0.0)
+
+    async def test_the_wheel_cannot_scroll_the_frame(self):
+        """With no picker up, a wheel notch does nothing at all.
+
+        This was already the intent — `_scroll_picker` returns unless the picker
+        is up — but intent is not the guarantee. Textual's own screen scrolling
+        is a second path to the same symptom, and this is the assertion that
+        says the frame has exactly one."""
+        from textual import events
+
+        app = await self._app()
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            for _ in range(3):
+                event = events.MouseScrollUp(app.focused, 10, 10, 0, -3, 0,
+                                             False, False, False)
+                event.set_sender(app)
+                app.post_message(event)
+                await pilot.pause()
+            self.assertEqual(app.screen.scroll_y, 0.0,
+                             "the wheel scrolled the frame with no picker up")
+            self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_the_screen_refuses_to_scroll_at_all(self):
+        """Stronger than "never scrolls": it will not scroll if asked.
+
+        `scroll_to` on a screen with `overflow: hidden` is a no-op, so even a
+        stale offset left by a resize mid-frame cannot survive to be revealed by
+        a wheel. This started life as the opposite assertion — the screen was
+        expected to hold an offset that a resize then had to clear — and it
+        turned out the offset could never be established at all. The stronger
+        guarantee is the one worth keeping, and the weaker one would have been a
+        test that only passed because it manufactured its own precondition.
+        """
+        app = await self._app()
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            for cols, rows in ((150, 50), (100, 30), (80, 24)):
+                with self.subTest(size=f"{cols}x{rows}"):
+                    app.screen.scroll_to(y=3, animate=False)
+                    await pilot.pause()
+                    self.assertEqual(app.screen.scroll_y, 0.0,
+                                     "the frame scrolled when told to")
+                    self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_a_resize_still_lays_the_frame_out_from_scratch(self):
+        app = await self._app()
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            await pilot.resize_terminal(100, 30)
+            await pilot.pause()
+            self.assertEqual((app.size.width, app.size.height), (100, 30))
+            self.assertLessEqual(len(app.rows_text), 30)
+            self.assertEqual(app.screen.scroll_y, 0.0)
+            self.assertEqual(sum(c for _, _, c in app.regions),
+                             len(app.rows_text))

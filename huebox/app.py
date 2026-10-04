@@ -421,6 +421,24 @@ class Editor(App):
     """
 
     ENABLE_COMMAND_PALETTE = False
+    # Textual's `Screen` is `overflow-y: auto`, so any frame whose content is a
+    # row taller than the window gets a scrollbar and a wheel that scrolls it.
+    # Nothing in huebox's frame should ever scroll: §15 lays the blocks out to
+    # fill the window exactly, and the picker scrolls by *selection* — the
+    # window in `theme_lines` is a function of `overlay_index`, because a
+    # viewport that moved on its own would move the `8-26 of 34` counter and I1
+    # would see it.
+    #
+    # So the screen is told so explicitly. "Fits exactly" is a property of the
+    # layout; "therefore cannot scroll" is a consequence, and a consequence the
+    # framework will not infer. Left implicit it is also invisible: a wheel
+    # scroll moves the frame a row and the cells it exposes were painted for a
+    # window that no longer exists, which reads as a stale header rather than as
+    # a scroll.
+    CSS = """
+    Screen { overflow: hidden; }
+    """
+
     BINDINGS = []
 
     def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", slots=None,
@@ -592,6 +610,13 @@ class Editor(App):
         # headless suites, and `tests/session.py` — has no focus to place.
         if not self.is_running:
             return
+        # The frame is the window, so any scroll offset on the screen is left
+        # over from a moment when it was not — a resize mid-frame, or a frame
+        # laid out one row taller than the window it is in. Leaving it there is
+        # what makes a scroll reveal a stale header: the cells the scroll exposes
+        # were painted for a window that no longer exists, and nothing repaints
+        # them because nothing thinks they changed.
+        self.screen.scroll_home(animate=False)
         if picker_up:
             for block in self.query(Picker):
                 block.focus()
