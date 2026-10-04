@@ -806,3 +806,116 @@ def _hex(color):
         return "#%02x%02x%02x" % tuple(color.get_truecolor())
     except (ValueError, AttributeError):          # not a truecolor: a named or
         return None                               # ANSI colour, not a theme one
+
+
+@needs_app
+class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
+    """Every key in §4.3, pressed into a real session built the real way.
+
+    This is the test whose absence let a crash ship. I1 compares one frame
+    against one golden and never sends a key; the headless sessions drive
+    `EditorState` built by `EditorState.__init__`, where `mult` is the int
+    `MULT_STEPS[0]`. The app builds its session in `Editor.build_state`, from
+    the environment, and *that* one had `mult` as a string. So the two ways of
+    making a session disagreed, nothing compared them, and `q` — the editor's
+    main verb — raised `can't multiply sequence by non-int of type float`.
+
+    It stayed green because the harness agreed with it: `REFERENCE_MULT` was
+    `False`, so `HUEBOX_MULT` was `"False"`, a different wrong type that
+    rendered `f xFalse` in *both* sides. Two wrongs matching is not agreement.
+
+    The property worth keeping is not "these keys move the colour" — `test_editor`
+    owns that — but that a session built by the app and a session built by
+    `EditorState` are the same kind of thing, and that nothing the app reads
+    from the environment arrives as the wrong type.
+    """
+
+    async def _app(self, **env):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        environ = {"HUEBOX_SLOTS": path}
+        environ.update(env)
+        with mock.patch.dict(os.environ, environ):
+            return huebox_app.Editor()
+
+    async def test_every_adjust_key_survives_a_session_the_app_built(self):
+        for key in ("q", "w", "a", "s", "z", "x"):
+            with self.subTest(key=key):
+                app = await self._app()
+                async with app.run_test(size=(100, 30)) as pilot:
+                    await pilot.pause()
+                    # A saturated slot, not palette-0: the fixture's palette-0
+                    # is near-black, and a hue step on a colour that is already
+                    # black leaves it black. That is §5 behaving correctly and
+                    # would read here as "the key did nothing".
+                    app.state.sel = 1
+                    before = app.state.slots["palette-1"]
+                    await _key(app, pilot, key)
+                    self.assertNotEqual(app.state.slots["palette-1"], before,
+                                        "%s did not move the colour" % key)
+
+    async def test_the_step_multiplier_key_survives_too(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            start = app.state.mult
+            await _key(app, pilot, "f")
+            self.assertNotEqual(app.state.mult, start)
+            self.assertIn(app.state.mult, list(huebox_app.MULT_STEPS))
+
+    async def test_mult_is_a_step_and_not_a_string(self):
+        for raw in (None, "1", "5", "20", "False", "nonsense", ""):
+            with self.subTest(raw=raw):
+                self.assertEqual(huebox_app._mult_step(raw),
+                                 int(raw) if raw in ("1", "5", "20")
+                                 else huebox_app.MULT_STEPS[0])
+                self.assertIsInstance(huebox_app._mult_step(raw), int)
+
+    async def test_the_app_and_the_state_agree_on_a_session(self):
+        """Same fixture, same environment, one built each way."""
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            from huebox.editor import EditorState, MULT_STEPS
+
+            plain = EditorState(dict(harness.FIXTURES["distinct"]["slots"]),
+                                None, lambda label: "",
+                                lambda path: None)
+            self.assertEqual(type(app.state.mult), type(plain.mult))
+            self.assertEqual(app.state.mult, plain.mult)
+            self.assertEqual(app.state.sel, plain.sel)
+            self.assertEqual(MULT_STEPS[0], 1)
+
+    async def test_the_hint_line_shows_the_step_not_its_repr(self):
+        """`f x1`, never `f xFalse` or `f x'1'`.
+
+        The hint line prints the multiplier verbatim, so a string multiplier is
+        visible on screen even before it is fatal — which is how the golden came
+        to record `f xFalse` in the first place."""
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            hints = [_plain(row) for row in app.rows_text if "arrows" in row]
+            self.assertEqual(len(hints), 1, "no hint line")
+            self.assertIn("f x1", hints[0])
+            self.assertNotIn("xFalse", hints[0])
+
+
+def _plain(row):
+    """One drawn row without its SGR — what the user reads."""
+    from rich.text import Text        # lazy: rich is Textual's, and this
+    return Text.from_ansi(row).plain   # module skips when it is absent
+
+
+async def _key(app, pilot, name):
+    """A keypress, as a terminal sends it.
+
+    `pilot.press` goes through the driver, and the headless driver's input path
+    does not deliver, so the event is posted to the app's own queue.
+    """
+    from textual import events
+
+    event = events.Key(name, None)
+    event.set_sender(app)
+    app.post_message(event)
+    await pilot.pause()

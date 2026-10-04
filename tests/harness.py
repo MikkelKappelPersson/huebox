@@ -65,7 +65,7 @@ DEFAULT = "default"          # pyte's sentinel for "the terminal's own colour"
 #: whatever `capture_reference` passes and the candidate takes the same string
 #: through `HUEBOX_MULT`. One constant, so the hint row cannot drift apart by a
 #: word and be mistaken for a colour difference.
-REFERENCE_MULT = False
+REFERENCE_MULT = 1          # MULT_STEPS[0] — the value a real session starts on
 REFERENCE_STATUS = ""
 REFERENCE_UNDO: list = []
 

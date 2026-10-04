@@ -72,6 +72,28 @@ GRID_BLOCKS = ("palette", "interface")
 GRID_KEYS = ("left", "right", "up", "down")
 
 
+def _mult_step(raw) -> int:
+    """`HUEBOX_MULT` as one of `MULT_STEPS`, whatever shape it arrives in.
+
+    `str(MULT_STEPS[0])` used to be the default here, and that is a string:
+    `step_hsv` multiplies the step by it, so `q`, `w`, `a`, `s`, `z` and `x`
+    all died with `can't multiply sequence by non-int of type float`, and `f`
+    died on `MULT_STEPS.index("1")`. Every one of those keys is the editor's
+    main verb.
+
+    The harness did not catch it because `REFERENCE_MULT` was `False`, so
+    `HUEBOX_MULT` was the string `"False"` — a *different* wrong type that
+    rendered as `f xFalse` in the golden and `f xFalse` in the candidate, and
+    the two wrongs matched. §6.2's lesson in a new place: pinning an argument
+    no real session passes buys an I1 that cannot fail.
+    """
+    if raw is not None:
+        for step in MULT_STEPS:
+            if raw == str(step):
+                return step
+    return MULT_STEPS[0]
+
+
 KEYS = {
     "escape": "esc",
     "ctrl+c": "\x03",
@@ -449,7 +471,7 @@ class Editor(App):
             state.write = lambda values: self.write(state.theme, state.path,
                                                     values)
         state.sel = int(os.environ.get("HUEBOX_SEL", "0"))
-        state.mult = os.environ.get("HUEBOX_MULT", str(MULT_STEPS[0]))
+        state.mult = _mult_step(os.environ.get("HUEBOX_MULT"))
         state.status = os.environ.get("HUEBOX_STATUS", "")
         scene = os.environ.get("HUEBOX_PICKER")
         if scene:

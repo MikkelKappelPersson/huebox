@@ -1,6 +1,6 @@
 # huebox — Textual migration
 
-Status: **phases 0–4 landed, picker pinned and its scroll defect fixed, phase 5 started (picker, then the frame's blocks), no TODOs open** · Plans spec:
+Status: **phases 0–5 landed; the picker, the frame's blocks and the grids extracted; two launch-contract defects fixed; no TODOs open** · Plans spec:
 `spec.md` §5, §8.2, §14.1, §15, §9, §10 · Conventions: `AGENTS.md`
 
 A plan-class document, like `plan.md`, not a format version. `spec.md` moves to
@@ -486,6 +486,11 @@ so a plain block — a swatch, a header, a hint — would start a text selection
 when clicked, and clicking a swatch is how a colour is selected. `Frame` turns
 it off and `Selectable` turns it on. The failure would have been silent: the
 selection looks like nothing happened.
+
+**And then the harness itself lied, twice.** See §7: I1 compares one frame
+against one golden and never sends a key, so a session built by the app — as
+opposed to one built by `EditorState`, which is what the headless suites drive
+— was never exercised at all. That gap hid a crash in every HSL key.
 
 **And a bug I1 was structurally unable to see.** `redraw` read the frame's
 height from the compositor and `draw_editor` read it from the terminal: one
