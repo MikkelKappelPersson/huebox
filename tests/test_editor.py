@@ -254,9 +254,12 @@ class Readout(unittest.TestCase):
     EXACT = SPECIMEN + len(hsv_numbers(207 / 360, 0.594, 0.937)) + 3
 
     def selected(self, cols, rows=30, sel=4, slots=None, painted=False):
+        # §8.1 (decision 36) — the readout sits in the right column of
+        # the side-by-side top block where it fits, so the row carries the
+        # left column's air before the `selected` title; strip it first.
         body = lines(frame(cols, rows, sel=sel, slots=slots or self.SLOTS))
         row = next(line for line in body
-                   if plain(line).startswith("  selected"))
+                   if plain(line).strip().startswith("selected "))
         return row if painted else plain(row)
 
     CELL = re.compile(r"\x1b\[48;2;(\d+);(\d+);(\d+)m"
@@ -292,19 +295,22 @@ class Readout(unittest.TestCase):
 
     def test_both_readings_are_on_screen_where_the_row_fits(self):
         # the bars are the glance, the exact numbers are the truth, and
-        # neither of them gives up a row for the other (§8.3)
-        wide = self.selected(100)
-        self.assertEqual(len(self.bars(100)), sum(HSV_FULL))
+        # neither of them gives up a row for the other (§8.3). The full
+        # rung needs the right column's width (decision 36), so it is a
+        # 120-column row that carries it; at 100 the compact rung stands in.
+        wide = self.selected(120)
+        self.assertEqual(len(self.bars(120)), sum(HSV_FULL))
         for reading in ("hue 207°", "sat  59%", "val  94%"):
             self.assertIn(reading, wide)          # beside its bar
-        self.assertIn(self.exact(), self.specimen(100))
+        self.assertIn(self.exact(), self.specimen(120))
         self.assertNotIn(self.exact(), wide)
+        self.assertEqual(len(self.bars(100)), sum(HSV_COMPACT))
 
     def test_a_bar_carries_the_sweep_and_the_line_and_nothing_else(self):
         # the arrangement that lets the number and the hairline both be
         # complete: the reading is beside its bar, so the bar has only the
         # sweep and the line in it, and there is nothing for the line to take
-        cells = self.bars(100)
+        cells = self.bars(120)
         self.assertEqual(len(cells), sum(HSV_FULL))
         self.assertEqual({cell[6] for cell in cells} - {" "}, {"\u258f"})
         # the hairline is the only ink in a bar, and it is one per bar
@@ -340,10 +346,10 @@ class Readout(unittest.TestCase):
                       dict(self.SLOTS, **{"palette-4": "#61aaff"})):
             body = plain_rows(frame(100, 30, sel=4, slots=slots))
             row = next(line for line in body
-                       if line.startswith("  selected"))
+                       if line.strip().startswith("selected "))
             self.assertLessEqual(visible(row), 100)
             bars = self.bars(100, slots=slots)
-            self.assertEqual(len(bars), sum(HSV_FULL))
+            self.assertEqual(len(bars), sum(HSV_COMPACT))
             if at is None:
                 at = visible(row) - len(bars)
             self.assertEqual(visible(row) - len(bars), at)
@@ -388,6 +394,95 @@ class Readout(unittest.TestCase):
         self.assertEqual(code_lines(lines(wide)), code_lines(lines(narrow)))
         self.assertEqual(example_rows(lines(wide)),
                          example_rows(lines(narrow)))
+
+
+class TopBlock(unittest.TestCase):
+    """The side-by-side top block: wordmark left, theme readout right.
+
+    Decision 36 — `[huebox] [theme/path, selected]`: the header and the
+    selected readout share three rows at the top of the frame instead of
+    five scattered ones, so the palette grid moves up a row and the
+    widgets below gain it. Below `TOP_MIN_COLS` the right column cannot
+    hold even a bare readout and the frame keeps the stacked header.
+    """
+
+    SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
+                 **{"palette-4": "#61afef"})
+
+    def top(self, cols, rows=30, sel=4, slots=None):
+        return plain_rows(frame(cols, rows, sel=sel,
+                                slots=slots or self.SLOTS))[:4]
+
+    def test_the_wordmark_and_the_theme_share_the_first_row(self):
+        row = self.top(100)[0]
+        self.assertTrue(row.startswith("  huebox"))
+        self.assertIn("ghostty", row)
+        self.assertIn("/tmp/huebox.conf", row)
+        # the left column is the indent, the six letters and the gap
+        self.assertEqual(row[:editor.TOP_LEFT_W], "  huebox    ")
+
+    def test_the_selected_readout_sits_beside_the_wordmark(self):
+        first, second, third = self.top(100)[:3]
+        self.assertIn("selected", second)
+        self.assertIn("palette-4", second)
+        self.assertIn("#61afef", second)
+        self.assertIn("AaBbCc", third)
+        self.assertIn("hue 207.0", third)
+        # the readout rows carry the left column's air, not a second copy
+        self.assertTrue(second.startswith(" " * editor.TOP_LEFT_W))
+        self.assertNotIn("huebox", second)
+
+    def test_the_right_column_keeps_the_ladder(self):
+        # full where the right column has the columns, compact a rung
+        # down, nothing where even the tight rung does not fit — the same
+        # ladder as §8.3, measured against the column, not the frame
+        def bars(cols):
+            painted = lines(frame(cols, 30, sel=4, slots=self.SLOTS))
+            row = next(line for line in painted
+                       if plain(line).strip().startswith("selected "))
+            cells = Readout.CELL.findall(row)
+            return [cell for cell in cells
+                    if (tuple(int(v) for v in cell[:3]) != Readout.FILL
+                        or cell[6] != " ")]
+        self.assertEqual(len(bars(120)), sum(HSV_FULL))
+        self.assertEqual(len(bars(100)), sum(HSV_COMPACT))
+        self.assertEqual(bars(80), [])
+
+    def test_below_the_floor_the_header_stacks_again(self):
+        body = self.top(40, rows=24)
+        self.assertTrue(body[0].startswith("  huebox  ghostty"))
+        self.assertNotIn("selected", body[0])
+        # the readout stays below the interface grid, as it always was
+        full = plain_rows(frame(40, 24, sel=4, slots=self.SLOTS))
+        selected = next(i for i, line in enumerate(full)
+                        if line.strip().startswith("selected "))
+        interface = next(i for i, line in enumerate(full)
+                         if line.strip() == "interface")
+        self.assertGreater(selected, interface)
+
+    def test_the_top_names_both_of_its_blocks(self):
+        found = []
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [],
+                               "", 1, regions=found, size=(100, 30))
+        names = [name for name, _, _ in found]
+        self.assertEqual(names[:2], ["header", "selected"])
+        self.assertEqual(found[0][1], 0)
+        self.assertEqual(found[0][1] + found[0][2], found[1][1])
+
+    def test_the_banner_keeps_the_right_column(self):
+        # the raster banner above is the only huebox on screen: the top
+        # block's wordmark stands back to air, the theme readout stays
+        auto = plain_rows(frame(120, 55))
+        # the banner is block art and the top block stood its wordmark
+        # back to air: the theme row starts with the left column's air,
+        # not the letters (the path still names huebox, as it should)
+        theme = next(line for line in auto if "ghostty" in line)
+        self.assertEqual(theme[:editor.TOP_LEFT_W],
+                          " " * editor.TOP_LEFT_W)
+        selected = next(line for line in auto
+                        if line.strip().startswith("selected "))
+        self.assertIn("palette-3", selected)
 
 
 class TooSmall(unittest.TestCase):
@@ -525,8 +620,10 @@ class NormalFrame(unittest.TestCase):
         # §15 — where the sample needs every row the hunk is simply not
         # drawn, and the other two widgets keep the rows the v1 ladder gave
         # them: (cols, rows, strip rows, sample lines)
+        # Decision 36's side-by-side top saves a row, and at 80x26 the
+        # sample spends it (five lines where four used to fit).
         for cols, rows, strip, code in ((100, 30, 3, 7), (80, 30, 3, 7),
-                                        (80, 26, 3, 4), (80, 24, 3, 4),
+                                        (80, 26, 3, 5), (80, 24, 3, 4),
                                         (80, 22, 3, 4), (80, 20, 3, 3),
                                         (80, 16, 0, 3), (60, 24, 3, 4)):
             with self.subTest(size=(cols, rows)):
@@ -593,12 +690,14 @@ class NormalFrame(unittest.TestCase):
             return (not plain(body[head - 1]).strip(),
                     not plain(body[hunk + 1]).strip())
 
+        # Decision 36's saved row moves the whole ladder one row down:
+        # the air that used to start at 120x38 starts at 120x36 instead.
         for cols, rows, (above, below) in ((120, 44, (True, True)),
                                            (120, 40, (True, True)),
                                            (112, 40, (True, True)),
-                                           (120, 38, (False, True)),
-                                           (120, 36, (False, True)),
-                                           (110, 36, (False, False))):
+                                           (120, 38, (True, True)),
+                                           (120, 36, (False, False)),
+                                           (110, 36, (False, True))):
             with self.subTest(size=(cols, rows)):
                 self.assertEqual(blanks(cols, rows), (above, below))
 
@@ -627,12 +726,18 @@ class NormalFrame(unittest.TestCase):
         self.assertNotEqual(legend, row(**{"palette-8": "#ff00ff"}))
 
         # a header, by contrast, wears the theme's own foreground and
-        # nothing else — moving a palette slot must leave it alone
-        needle = "palette"
-        head = row()
+        # nothing else — moving a palette slot must leave it alone.
+        # The title row is matched exactly: the side-by-side top block
+        # (decision 36) puts a `palette-N` readout above it, and a
+        # substring search would stop on that row instead of the title.
+        def title_row(**slots):
+            found = lines(frame(100, 30, slots=dict(base, **slots)))
+            return next(line for line in found
+                        if ANSI.sub("", line).strip() == "palette")
+        head = title_row()
         self.assertIn(f"{BOLD}{fg(base['foreground'])}palette{RESET}", head)
         for slot in ("palette-11", "palette-14", "palette-8"):
-            self.assertEqual(head, row(**{slot: "#ff00ff"}))
+            self.assertEqual(head, title_row(**{slot: "#ff00ff"}))
 
         # the wordmark is the one ornament, and it is live: one letter, one
         # colour, and moving a slot that spells it moves the frame
@@ -648,12 +753,15 @@ class NormalFrame(unittest.TestCase):
         # never out of a widget: the golden sizes, and tall sizes whose
         # diff is whole, keep the wordmark; a taller terminal stands the
         # mini banner up; a tall one the raster banner — and the diff is
-        # whole throughout, so no rung ever costs a widget a row
+        # whole throughout, so no rung ever costs a widget a row.
+        # Decision 36's side-by-side top saves the frame a row, so each
+        # rung stands up one row earlier than it used to (mini at 41, the
+        # raster one at 44): taller leftover, honestly spent.
         for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12),
-                           (120, 40), (120, 41)):
+                           (120, 40)):
             with self.subTest(size=(cols, rows)):
                 self.assertIn("huebox", plain_rows(frame(cols, rows))[0])
-        for cols, rows in ((120, 42), (120, 44)):
+        for cols, rows in ((120, 41), (120, 43)):
             with self.subTest(size=(cols, rows)):
                 body = plain_rows(frame(cols, rows))
                 self.assertNotIn("huebox", body[0])
@@ -665,7 +773,7 @@ class NormalFrame(unittest.TestCase):
                 self.assertIn("huebox",
                                 plain_rows(frame(cols, rows,
                                                  banner=False))[0])
-        for cols, rows in ((120, 55), (100, 60)):
+        for cols, rows in ((120, 44), (120, 55), (100, 60)):
             with self.subTest(size=(cols, rows)):
                 body = plain_rows(frame(cols, rows))
                 self.assertNotIn("huebox", body[0])
@@ -697,12 +805,13 @@ class NormalFrame(unittest.TestCase):
                 self.assertEqual(marked[hit.y][hit.x0 + 1:hit.x0 + 2], ">")
 
     def test_the_mini_banner_leaves_everything_below_where_it_was(self):
-        # like the raster banner: an insertion above the frame at 120x44,
+        # like the raster banner: an insertion above the frame at 120x43,
         # not a reallocation — every row below the header is the wordmark
-        # frame's, shifted down by the mini banner's three rows
+        # frame's, shifted down by the mini banner's three rows. (43, not
+        # 44: decision 36's saved row stands the raster banner up at 44.)
         rows = len(editor.mini_banner_lines(FULL_SLOTS, 120)) + 2
-        auto = lines(frame(120, 44))
-        forced = lines(frame(120, 44, banner=False))
+        auto = lines(frame(120, 43))
+        forced = lines(frame(120, 43, banner=False))
         self.assertEqual(auto[rows:], forced[2:])
 
     def test_the_mini_banner_shifts_the_hit_map_with_the_frame(self):
@@ -710,15 +819,15 @@ class NormalFrame(unittest.TestCase):
         # on the `>` marker the frame paints for its slot
         shift = len(editor.mini_banner_lines(FULL_SLOTS, 120))
         plain = {hit.slot: hit
-                 for hit in editor.frame_hits(120, 44, use_banner=False)}
-        raised = editor.frame_hits(120, 44)
+                 for hit in editor.frame_hits(120, 43, use_banner=False)}
+        raised = editor.frame_hits(120, 43)
         self.assertEqual(len(plain), len(raised))
         for hit in raised:
             with self.subTest(slot=hit.slot):
                 twin = plain[hit.slot]
                 self.assertEqual((hit.x0, hit.x1), (twin.x0, twin.x1))
                 self.assertEqual(hit.y, twin.y + shift)
-                marked = _rows(120, 44, hit.slot)
+                marked = _rows(120, 43, hit.slot)
                 self.assertEqual(marked[hit.y][hit.x0 + 1:hit.x0 + 2], ">")
 
     def test_a_fold_never_splits_a_key_from_its_label(self):

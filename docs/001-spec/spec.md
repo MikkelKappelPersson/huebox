@@ -474,6 +474,21 @@ wordmark stands back in. The narrow preview is block art wherever the
 mini stands in, and ascii below it — every glyph still one column either
 way, so a piped preview holds its width.
 
+**The header and the readout share one top block, side by side.**
+`[huebox] [theme/path, selected]` (decision 36): the wordmark stands in a
+fixed left column (the indent, the six letters and the gap — `TOP_LEFT_W`
+columns) and the right column carries the theme subject on the first row
+and the selected slot's readout on the two below it — the bars beside the
+name and hex, the specimen with the exact numbers beneath. Three content
+rows plus one row of air, where the scattered header and readout used to
+cost five: the palette grid moves up and the widgets below gain the row.
+Below `TOP_MIN_COLS` the right column cannot hold even a bare readout (the
+longest slot name plus its hex), so the frame keeps the stacked header and
+the readout below the interface grid instead. Where the rows below leave
+room for a banner it stands above the block and the wordmark stands back to
+air, so the banner is still the only huebox on screen; the right column
+stays where it was, one banner lower.
+
 **Hints are `(key, what)` pairs, not strings.** The hint line paints a key and
 its label separately, so `pack` folds between *whole hints* and never between a
 key and the label it belongs to — which is why `pack` measures display columns
@@ -572,11 +587,16 @@ they go, and what is left is the hex — which is the value either way.
 
 The bars keep a ladder, because the row is one row and §15's budget is a
 contract. With the numbers outside them, their chrome is paid for at every
-size, and the bars are what gives way as the row narrows: `HSV_FULL` (hue 15,
-saturation 9, value 9) where the row has the columns, `HSV_COMPACT` (11, 7, 7)
-where it has nearly enough, `HSV_TIGHT` (7, 5, 5) on an ordinary 80-column
-terminal, and nothing where even that does not fit — at which point the exact
-reading below is the whole reading. Because `HSV_CHROME` is fixed, each rung
+size, and the bars are what gives way as the column narrows — measured
+against the right column, not the frame (decision 36): `HSV_FULL` (hue 15,
+saturation 9, value 9) where the column has the columns (a 120-column frame),
+`HSV_COMPACT` (11, 7, 7) a rung down (100 columns), `HSV_TIGHT` (7, 5, 5)
+where the column barely holds it, and nothing where even that does not fit —
+at which point the exact reading below is the whole reading. An ordinary
+80-column terminal shows no bars: the column is too narrow for the tight
+rung, and the readout is the name, the hex and the exact numbers. Below
+`TOP_MIN_COLS` the frame stacks again and the row is always bare — the tight
+rung never fit a narrow frame either. Because `HSV_CHROME` is fixed, each rung
 is chosen at a width that is the same for every slot, so a rung is never
 chosen and then clipped, and the subject — the slot's name and hex — is never
 the thing that gets cut.
@@ -736,6 +756,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 33 | The raster banner draws only out of leftover, and the preview may be box drawing | Decoration never costs a widget a row: the editor builds the frame plain and inserts the banner above it only where the rows below leave room, so everything below shifts down byte-identical. The shadow defaults to the same hue from the bright row, and a grey `palette-8` one stays one argument away. The preview's ascii contract narrows to no-wide-glyphs — box drawing survives a pipe, and truecolor already assumed ANSI |
 | 34 | The header is a three-rung ladder — raster banner, mini banner, wordmark — drawn only out of leftover, forced only to the raster one | The middle rung fills the gap between a six-row banner that needs a wide tall terminal and a one-line wordmark whose thin strokes hide the colours. Forcing still means the raster banner; the middle rung is auto-only, because a flag per rung is chrome around decoration |
 | 35 | The middle rung is a pasted three-row block font (23 columns) instead of four-row line art | The author's own art reads better and costs one row less (three spare rows instead of four), so the rung reaches frames the line art never did. The price is stated plainly: the narrow preview is no longer pure ascii wherever the mini stands in — still no wide glyphs, still holding its width, and ascii again below it |
+| 36 | The header and the selected readout share one side-by-side top block: `[huebox] [theme/path, selected]` | The scattered header and readout cost five rows for what is one glance — which theme, which slot, where its colour sits. Side by side they cost four (three content rows plus air) and the palette grid moves up a row. The price is stated plainly: the bars are measured against the right column now, so an 80-column terminal shows no bars where it used to show the tight rung, and 100 columns show compact where they showed full — the exact numbers below carry those frames instead. Below 60 columns the column cannot hold a bare readout, so the frame stacks again rather than clipping one. A banner still stands above the block and the wordmark stands back to air, so the banner stays the only huebox on screen |
 
 ---
 
@@ -1270,9 +1291,9 @@ are what flex inside it. The order is the contract, not the sizes:
    row gets the blank below it (the row nearest the widget it follows is the
    last one given up), and a hunk that fills its budget gets neither. No
    blank is ever bought with a diff row.
-7. **Below the floors the widgets go**, and the frame is the palette grid, the
-   interface rows, the selected readout and the hints. A tall frame is never
-   padded out to `rows`.
+7. **Below the floors the widgets go**, and the frame is the top block
+   (header plus selected readout), the palette grid, the interface rows
+   and the hints. A tall frame is never padded out to `rows`.
 
 The constants live beside the editor's other layout constants
 (`EXAMPLES_ROWS`, `EXAMPLES_FLOOR`, `DIFF_ROWS`, `DIFF_FLOOR`,
