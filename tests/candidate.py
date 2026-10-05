@@ -100,7 +100,10 @@ def capture_picker(fixture, cols, rows, picker="long", depth="truecolor",
     paints the picker frame before its first draw, so the capture is a settled
     screen with the picker up rather than a keypress timed against a race.
     """
-    key = ("picker", fixture, cols, rows, picker, depth, status)
+    # `HUEBOX_PANELS` changes the bytes (borders): same key without it would
+    # hand I1's bare capture to I2's panelled check, or the reverse.
+    panels = os.environ.get("HUEBOX_PANELS", "1")
+    key = ("picker", fixture, cols, rows, picker, depth, status, panels)
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, 0, depth,
                              picker=picker, status=status)
@@ -114,7 +117,10 @@ def capture(fixture, cols, rows, sel=0, depth="truecolor"):
     Memoised per `(fixture, cols, rows, sel, depth)`. Pass `fresh=True` to force
     a new process.
     """
-    key = (fixture, cols, rows, sel, depth)
+    # `HUEBOX_PANELS` changes the bytes (borders): I1 pins bare (`0`) while
+    # I2 runs product panels, so the key must tell them apart.
+    panels = os.environ.get("HUEBOX_PANELS", "1")
+    key = (fixture, cols, rows, sel, depth, panels)
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, sel, depth)
         _CAPTURES[key] = frame_bytes(data)

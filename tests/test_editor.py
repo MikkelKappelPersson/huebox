@@ -1171,6 +1171,192 @@ class GridArrows(unittest.TestCase):
         self.assertFalse(st.dirty())        # navigation writes nothing
 
 
+class VerticalArrows(unittest.TestCase):
+    """The arrows walk the side layout's pairs, column for column (§4.3).
+
+    The left panel draws `(0, 8)` down to `(7, 15)`, then the named slots
+    two-up — so left/right change the column and up/down the row, the
+    transpose of the stacked frame. Crossings stay in the column: `7`
+    drops to `background`, `foreground` climbs back to `15`.
+    """
+
+    def land(self, name, *keys):
+        index = SLOTS.index(name)
+        grid = editor.side_grid()
+        for key in keys:
+            index = editor.move_slot(index, key, grid)
+        return SLOTS[index]
+
+    def test_left_and_right_change_the_column(self):
+        self.assertEqual(self.land("palette-0", "right"), "palette-8")
+        self.assertEqual(self.land("palette-8", "left"), "palette-0")
+        self.assertEqual(self.land("palette-7", "right"), "palette-15")
+        # a column's edge is the panel's edge — no wrap, no stay-across
+        self.assertEqual(self.land("palette-0", "left"), "palette-0")
+        self.assertEqual(self.land("palette-8", "right"), "palette-8")
+        self.assertEqual(self.land("background", "right"), "foreground")
+        self.assertEqual(self.land("foreground", "left"), "background")
+        self.assertEqual(self.land("foreground", "right"), "foreground")
+
+    def test_up_and_down_walk_the_column(self):
+        self.assertEqual(self.land("palette-0", "down"), "palette-1")
+        self.assertEqual(self.land("palette-1", "up"), "palette-0")
+        self.assertEqual(self.land("palette-8", "down"), "palette-9")
+        self.assertEqual(self.land("background", "down"), "cursor-color")
+        self.assertEqual(self.land("background", "down", "down"),
+                         "selection-background")
+
+    def test_down_crosses_into_the_interface_in_the_same_column(self):
+        self.assertEqual(self.land("palette-7", "down"), "background")
+        self.assertEqual(self.land("palette-15", "down"), "foreground")
+
+    def test_up_crosses_back_out_of_the_interface(self):
+        self.assertEqual(self.land("background", "up"), "palette-7")
+        self.assertEqual(self.land("foreground", "up"), "palette-15")
+        self.assertEqual(self.land("cursor-color", "up"), "background")
+
+    def test_the_outer_ends_stay_put(self):
+        self.assertEqual(self.land("palette-0", "up"), "palette-0")
+        self.assertEqual(self.land("palette-8", "up"), "palette-8")
+        self.assertEqual(self.land("selection-background", "down"),
+                         "selection-background")
+        self.assertEqual(self.land("selection-foreground", "down"),
+                         "selection-foreground")
+        self.assertEqual(self.land("selection-foreground", "right"),
+                         "selection-foreground")
+
+    def test_the_bare_grid_is_untouched(self):
+        # `vertical` defaults off: every existing GridArrows walk reads the
+        # same grid it always did, and I1's goldens still pin it.
+        grid = editor.grid_geometry(80)
+        self.assertFalse(grid.vertical)
+        self.assertEqual(editor.move_slot(0, "right", grid), 1)
+
+    def test_the_key_surface_walks_pairs(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None)
+        st.grid = editor.side_grid()
+        st.sel = 0
+        for key, expected in (("right", 8), ("down", 9), ("left", 1),
+                              ("down", 2)):
+            editor.apply_key(key, st)
+            self.assertEqual(st.sel, expected)
+        self.assertFalse(st.dirty())
+
+
+class SidePanels(unittest.TestCase):
+    """The side-by-side content rows: pairs left, live blocks right.
+
+    Pure editor tests for what `app.py` mounts: the left panel's shape and
+    pairs, the right panel's budget, and the one rule the whole layout
+    rests on — a side cell says exactly what the bare frame's cell says.
+    """
+
+    def test_the_left_panel_is_two_columns_of_pairs(self):
+        rows = editor.side_left_rows(dict(FULL_SLOTS), 0)
+        self.assertEqual(len(rows), editor.SIDE_LEFT_ROWS)
+        text = [ANSI.sub("", row) for row in rows]
+        self.assertEqual(text[1].split(), [">", "0", "#3f7a3f",
+                                            "8", "#3f7a3f"])
+        self.assertEqual(text[8].split(), ["7", "#3f7a3f",
+                                            "15", "#3f7a3f"])
+        # then the interface, paired the same way but name over hex:
+        # two rows per pair, the hex row carrying no name
+        self.assertEqual(text[10].strip(), "interface")
+        self.assertIn("background", text[11])
+        self.assertIn("foreground", text[11])
+        self.assertNotIn("background", text[12])
+        self.assertEqual(text[12].count("#3f7a3f"), 2)
+        # The hex starts where its name starts: same column, row below.
+        for name in ("background", "foreground"):
+            at = text[11].index(name)
+            self.assertEqual(text[12][at:at + 7], "#3f7a3f")
+        self.assertIn("selection-background", text[15])
+        self.assertIn("selection-foreground", text[15])
+        for row in rows:
+            self.assertLessEqual(visible(row), editor.SIDE_LEFT_W)
+
+    def test_a_side_cell_matches_the_bare_frame_s_cell(self):
+        # One implementation of a swatch: the side panel asks `swatch_cell`
+        # and `named_cell`, and so does `draw_editor` now. A wide bare
+        # frame draws hex swatches eight across; every side pair must read
+        # among them, escape codes and all.
+        slots = dict(FULL_SLOTS)
+        side = editor.side_left_rows(slots, 3)
+        bare = frame(120, 30, sel=3, slots=slots, banner=False)
+        for index in (0, 3, 8, 15):
+            cell = editor.swatch_cell(slots, index, 3, True)
+            self.assertIn(cell, bare,
+                          "side swatch %d is not the bare one" % index)
+            # The side panel pads the same swatch to the interface column
+            # width, so the bare cell meets the side row without its reset.
+            self.assertTrue(any(cell[:-len(RESET)] in row for row in side))
+        for key in ("background", "selection-foreground"):
+            cell = editor.named_cell(slots, key, 3)
+            self.assertIn(cell, bare)
+
+    def test_the_side_hits_cover_every_slot_once(self):
+        found = []
+        editor.side_left_rows(dict(FULL_SLOTS), 0, hits=found, y0=0)
+        # Palette cells answer once; two-row interface cells answer twice —
+        # once per row — and both rows carry the slot.
+        once = sorted(hit.slot for hit in found if hit.slot < 16)
+        self.assertEqual(once, list(range(16)))
+        twice = sorted(hit.slot for hit in found if hit.slot >= 16)
+        self.assertEqual(twice, [16, 16, 17, 17, 18, 18,
+                                 19, 19, 20, 20, 21, 21])
+        pairs = {(hit.y, hit.slot) for hit in found if hit.slot < 16}
+        # same row, eight apart: (0, 8) down to (7, 15)
+        for row in range(8):
+            slots = sorted(slot for y, slot in pairs if y == row + 1)
+            self.assertEqual(slots, [row, row + 8])
+        # the two rows of one interface cell share the slot
+        for slot in range(16, 22):
+            rows = sorted(hit.y for hit in found if hit.slot == slot)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1] - rows[0], 1)
+
+    def test_palette_and_interface_share_their_columns(self):
+        # One pair of columns for the whole panel: the palette's swatches
+        # are padded to the interface cell width, so the second column
+        # starts at the same cell in every row — paint and hits alike.
+        found = []
+        editor.side_left_rows(dict(FULL_SLOTS), 0, hits=found, y0=0)
+        left = {hit.slot for hit in found
+                if hit.x0 == 2 and hit.slot in (0, 16)}
+        self.assertEqual(left, {0, 16})
+        for hit in found:
+            column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
+                else 1
+            self.assertEqual(hit.x0, 2 + column * (editor.SIDE_NAMED_W + 2))
+            self.assertEqual(hit.x1, hit.x0 + editor.SIDE_NAMED_W - 1)
+
+    def test_the_right_panel_spends_a_fixed_budget(self):
+        slots = dict(FULL_SLOTS)
+        rows = editor.side_live_rows(slots, 48, 14)
+        self.assertEqual(len(rows), 14)
+        text = "\n".join(ANSI.sub("", row) for row in rows)
+        self.assertIn("examples", text)
+        self.assertIn("live diff", text)
+        self.assertIn("live code", text)
+        short = editor.side_live_rows(slots, 48, 6)
+        self.assertEqual(len(short), 6)
+        self.assertNotIn("live diff",
+                         "\n".join(ANSI.sub("", row) for row in short))
+        self.assertIsNone(editor.side_live_rows(slots, 48, 5))
+        for row in rows:
+            self.assertLessEqual(visible(row), 48)
+
+    def test_both_panels_stand_on_the_buffer(self):
+        # §8.2, both columns: every row backed out to its panel's width,
+        # so no column shows the terminal's background.
+        from huebox.render import backdrop as _backdrop  # noqa: F401
+        slots = dict(FULL_SLOTS)
+        for row in editor.side_left_rows(slots, 0):
+            self.assertEqual(visible(row), editor.SIDE_LEFT_W)
+        for row in editor.side_live_rows(slots, 48, 14):
+            self.assertEqual(visible(row), 48)
+
+
 class Backup(unittest.TestCase):
     """`<path>.huebox.bak` moves from editor-open to first-save (§14.2)."""
 

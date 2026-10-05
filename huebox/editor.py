@@ -94,6 +94,9 @@ class Grid(NamedTuple):
     palette_cols: int      # palette swatches per row
     named_cols: int        # interface cells per row
     show_hex: bool         # a swatch is wide enough to print its hex value
+    vertical: bool = False  # column-major pairs (the side layout's left
+                            # panel): rows are (i, i+8), not eight across.
+                            # Bare frames never set it.
 
 
 def grid_geometry(cols: int) -> Grid:
@@ -118,6 +121,50 @@ def _bottom_row(base: int, size: int, cols: int, column: int) -> int:
     return base + (-(-size // cols) - 1) * cols + min(column, cols - 1)
 
 
+def side_grid() -> Grid:
+    """The grid the side-by-side layout walks (§4.3).
+
+    Two columns throughout: palette pairs `(0, 8)` down to `(7, 15)`, then
+    the named slots two-up. One constructor so `app.py` never re-implements
+    the pairing the left panel draws — the frame renders what this says and
+    the keys step through what this says, same rule as `grid_geometry`.
+    """
+    return Grid(2, 2, True, True)
+
+
+def _move_vertical(sel: int, key: str) -> int:
+    """Column-major pairs: left and right change the column, up and down
+    the row. A vertical key that runs off a block crosses to the other in
+    the same column — palette `7` drops to `background`, `foreground` climbs
+    back to `15` — while the outer ends stay put.
+    """
+    if sel < len(PALETTE):
+        col = 0 if sel < 8 else 1
+        row = sel % 8
+        if key == "left":
+            return sel - 8 if col == 1 else sel
+        if key == "right":
+            return sel + 8 if col == 0 else sel
+        if key == "up":
+            return sel - 1 if row else sel
+        if key == "down":
+            return sel + 1 if row < 7 else len(PALETTE) + col
+        return sel
+    pos = sel - len(PALETTE)                 # 0..5, two-up rows of two
+    col, row = pos % 2, pos // 2
+    if key == "left":
+        return sel - 1 if col == 1 else sel
+    if key == "right":
+        return sel + 1 if col == 0 else sel
+    if key == "up":
+        if row:
+            return sel - 2
+        return 7 + col * 8                   # back to the palette's foot
+    if key == "down":
+        return sel + 2 if row < 2 else sel
+    return sel
+
+
 def move_slot(sel: int, key: str, grid: Grid) -> int:
     """Where an arrow lands, in the grid the frame was drawn in (§4.3).
 
@@ -127,6 +174,8 @@ def move_slot(sel: int, key: str, grid: Grid) -> int:
     directly above the interface's first — while the outer ends of the frame
     (`palette-0`, `selection-foreground`) simply stay put.
     """
+    if grid.vertical:
+        return _move_vertical(sel, key)
     palette = sel < len(PALETTE)
     base = 0 if palette else len(PALETTE)
     size = len(PALETTE) if palette else len(NAMED)
@@ -335,6 +384,159 @@ def slot_at(hits, x: int, y: int):
     return None
 
 
+def swatch_cell(slots, index, sel, show_hex, width=None):
+    """One palette swatch: `> 4 #rrggbb` in its own colours.
+
+    The same expression `draw_editor` always painted, hoisted so the
+    side-by-side left panel cannot drift from it — one implementation of
+    what a swatch says, asked from two layouts. `width` pads the swatch
+    past its own cell (the pad rides inside the painted span, so the
+    colour field grows): the side layout passes the interface cell width
+    so both grids stand in the same two columns. The text stays
+    left-aligned in the field, so the `>` marks line up down the column.
+    """
+    value = slots.get(f"palette-{index}", MISSING)
+    mark = ">" if sel == index else " "
+    cellw = width or (CELL_FULL if show_hex else CELL_MIN)
+    label = (f" {mark}{index:>2} {value} " if show_hex
+             else f" {mark}{index:>2}")
+    return (f"{bg(value)}{fg(readable_fg(value))}"
+            f"{BOLD if sel == index else ''}{label.ljust(cellw)}{RESET}")
+
+
+def named_cell(slots, key, sel):
+    """One interface cell: `mark name hex`, the name padded to 21.
+
+    Same hoist as `swatch_cell`: the side layout's `background/foreground`
+    rows are these cells, not a second rendering of them.
+    """
+    index = SLOTS.index(key)
+    value = slots.get(key, MISSING)
+    mark = ">" if sel == index else " "
+    style = BOLD if sel == index else ""
+    return (f"{bg(value)}{fg(readable_fg(value))}{style}"
+            f" {mark}{key:<21} {value} {RESET}")
+
+
+#: One side-layout interface cell: `mark name` over the hex, both rows
+#: painted in the slot's own colours. The names are what make the bare
+#: frame's one-row cells 32 wide; stacking the hex below the name keeps
+#: two cells abreast in barely more than one bare cell's width.
+SIDE_NAMED_W = 1 + 1 + max(len(key) for key in NAMED) + 1
+#: The side-by-side layout's left panel: palette pairs over interface
+#: pairs, two columns throughout. Content width is two stacked cells plus
+#: the join and the indent — the one width every row of the panel fills
+#: (interface rows exactly, palette rows padded in `background`).
+SIDE_LEFT_W = len("  ") + SIDE_NAMED_W + len("  ") + SIDE_NAMED_W
+#: title + 8 pairs, a blank, title + 3 pairs over two rows each.
+SIDE_LEFT_ROWS = 17
+#: The right panel's fixed budget: examples title + 3 rows, diff title + 3.
+SIDE_EXAMPLES_ROWS = 4
+SIDE_DIFF_ROWS = 4
+
+
+def side_named_cell(slots, key, sel):
+    """One interface cell over two rows: the name, then its hex.
+
+    Both rows wear the slot's own background and foreground (and the bold
+    when selected), so the cell still reads as one swatch — only the hex
+    moved down a row instead of across 21 columns of padding.
+    """
+    index = SLOTS.index(key)
+    value = slots.get(key, MISSING)
+    mark = ">" if sel == index else " "
+    style = BOLD if sel == index else ""
+    paint = f"{bg(value)}{fg(readable_fg(value))}{style}"
+    namew = max(len(k) for k in NAMED)
+    first = f" {mark}{key:<{namew}} "
+    # Two spaces, like the name above it: the hex starts where the name
+    # starts, not one column right of it.
+    second = f"  {value}".ljust(len(first))
+    assert len(first) == SIDE_NAMED_W, (first, SIDE_NAMED_W)
+    return [f"{paint}{first}{RESET}", f"{paint}{second}{RESET}"]
+
+
+def side_left_rows(slots, sel, hits=None, y0=0):
+    """The left panel's content: palette pairs, then interface pairs.
+
+    Rows are `(0, 8)` down to `(7, 15)`, then `(background, foreground)` and
+    friends — two columns in total, hex always shown. Every row is backed
+    out to `SIDE_LEFT_W` (§8.2), and `hits` is announced in content coords
+    (`y0` = the content's first row), the same rule as `draw_editor`.
+    """
+    out = []
+    out.append("  " + title("palette", slots))
+    # Swatches at the interface cell width: the palette's two columns are
+    # the interface's two columns, and neither the paint nor the hits
+    # re-derive them (the `x0` below is the same expression both use).
+    for row in range(8):
+        y = y0 + len(out)
+        cells = [row, row + 8]
+        out.append("  " + "  ".join(
+            swatch_cell(slots, i, sel, True, SIDE_NAMED_W) for i in cells))
+        if hits is not None:
+            for column, index in enumerate(cells):
+                x0 = 2 + column * (SIDE_NAMED_W + 2)
+                hits.append(Hit(y, x0, x0 + SIDE_NAMED_W - 1, index))
+    out.append("")
+    out.append("  " + title("interface", slots))
+    for row in range(3):
+        keys = NAMED[2 * row:2 * row + 2]
+        pair = [side_named_cell(slots, key, sel) for key in keys]
+        for line in range(2):
+            y = y0 + len(out)
+            out.append("  " + "  ".join(cell[line] for cell in pair))
+            if hits is not None:
+                # One hit per row of the cell: a two-row cell answers on
+                # both, and both carry the slot — `slot_at` never knows.
+                for column, key in enumerate(keys):
+                    x0 = 2 + column * (SIDE_NAMED_W + 2)
+                    hits.append(Hit(y, x0, x0 + SIDE_NAMED_W - 1,
+                                    SLOTS.index(key)))
+    assert len(out) == SIDE_LEFT_ROWS, out
+    return [backdrop(line, slots, SIDE_LEFT_W) for line in out]
+
+
+def side_live_rows(slots, cols, height, regions=None):
+    """The right panel's content in exactly `height` rows, or `None`.
+
+    A fixed prototype budget, not `draw_editor`'s decoration spending:
+    examples (title + 3), the diff (title + 3) where `height` leaves the
+    sample a title and a line, the sample with the rest, blanks to fill.
+    `None` when even examples + one sample line do not fit — the caller
+    falls back to the stacked layout rather than trimming live blocks.
+    `regions` takes the blocks as `(name, first, count)` in content coords.
+    """
+    if height < SIDE_EXAMPLES_ROWS + 2:
+        return None
+    rows = ["  " + title("examples", slots)]
+    rows.extend(example_lines(slots, cols - 2)[:3])
+    rest = height - len(rows)
+    diff_here = rest >= SIDE_DIFF_ROWS + 3
+    if diff_here:
+        rows.append("  " + title("live diff", slots))
+        rows.extend(diff_lines(slots, cols - 2)[:SIDE_DIFF_ROWS - 1])
+        rest = height - len(rows)
+    code = [line for line, _ in sample_lines(slots)]
+    if code and not code[-1].strip():
+        code.pop()               # the lex's trailing newline, not a line
+    take = max(1, rest - 1)
+    rows.append("  " + title("live code", slots))
+    rows.extend("    " + line.replace(RESET, RESET + "    ")
+                for line in code[:take])
+    sample_first = len(rows)
+    rows.extend([""] * (height - len(rows)))
+    assert len(rows) == height, (len(rows), height)
+    if regions is not None:
+        regions.append(("examples", 0, SIDE_EXAMPLES_ROWS))
+        at = SIDE_EXAMPLES_ROWS
+        if diff_here:
+            regions.append(("diff", at, SIDE_DIFF_ROWS))
+            at += SIDE_DIFF_ROWS
+        regions.append(("sample", at, height - at))
+    return [backdrop(line, slots, cols) for line in rows]
+
+
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 grid=None, hits=None, size=None, regions=None,
                 use_banner=None):
@@ -399,13 +601,6 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     per_row, show_hex = grid.palette_cols, grid.show_hex
     cellw = CELL_FULL if show_hex else CELL_MIN
 
-    def swatch(index, selected):
-        value = slots.get(f"palette-{index}", MISSING)
-        mark = ">" if selected else " "
-        label = (f" {mark}{index:>2} {value} " if show_hex else f" {mark}{index:>2}")
-        return (f"{bg(value)}{fg(readable_fg(value))}"
-                f"{BOLD if selected else ''}{label.ljust(cellw)}{RESET}")
-
     marks.append(("palette", at_body()))
     body.append("  " + title("palette", slots))
     for start in range(0, len(PALETTE), per_row):
@@ -416,7 +611,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         y = len(body)
         cells = [i for i in range(start, start + per_row) if i < len(PALETTE)]
         body.append(("  " + "".join(
-            swatch(i, sel == i) for i in cells)).rstrip())
+            swatch_cell(slots, i, sel, show_hex) for i in cells)).rstrip())
         if hits is not None:
             for column, index in enumerate(cells):
                 x0 = 2 + column * cellw
@@ -430,14 +625,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
         y = len(body)
-        cells = []
-        for key in NAMED[start:start + per]:
-            index = SLOTS.index(key)
-            value = slots.get(key, MISSING)
-            mark = ">" if sel == index else " "
-            style = BOLD if sel == index else ""
-            cells.append(f"{bg(value)}{fg(readable_fg(value))}{style}"
-                         f" {mark}{key:<21} {value} {RESET}")
+        cells = [named_cell(slots, key, sel)
+                 for key in NAMED[start:start + per]]
         body.append(("  " + "  ".join(cells)).rstrip())
         if hits is not None:
             for column in range(len(cells)):

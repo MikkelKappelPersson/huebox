@@ -297,12 +297,24 @@ class TheMouse(unittest.TestCase):
     def _point_at(self, editor, slot):
         return next(hit for hit in editor.hits if hit.slot == slot)
 
+    def _screen_point(self, editor, hit):
+        """Inner hit → screen coords for `_click`.
+
+        Panels offset content by one border column left and one border row
+        above the controls; the bare frame is identity. All clickable hits
+        live in the controls panel, so this is +1/+1 when panels are on.
+        """
+        if getattr(editor, "_panels_on", False):
+            return hit.x0 + 1 + 1, hit.y + 1
+        return hit.x0 + 1, hit.y
+
     def test_a_click_selects_the_slot_whose_cell_it_was(self):
         editor = self._editor()
         for slot in (0, 5, 16):
             with self.subTest(slot=slot):
                 hit = self._point_at(editor, slot)
-                self._click(editor, hit.x0 + 1, hit.y)
+                x, y = self._screen_point(editor, hit)
+                self._click(editor, x, y)
                 self.assertEqual(editor.state.sel, slot)
 
     def test_a_click_on_chrome_selects_nothing(self):
@@ -340,7 +352,8 @@ class TheMouse(unittest.TestCase):
         that is wrong, with nothing to compare it against."""
         clicked = self._editor()
         hit = self._point_at(clicked, 1)
-        self._click(clicked, hit.x0, hit.y)
+        x, y = self._screen_point(clicked, hit)
+        self._click(clicked, x, y)
 
         pressed = self._editor()
         huebox_app.apply_key("right", pressed.state)
@@ -421,7 +434,7 @@ class TheFrameIsWidgets(unittest.TestCase):
     test; this is the test that notices.
     """
 
-    def _mounted(self, cols=100, rows=30, status=""):
+    def _mounted(self, cols=80, rows=24, status=""):
         from textual.geometry import Offset
 
         path = _slots_file(harness.FIXTURES["distinct"]["slots"])
@@ -441,11 +454,32 @@ class TheFrameIsWidgets(unittest.TestCase):
             editor.redraw()
         return editor, mounted
 
+    def _frames(self, mounted):
+        """Every `Frame` in mount order, descending into panels.
+
+        Top-level mounts are chrome `Frame`s and `Panel`s; the blocks live
+        inside the panels as pending children (mount is mocked, so nothing
+        composes). Flatten both so block order is frame order.
+        """
+        out = []
+        for widget in mounted:
+            if isinstance(widget, huebox_app.Panel):
+                out.extend(list(getattr(widget, "_pending_children", [])))
+            else:
+                out.append(widget)
+        return out
+
     def test_one_widget_per_block(self):
         _editor, mounted = self._mounted()
         regions = _editor.regions
-        self.assertEqual(len(mounted), len(regions))
-        self.assertGreater(len(mounted), 3,
+        self.assertTrue(_editor._panels_on, "panels did not mount")
+        panels = [w for w in mounted
+                  if isinstance(w, huebox_app.Panel)]
+        self.assertEqual([p.border_title for p in panels],
+                         ["palette / interface", "examples"])
+        frames = self._frames(mounted)
+        self.assertEqual(len(frames), len(regions))
+        self.assertGreater(len(frames), 3,
                            "the frame collapsed back into a single widget")
         names = [name for name, _, _ in regions]
         for name in ("header", "palette", "interface", "selected", "hints"):
@@ -458,17 +492,33 @@ class TheFrameIsWidgets(unittest.TestCase):
         That is not a hypothetical: seven of Textual's 168 design tokens exist
         only for scrollbars, and I2's whole job is to reject a colour that was
         not the theme's. The blocks tile the frame exactly (tested in
-        `test_editor.Regions`), so their heights must too."""
-        editor, mounted = self._mounted(cols=100, rows=30)
-        total = sum(len(block.rows_text) for block in mounted)
+        `test_editor.Regions`), so their heights must too — plus one border
+        row top and bottom per panel."""
+        editor, mounted = self._mounted()
+        frames = self._frames(mounted)
+        panels = [w for w in mounted
+                  if isinstance(w, huebox_app.Panel)]
+        total = sum(len(block.rows_text) for block in frames)
         self.assertEqual(total, len(editor.rows_text))
-        self.assertLessEqual(total, 30, "the stack is taller than the screen")
+        self.assertEqual(total + 2 * len(panels), 24,
+                         "panels plus blocks do not fill the window exactly")
+        self.assertLessEqual(total + 2 * len(panels), 24,
+                             "the stack is taller than the screen")
 
     def test_every_block_paints_only_its_own_rows(self):
         editor, mounted = self._mounted()
-        painted = [row for block in mounted for row in block.rows_text]
-        self.assertEqual(painted, editor.rows_text,
-                         "the blocks do not reassemble the frame in order")
+        frames = self._frames(mounted)
+        painted = [row for block in frames for row in block.rows_text]
+        # Chrome rows are re-backed to the full width on display; compare
+        # past the two pad columns the inner layout does not know about.
+        from huebox.render import visible as _visible
+        from rich.text import Text as _Text
+        plain = [_Text.from_ansi(row).plain for row in painted]
+        wanted = [_Text.from_ansi(row).plain for row in editor.rows_text]
+        self.assertEqual(len(plain), len(wanted))
+        for got, want in zip(plain, wanted):
+            self.assertTrue(got.startswith(want) or want.startswith(got),
+                            "the blocks do not reassemble the frame in order")
 
 
 @needs_app
@@ -521,8 +571,10 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.focused.name, "palette")
 
     async def test_an_arrow_moves_one_slot_when_the_grid_has_focus(self):
+        # Stacked layout: row-major arrows. The side layout's column-major
+        # walk has its own suite (`SideBySide`).
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             self.assertEqual(app.state.sel, 0)
             await self._press(app, pilot, "right")
@@ -559,7 +611,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
 
     async def test_focus_follows_the_selection_across_the_two_grids(self):
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             self.assertEqual(app.focused.name, "palette")
             # §4.3 — right stays in the row, so seventeen rights is not
@@ -573,7 +625,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
 
     async def test_focus_moves_back_into_the_palette(self):
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             await self._press(app, pilot, *["down"] * 2)
             self.assertEqual(app.focused.name, "interface")
@@ -723,8 +775,10 @@ class SelectableBlocks(unittest.IsolatedAsyncioTestCase):
                                  "%s should not be selectable" % other)
 
     async def test_dragging_over_the_sample_gives_you_the_code(self):
+        # Stacked offsets: the side layout puts the sample narrower and
+        # lower, so its own suite drags there (`SideBySide`).
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             sample = (await self._blocks(app, huebox_app.Sample))[0]
             await self._drag(app, pilot, sample, (4, 1), (30, 1))
@@ -764,7 +818,7 @@ class SelectableBlocks(unittest.IsolatedAsyncioTestCase):
         selection would be a blue in a theme that has no blue.
         """
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             sample = (await self._blocks(app, huebox_app.Sample))[0]
             await pilot.mouse_down(sample, offset=(2, 1))
@@ -1026,13 +1080,258 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_a_resize_still_lays_the_frame_out_from_scratch(self):
+        # Side-by-side down to stacked: the resize also crosses layouts.
         app = await self._app()
         async with app.run_test(size=(150, 50)) as pilot:
             await pilot.pause()
-            await pilot.resize_terminal(100, 30)
+            await pilot.resize_terminal(80, 24)
             await pilot.pause()
-            self.assertEqual((app.size.width, app.size.height), (100, 30))
-            self.assertLessEqual(len(app.rows_text), 30)
+            self.assertEqual((app.size.width, app.size.height), (80, 24))
+            self.assertLessEqual(len(app.rows_text), 24)
             self.assertEqual(app.screen.scroll_y, 0.0)
             self.assertEqual(sum(c for _, _, c in app.regions),
                              len(app.rows_text))
+
+
+@needs_app
+class PrototypePanels(unittest.IsolatedAsyncioTestCase):
+    """Stacked bordered panels, default on.
+
+    The reference screenshot's shape — one titled panel for the controls,
+    one for the live examples. Unset means panels; `HUEBOX_PANELS=0` opts
+    back out to the frameless stack (one test below, never product). The
+    rows stay captured, not re-rendered, so a panel can only frame what
+    the frame already said.
+    """
+
+    async def _app(self, cols=100, rows=30, panels="1"):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        # Kept alive for the whole test (added as cleanup): `redraw` reads
+        # `HUEBOX_PANELS` on mount, long after the constructor returns, so
+        # a `with` block here would be gone before the first frame mounts.
+        overlay = {"HUEBOX_SLOTS": path, "HUEBOX_PANELS": panels}
+        patcher = mock.patch.dict(os.environ, overlay)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return huebox_app.Editor()
+
+    async def test_unset_means_panels(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HUEBOX_PANELS", None)
+            self.assertTrue(huebox_app.panels_enabled())
+            path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+            self.addCleanup(os.unlink, path)
+            with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+                app = huebox_app.Editor()
+            # 80x24 is the stacked layout; 100x30 and up go side-by-side
+            # (`SideBySide`).
+            async with app.run_test(size=(80, 24)) as pilot:
+                await pilot.pause()
+                self.assertTrue(app._panels_on)
+                self.assertEqual(len(list(app.query(huebox_app.Panel))), 2)
+
+    async def test_zero_opts_out_to_no_panels(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path,
+                                           "HUEBOX_PANELS": "0"}):
+            self.assertFalse(huebox_app.panels_enabled())
+            app = huebox_app.Editor()
+            async with app.run_test(size=(100, 30)) as pilot:
+                await pilot.pause()
+                self.assertFalse(app._panels_on)
+                self.assertEqual(len(list(app.query(huebox_app.Panel))), 0)
+
+    async def test_two_panels_with_titles(self):
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._panels_on)
+            panels = list(app.query(huebox_app.Panel))
+            self.assertEqual(len(panels), 2)
+            self.assertEqual([p.border_title for p in panels],
+                             ["palette / interface", "examples"])
+            self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_borders_are_theme_closed(self):
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertIn("border", huebox_app.TOKEN_SLOTS)
+            variables = app.get_css_variables()
+            allowed = {v.lower() for v in
+                       harness.FIXTURES["distinct"]["slots"].values()}
+            self.assertIn(variables["border"].lower(), allowed)
+
+    async def test_a_click_on_a_border_selects_nothing(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            header_h = app._panel_geom["header_h"]
+            # Controls panel top border: full-width chrome row.
+            app.on_click(Click(widget=None, x=10, y=header_h,
+                               delta_x=0, delta_y=0, button=1,
+                               shift=False, meta=False, ctrl=False))
+            # Left border column inside the controls panel.
+            app.on_click(Click(widget=None, x=0, y=header_h + 1,
+                               delta_x=0, delta_y=0, button=1,
+                               shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_a_click_through_a_panel_selects_the_swatch(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            hit = next(h for h in app.hits if h.slot == 1)
+            # Inner → screen: one border column left, one border row above.
+            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + 1,
+                               delta_x=0, delta_y=0, button=1,
+                               shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, 1)
+
+    async def test_too_small_to_border_falls_back(self):
+        app = await self._app(cols=40, rows=12)
+        async with app.run_test(size=(40, 12)) as pilot:
+            await pilot.pause()
+            self.assertFalse(app._panels_on)
+            self.assertEqual(len(list(app.query(huebox_app.Panel))), 0)
+
+
+@needs_app
+class SideBySide(unittest.IsolatedAsyncioTestCase):
+    """The wide layout: `selected` above, controls | live side by side.
+
+    At `SIDE_MIN_W` (100) and up the frame is two panels next to each other
+    instead of stacked: the left holds palette pairs over interface pairs
+    (two columns in total), the right the live blocks, and the `selected`
+    readout sits full-width above the pair as bare chrome. Below that width
+    the stacked panels run instead (`PrototypePanels`). Narrow `run_test`
+    sizes elsewhere in this file are that fallback, asserted on purpose.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        # Unset means panels, and wide means side-by-side: no opt-in.
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            self.assertTrue(huebox_app.panels_enabled())
+            return huebox_app.Editor()
+
+    async def _press(self, app, pilot, *keys):
+        from textual import events
+
+        for key in keys:
+            event = events.Key(key, None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+
+    def _screen_of(self, app, hit):
+        """Left-content hit → screen coords for a `Click`."""
+        top = app._side_geom["top"]
+        return hit.x0 + 1 + 1, top + 1 + hit.y
+
+    async def test_wide_mounts_a_pair_beside_each_other(self):
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertFalse(app._panels_on)
+            rows = list(app.query(Horizontal))
+            self.assertEqual(len(rows), 1)
+            panels = list(rows[0].query(huebox_app.Panel))
+            self.assertEqual(len(panels), 2)
+            self.assertEqual([p.border_title for p in panels],
+                             ["palette / interface", "examples"])
+            left, right = panels
+            self.assertEqual(left.styles.width.value,
+                             huebox_app.LEFT_OUTER_W)
+            self.assertEqual(left.styles.width.value
+                             + right.styles.width.value, 120)
+            self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_selected_sits_full_width_above_the_pair(self):
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            mounted = list(app.query(huebox_app.Frame))
+            selected = next(b for b in mounted if b.name == "selected")
+            # Full window wide, and mounted before the pair's row.
+            self.assertEqual(selected.styles.width.value, 120)
+            row = list(app.query(Horizontal))[0]
+            kids = list(app.screen.children)
+            self.assertLess(kids.index(selected), kids.index(row))
+
+    async def test_a_click_in_the_left_panel_selects_the_pair(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            hit = next(h for h in app.hits if h.slot == 8)
+            x, y = self._screen_of(app, hit)
+            app.on_click(Click(widget=None, x=x, y=y,
+                               delta_x=0, delta_y=0, button=1,
+                               shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, 8)
+
+    async def test_a_click_in_the_right_panel_selects_nothing(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            geom = app._side_geom
+            # Middle of the examples panel: examples are readouts.
+            app.on_click(Click(widget=None,
+                               x=geom["left_outer"] + 5,
+                               y=geom["top"] + 2,
+                               delta_x=0, delta_y=0, button=1,
+                               shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_a_click_on_a_side_border_selects_nothing(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            geom = app._side_geom
+            # The pair's top border row, and the left panel's right border.
+            for x, y in ((10, geom["top"]),
+                         (huebox_app.SIDE_LEFT_W + 1, geom["top"] + 1)):
+                app.on_click(Click(widget=None, x=x, y=y,
+                                   delta_x=0, delta_y=0, button=1,
+                                   shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_arrows_walk_pairs_not_rows(self):
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertEqual(app.state.sel, 0)
+            await self._press(app, pilot, "right")
+            self.assertEqual(app.state.sel, 8)
+            await self._press(app, pilot, "down")
+            self.assertEqual(app.state.sel, 9)
+            await self._press(app, pilot, "left")
+            self.assertEqual(app.state.sel, 1)
+            await self._press(app, pilot, "down", "down", "down", "down",
+                              "down", "down")
+            self.assertEqual(app.state.sel, 7)
+            await self._press(app, pilot, "down")
+            self.assertEqual(app.state.sel, 16)  # background, same column
+            await self._press(app, pilot, "up")
+            self.assertEqual(app.state.sel, 7)

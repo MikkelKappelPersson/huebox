@@ -47,14 +47,17 @@ from rich.segment import Segment
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.strip import Strip
 from textual.style import Style
 from textual.widget import Widget
 
 from .color import MISSING, SLOTS
-from .editor import (MULT_STEPS, EditorState, apply_key, backdrop,
-                     draw_editor, grid_geometry, head_label, report_session,
-                     session_path, slot_at, theme_lines, too_small_frame)
+from .editor import (MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, EditorState,
+                     apply_key, backdrop, draw_editor, grid_geometry,
+                     head_label, report_session, session_path, side_grid,
+                     side_left_rows, side_live_rows, slot_at, theme_lines,
+                     too_small_frame)
 from .render import MIN_COLS, MIN_ROWS, visible
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
@@ -127,6 +130,11 @@ TOKEN_SLOTS = {
     "scrollbar-background-hover": "background",
     "scrollbar-background-active": "background",
     "scrollbar-corner-color": "background",
+    # Panels: borders are compositor chrome, so they need theme-closed
+    # tokens like everything else. Muted `palette-8`, the same slot the
+    # frame's own furniture wears (§8.1).
+    "border": "palette-8",
+    "border-blurred": "palette-8",
     # §6.2 — the text selection. `Selectable` blocks (the code sample and the
     # diff) are selectable, and Textual composites the selection on the screen
     # in a `.screen--selection` overlay painted with these two. They are the
@@ -412,6 +420,69 @@ BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
                  "sample": Sample, "diff": Diff}
 
 
+#: Panels: stacked bordered groups, like the reference screenshot's
+#: `Data Catalog | Query Editor / Query Results`. Panel 1 is the controls
+#: (`palette` + `interface` + the `selected` readout, which is the readout
+#: *of* the selected control); panel 2 is everything live (`examples` +
+#: `diff` + `sample`). `header` / `hints` / `status` stay full-width chrome
+#: outside both, like the screenshot's bottom `CTRL+Q Quit` bar. Widths
+#: below MIN+border fall back to the unpanelled frame, because a bordered
+#: panel narrower than the frame's own floor has nothing honest to draw
+#: (§15.4).
+PANEL_CONTROLS = ("palette", "interface", "selected")
+PANEL_EXAMPLES = ("examples", "diff", "sample")
+PANEL_TITLES = {"controls": "palette / interface", "examples": "examples"}
+
+#: The side-by-side layout: `selected` full-width above, the controls and
+#: the live blocks in two panels next to each other below. The left panel
+#: is a fixed content width (`SIDE_LEFT_W` + two border columns); the right
+#: takes the rest, so side-by-side starts where both stay usable (W>=100)
+#: and narrower windows keep the stacked panels. `selected` is bare chrome
+#: above the pair, not a third panel: a two-row readout needs no border.
+SIDE_MIN_W = 100
+LEFT_OUTER_W = SIDE_LEFT_W + 2
+
+
+def panels_enabled() -> bool:
+    """Whether the panel layout is on.
+
+    Default on: the frame is two bordered panels, not a bare stack.
+    `HUEBOX_PANELS=0` opts out back to the frameless stack (tests and the
+    harness use it where they assert the bare rows, never as product).
+    """
+    return os.environ.get("HUEBOX_PANELS", "1") != "0"
+
+
+class Panel(Vertical):
+    """One bordered group of the frame's blocks (prototype).
+
+    A `Vertical` that owns nothing but chrome: the border and its title.
+    The rows inside are still `draw_editor`'s, captured rather than
+    re-rendered, so the panel cannot disagree with the frame about what
+    a block says — it only puts a themed border around it. Never
+    focusable itself; focus stays on the `Swatches` grids inside, and a
+    click on the border is chrome and selects nothing (§4.3.2).
+    """
+
+    can_focus = False
+    can_focus_children = True
+
+    DEFAULT_CSS = """
+    Panel {
+        border: round $border;
+        background: $background;
+        border-title-color: $foreground;
+        border-title-background: $background;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def __init__(self, title: str, *children: Widget, name=None, **kwargs):
+        super().__init__(*children, name=name, **kwargs)
+        self.border_title = title
+
+
 class Editor(App):
     """One editing session, under Textual's compositor.
 
@@ -460,6 +531,10 @@ class Editor(App):
         self.state = None
         self.hits: list = []
         self.rows_text: list = []
+        # Prototype panels: screen→frame translation for clicks. Empty
+        # (panels off) means identity: `slot_at` on the event as-is.
+        self._panels_on = False
+        self._panel_geom: dict = {}
         super().__init__(**kwargs)
         # After `super()`, and in the constructor rather than `on_mount`: Textual
         # delivers a `Resize` during start-up, before `on_mount` runs, and
@@ -537,6 +612,10 @@ class Editor(App):
 
         self.hits = []
         self.regions = []
+        self._panels_on = False
+        self._panel_geom = {}
+        self._side_on = False
+        self._side_geom = {}
         # §13.7 — the picker owns the surface while it is up, and it shares the
         # editor's minimum size, so the too-small check covers both frames and
         # is asked once, here, rather than twice inside `draw_editor`.
@@ -554,34 +633,83 @@ class Editor(App):
                          for line in theme_lines(*picker, width, height,
                                                  state.status, state.slots,
                                                  hits=self.hits)]
+        elif (panels_enabled() and width >= SIDE_MIN_W
+                and self._try_side(width, height, state)):
+            # Side-by-side mounted everything: chrome above, two panels
+            # below. Both locals are what the debug line counts.
+            named = list(self.regions)
+            rows_text = self.rows_text
+        elif (panels_enabled()
+                and width >= MIN_COLS + 2 and height >= MIN_ROWS + 2):
+            # Prototype panels: the same rows, laid out for the inner width.
+            # `header` / `hints` are laid out narrow too and padded on display
+            # — the pad is the theme's own background, so it reads as fill.
+            # Two passes, so a frame with no examples only pays for one panel:
+            # first at H-2, and only when live blocks showed up re-lay at H-4
+            # for both borders. Always reserving four would trim the hints
+            # into the controls at small sizes (60x16), where they belong
+            # outside the panel, not in it.
+            inner_w = width - 2
+            state.grid = grid_geometry(inner_w)
+            trial_hits, trial_regions = [], []
+            trial = frame_rows(self.fmt, session_path(state), state,
+                               inner_w, height - 2,
+                               head=self.head_for(state),
+                               hits=trial_hits, regions=trial_regions)
+            names = {name for name, _, _ in trial_regions}
+            two = bool(names & set(PANEL_EXAMPLES))
+            inner_h = height - 4 if two else height - 2
+            if two and height < MIN_ROWS + 4:
+                # Room for one panel but not two: fall back to the bare frame
+                # rather than trimming widgets to buy borders.
+                rows_text = frame_rows(self.fmt, session_path(state), state,
+                                       width, height,
+                                       head=self.head_for(state),
+                                       hits=self.hits, regions=self.regions)
+            else:
+                rows_text = (trial if (inner_h == height - 2) else frame_rows(
+                    self.fmt, session_path(state), state, inner_w, inner_h,
+                    head=self.head_for(state),
+                    hits=self.hits, regions=self.regions))
+                if inner_h == height - 2:
+                    self.hits = trial_hits
+                    self.regions = trial_regions
+                self.rows_text = rows_text
+                named = list(self.regions)
+                self._mount_panels(width, rows_text, named)
+                self._panels_on = True
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
                                    width, height, head=self.head_for(state),
                                    hits=self.hits, regions=self.regions)
-        self.rows_text = rows_text
-
-        for child in list(self.query(Frame)):
-            child.remove()
-        # §5.6 — one widget per block of the frame. The blocks are the rows
-        # `draw_editor` reported, in order and without gaps, so the widgets stack
-        # to exactly the frame's height and not one row more: a stack taller than
-        # the screen would give the screen a scrollbar, which is seven of
-        # Textual's 168 design tokens arriving in the frame's first paint.
-        named = ([("picker", 0, len(rows_text))] if picker is not None
-                 else list(self.regions)
-                 or [("frame", 0, len(rows_text))])
-        for name, first, count in named:
-            rows_here = rows_text[first:first + count]
-            kind = BLOCK_WIDGETS.get(name, Frame) if name != "picker" \
-                else Picker
-            # `name` is a constructor argument, not a settable property — which
-            # is Textual saying the name is part of a widget's identity.
-            block = kind(rows_here, width, name=name)
-            block.styles.width = width
-            block.styles.height = len(rows_here)
-            block.styles.padding = 0
-            block.styles.margin = 0
-            self.mount(block)
+        if not self._panels_on and not self._side_on:
+            self.rows_text = rows_text
+            for child in list(self.query(Panel)):
+                child.remove()
+            for child in list(self.query(Frame)):
+                child.remove()
+            for child in list(self.query(Horizontal)):
+                child.remove()
+            # §5.6 — one widget per block of the frame. The blocks are the rows
+            # `draw_editor` reported, in order and without gaps, so the widgets stack
+            # to exactly the frame's height and not one row more: a stack taller than
+            # the screen would give the screen a scrollbar, which is seven of
+            # Textual's 168 design tokens arriving in the frame's first paint.
+            named = ([("picker", 0, len(rows_text))] if picker is not None
+                     else list(self.regions)
+                     or [("frame", 0, len(rows_text))])
+            for name, first, count in named:
+                rows_here = rows_text[first:first + count]
+                kind = BLOCK_WIDGETS.get(name, Frame) if name != "picker" \
+                    else Picker
+                # `name` is a constructor argument, not a settable property — which
+                # is Textual saying the name is part of a widget's identity.
+                block = kind(rows_here, width, name=name)
+                block.styles.width = width
+                block.styles.height = len(rows_here)
+                block.styles.padding = 0
+                block.styles.margin = 0
+                self.mount(block)
         # `mount` is a request, not a fact: the widgets do not exist yet, so
         # focus has to wait for the next refresh. Done inline it would query an
         # empty tree and quietly leave the focus wherever it was — which, with
@@ -596,6 +724,279 @@ class Editor(App):
         _debug("redraw %dx%d: %d rows, %d blocks, sel=%d, widest=%d"
                % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
+
+    def _mount_panels(self, width: int, rows_text: list, named: list) -> None:
+        """Stack the frame's blocks into two bordered panels.
+
+        `named` is `draw_editor`'s own `(name, first, count)` map at the inner
+        size, so the groups cannot drift from what the frame painted: the
+        same rule as `hits`. Chrome (`header` / `hints` / `status`) stays
+        full-width outside; controls and examples each get a `Panel` with a
+        themed border and title. Inner blocks keep the inner width; chrome
+        blocks are re-backed to the full width, because a row backed to the
+        inner width and padded by the widget would leave two columns on the
+        terminal's own background (§8.2) — the pad has no style of its own.
+        """
+        for child in list(self.query(Panel)):
+            child.remove()
+        for child in list(self.query(Frame)):
+            child.remove()
+        inner_w = width - 2
+        by_name = {name: (first, count) for name, first, count in named}
+
+        def rows_for(names):
+            out = []
+            for name in names:
+                if name in by_name:
+                    first, count = by_name[name]
+                    out.append((name, first, count))
+            return out
+
+        header = rows_for(("header",))
+        controls = rows_for(PANEL_CONTROLS)
+        examples = rows_for(PANEL_EXAMPLES)
+        hints = rows_for(("hints", "status"))
+        # Any block `draw_editor` reported that is in none of the groups
+        # (a future widget) stays chrome rather than vanishing: mount it
+        # full-width in order. Prototype must not drop rows it does not know.
+        known = {"header", *PANEL_CONTROLS, *PANEL_EXAMPLES, "hints", "status"}
+        extra = [(n, f, c) for n, f, c in named if n not in known]
+
+        def mount_block(name, first, count, block_width):
+            rows_here = rows_text[first:first + count]
+            if block_width > inner_w:
+                # Chrome at full width: re-back the inner rows out to the
+                # edge in the buffer's own background, so no column shows
+                # the terminal's (§8.2). Inner blocks skip this: they are
+                # already backed to exactly the width they are mounted at.
+                slots = self.state.slots
+                rows_here = [backdrop(row, slots, block_width)
+                             for row in rows_here]
+            kind = BLOCK_WIDGETS.get(name, Frame)
+            block = kind(rows_here, block_width, name=name)
+            block.styles.width = block_width
+            block.styles.height = len(rows_here)
+            block.styles.padding = 0
+            block.styles.margin = 0
+            return block
+
+        header_h = sum(c for _, _, c in header)
+        controls_h = sum(c for _, _, c in controls)
+        examples_h = sum(c for _, _, c in examples)
+        # Screen geometry for clicks: borders are single rows. Header is
+        # bare; each panel adds a top and a bottom border row.
+        self._panel_geom = {
+            "inner_w": inner_w,
+            "header_h": header_h,
+            "controls_h": controls_h,
+            "examples_h": examples_h,
+            "has_examples": bool(examples),
+        }
+        for name, first, count in header + extra:
+            # `extra` unknown rows sit with the header chrome: full-width,
+            # never inside a panel whose title would misname them.
+            self.mount(mount_block(name, first, count, width))
+        if controls:
+            inners = [mount_block(n, f, c, inner_w) for n, f, c in controls]
+            panel = Panel(PANEL_TITLES["controls"], *inners, name="controls")
+            panel.styles.width = width
+            panel.styles.height = controls_h + 2
+            panel.styles.padding = 0
+            panel.styles.margin = 0
+            self.mount(panel)
+        if examples:
+            inners = [mount_block(n, f, c, inner_w) for n, f, c in examples]
+            panel = Panel(PANEL_TITLES["examples"], *inners, name="examples")
+            panel.styles.width = width
+            panel.styles.height = examples_h + 2
+            panel.styles.padding = 0
+            panel.styles.margin = 0
+            self.mount(panel)
+        for name, first, count in hints:
+            self.mount(mount_block(name, first, count, width))
+        for child in list(self.query(Horizontal)):
+            child.remove()
+
+    def _try_side(self, width: int, height: int, state) -> bool:
+        """The side-by-side layout, or `False` to keep the stacked one.
+
+        `selected` full-width above; the controls (palette pairs over
+        interface pairs) and the live blocks in two panels next to each
+        other below. The chrome rows come from a full-width `draw_editor`
+        run — captured, like everywhere — while the panels' contents are
+        `side_left_rows` / `side_live_rows` at their own widths. Anything
+        that does not fit (trimmed chrome, a short middle) returns `False`
+        before mounting anything, and the stacked layout runs instead.
+        """
+        full_hits: list = []
+        full_regions: list = []
+        full = frame_rows(self.fmt, session_path(state), state,
+                          width, height, head=self.head_for(state),
+                          hits=full_hits, regions=full_regions)
+        by_name = {name: (first, count)
+                   for name, first, count in full_regions}
+        for need in ("header", "selected", "hints"):
+            if need not in by_name:
+                return False        # a trimmed frame: chrome must be whole
+        header_h = by_name["header"][1]
+        sel_h = by_name["selected"][1]
+        hints_h = by_name["hints"][1]
+        status_h = by_name["status"][1] if "status" in by_name else 0
+        bottom_h = hints_h + status_h
+        content_h = height - header_h - sel_h - bottom_h - 2
+        if content_h < SIDE_LEFT_ROWS:
+            return False
+        right_outer = width - LEFT_OUTER_W
+        right_inner = right_outer - 2
+        right_regions: list = []
+        right = side_live_rows(state.slots, right_inner, content_h,
+                               regions=right_regions)
+        if right is None:
+            return False
+        left_hits: list = []
+        left = side_left_rows(state.slots, state.sel, hits=left_hits)
+        # Success past this point: grid, mount, publish.
+        state.grid = side_grid()
+
+        def block(name, rows_here, block_width):
+            kind = BLOCK_WIDGETS.get(name, Frame)
+            widget = kind(rows_here, block_width, name=name)
+            widget.styles.width = block_width
+            widget.styles.height = len(rows_here)
+            widget.styles.padding = 0
+            widget.styles.margin = 0
+            return widget
+
+        for child in list(self.query(Panel)):
+            child.remove()
+        for child in list(self.query(Frame)):
+            child.remove()
+        for child in list(self.query(Horizontal)):
+            child.remove()
+        slots = state.slots
+        for name in ("header", "selected"):
+            first, count = by_name[name]
+            self.mount(block(name, full[first:first + count], width))
+        left_children = [block("palette", left[0:9], SIDE_LEFT_W),
+                         block("interface", left[9:SIDE_LEFT_ROWS],
+                               SIDE_LEFT_W)]
+        pad = content_h - SIDE_LEFT_ROWS
+        if pad:
+            left_children.append(block(
+                "left-pad", [backdrop("", slots, SIDE_LEFT_W)] * pad,
+                SIDE_LEFT_W))
+        left_panel = Panel(PANEL_TITLES["controls"], *left_children,
+                           name="controls")
+        left_panel.styles.width = LEFT_OUTER_W
+        left_panel.styles.height = content_h + 2
+        left_panel.styles.padding = 0
+        left_panel.styles.margin = 0
+        right_children = [block(name, right[first:first + count], right_inner)
+                          for name, first, count in right_regions]
+        right_panel = Panel(PANEL_TITLES["examples"], *right_children,
+                            name="examples")
+        right_panel.styles.width = right_outer
+        right_panel.styles.height = content_h + 2
+        right_panel.styles.padding = 0
+        right_panel.styles.margin = 0
+        row = Horizontal(left_panel, right_panel)
+        row.styles.width = width
+        row.styles.height = content_h + 2
+        row.styles.padding = 0
+        row.styles.margin = 0
+        self.mount(row)
+        bottom0 = header_h + sel_h + content_h + 2
+        for name in ("hints", "status"):
+            if name in by_name:
+                first, count = by_name[name]
+                self.mount(block(name, full[first:first + count], width))
+        # Coordinate spaces, because there are two panels now: chrome blocks
+        # are full-frame rows, `palette` / `interface` are left-content rows
+        # (what `self.hits` is announced in), the live blocks right-content
+        # rows. `focus_grid` only ever reads the middle two, against the
+        # hits, so the three spaces never meet — but they are named here so
+        # the next reader does not assume one frame.
+        self.rows_text = full
+        self.hits = left_hits
+        self.regions = [("header", 0, header_h),
+                        ("selected", header_h, sel_h),
+                        ("palette", 0, 9),
+                        ("interface", 9, SIDE_LEFT_ROWS - 9)]
+        self.regions.extend(right_regions)
+        self.regions.append(("hints", bottom0, hints_h))
+        if status_h:
+            self.regions.append(("status", bottom0 + hints_h, status_h))
+        self._side_on = True
+        self._side_geom = {"top": header_h + sel_h,
+                           "content_h": content_h,
+                           "left_outer": LEFT_OUTER_W}
+        return True
+
+    def _side_frame_coords(self, sx: int, sy: int):
+        """Screen → left-content coords, or `None` for chrome.
+
+        Only the left panel holds controls: the right panel's examples are
+        readouts, the `selected` strip above is a readout, and every border
+        row and column is chrome. A click anywhere else selects nothing.
+        """
+        geom = self._side_geom
+        y = sy - geom["top"]
+        if y == 0 or y == geom["content_h"] + 1:
+            return None             # the pair's top / bottom borders
+        if not 1 <= y <= geom["content_h"]:
+            return None             # chrome above or below the pair
+        if sx >= geom["left_outer"]:
+            return None             # the examples panel
+        if sx == 0 or sx >= SIDE_LEFT_W + 1:
+            return None             # the controls panel's own borders
+        return sx - 1, y - 1
+
+    def _panel_frame_coords(self, sx: int, sy: int):
+        """Screen → frame coords inside prototype panels, or None on chrome.
+
+        Borders are chrome: a click on any border row or border column is
+        not an error and moves nothing (§4.3.2). Inner blocks are offset by
+        one column (left border) and by the border rows above them.
+        """
+        geom = self._panel_geom
+        if not geom:
+            return sx, sy
+        inner_w = geom["inner_w"]
+        header_h = geom["header_h"]
+        controls_h = geom["controls_h"]
+        examples_h = geom["examples_h"]
+        has_examples = geom["has_examples"]
+        # Header chrome: full-width, no offset. Columns past the inner width
+        # are pad and hit nothing, which `slot_at` already says as None.
+        if sy < header_h:
+            return sx, sy
+        y = sy - header_h
+        # Controls panel: top border, inner, bottom border.
+        if y == 0:
+            return None
+        if 1 <= y <= controls_h:
+            if sx == 0 or sx > inner_w:
+                return None
+            # Inner frame Y includes the header rows before it.
+            return sx - 1, header_h + (y - 1)
+        if y == controls_h + 1:
+            return None
+        y -= controls_h + 2
+        if has_examples:
+            if y == 0:
+                return None
+            if 1 <= y <= examples_h:
+                if sx == 0 or sx > inner_w:
+                    return None
+                return sx - 1, header_h + controls_h + (y - 1)
+            if y == examples_h + 1:
+                return None
+            y -= examples_h + 2
+        # Hints chrome below both panels: two border rows per panel above.
+        panels = 2 if has_examples else 1
+        # `y` is now relative to the hints zone; inner Y adds back everything
+        # above it. Borders above = 2 per panel.
+        return sx, sy - 2 * panels
 
     def place_focus(self, picker_up: bool, sel: int) -> None:
         """Hand focus to whichever block owns it, once the tree exists.
@@ -699,7 +1100,34 @@ class Editor(App):
         and neither is anything a click has to translate.
         """
         event.stop()
-        target = slot_at(self.hits, event.offset.x, event.offset.y)
+        # Side-by-side first: only the left panel answers, in its own
+        # content coords against its own hits. Everywhere else is chrome.
+        if self._side_on:
+            sx = getattr(event, "screen_x", event.offset.x)
+            sy = getattr(event, "screen_y", event.offset.y)
+            coords = self._side_frame_coords(sx, sy)
+            if coords is None:
+                return
+            target = slot_at(self.hits, *coords)
+            if target is None:
+                return
+            if target != self.state.sel:
+                self.state.sel = target
+            self.redraw()
+            return
+        # Screen coords survive nesting; `offset` does not: inside a panel
+        # the offset is relative to the inner block, while the hit map is
+        # frame-relative. Panels translate back; the bare frame is identity.
+        if self._panels_on:
+            sx = getattr(event, "screen_x", event.offset.x)
+            sy = getattr(event, "screen_y", event.offset.y)
+            coords = self._panel_frame_coords(sx, sy)
+            if coords is None:
+                return
+            fx, fy = coords
+        else:
+            fx, fy = event.offset.x, event.offset.y
+        target = slot_at(self.hits, fx, fy)
         if target is None:
             return
         if self.state.overlay is None:

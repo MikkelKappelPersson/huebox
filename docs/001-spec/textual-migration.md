@@ -656,6 +656,19 @@ Textual runs a ~60 fps refresh loop with damage diffing, against today's
 redraw-on-keystroke. Visually identical, slightly busier. If battery matters,
 `App.CSS`/refresh throttling can cap it.
 
+### 7.4 Panels layout
+
+The compositor frames the blocks in two bordered panels rather than one
+bare stack. `selected` sits full-width above as bare chrome; below it the
+controls and the live blocks go side by side at `SIDE_MIN_W` (100) and up,
+stacked top/bottom below that. The left panel draws the palette column-major
+— pairs `(0, 8)` down to `(7, 15)`, then the named slots two-up in two-row
+cells (name over hex, so the panel is 50 wide and the examples keep their
+pair labels) — so the arrows walk it through a vertical grid
+(`editor.side_grid`); the bare `draw_editor` frame is unchanged, and I1
+still pins its rows with the candidate held bare. Panelled goldens are the
+follow-up re-record.
+
 ## 8. Dependencies and packaging
 
 ```toml
