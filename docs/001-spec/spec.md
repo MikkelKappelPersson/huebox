@@ -1,6 +1,6 @@
 # huebox — specification
 
-Status: **living draft** · Format version: **1** · Last updated: 2026-10-16
+Status: **living draft** · Format version: **1** · Last updated: 2026-10-05
 
 This is the working spec for huebox. It is a single living document: edit it in
 place as the tool changes, and move it to `docs/002-spec/spec.md` only when the
@@ -568,24 +568,19 @@ frame already drew.
 - No network access at runtime, for any command.
 - No writes outside the resolved config and its backup.
 
-**Extras, not dependencies.** Optional-dependency groups exist so that the one
-dependency above stays one:
+**One extra, not two.** [Pygments](https://pygments.org) and
+[Textual](https://textual.textualize.io/) are dependencies; only the test
+harness stays optional:
 
 | Group | Holds | Cost to install it |
 | --- | --- | --- |
-| `editor` | Textual, for the interactive editor | `huebox edit` only |
 | `test` | pyte, for the colour-equivalence harness (§10) | never, for a user |
 
-`show`, `list`, `use`, `new`, `import` and `--dump` install **one** dependency
-and need no extra. A missing extra is a user error: one line on stderr with the
-install line and exit 1, never a traceback (AGENTS.md). The editor declares
-what it needs in `editor.REQUIRES` and `cli` reads that, so the two cannot
-drift.
-
-> The `editor` group is now **in effect**: `huebox edit` runs on Textual, and
-> `show`, `list`, `use`, `new`, `import` and `--dump` still install one
-> dependency and need no extra. The guard built ahead of the migration is what
-> made that split a single decision rather than a release.
+`show`, `list`, `use`, `new`, `import` and `--dump` never import Textual, so
+they never pay its import — but they no longer need to be installable without
+it (decision 32). A `huebox` without Textual is a `huebox` whose main command
+fails on open, and no guard message makes that acceptable: the install must
+just work.
 
 ## 10. Testing
 
@@ -712,6 +707,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 29 | The editor runs as a Textual application: Textual owns raw mode, resize and input decoding, and huebox's guarantee narrows to *every path out of the session restores the terminal* | A terminal driver has to get `SIGWINCH`, escape-sequence decoding and an interrupted read right, and huebox had been re-implementing all three on top of `termios`. Owning less is what makes the guarantee hold: there is one owner and it restores on the way down, so the prompt path — which used to be a termios save/restore pair, and therefore a window in which the terminal was half-configured — is now a suspend and re-enter of the whole application. The frame is drawn after the compositor's next refresh rather than inside the resize event, because a resize event fires before the new size is applied and a frame drawn there is laid out for the window the user just left |
 | 30 | The mouse points at things already on the frame; it never adds a meaning. A click resolves through the same key surface as the keyboard, and a cell is clickable only if the frame published it while painting | Every mouse affordance is a second way to do something the keys already do, and the cost of a second model is that the two can disagree about what happened. Clicking a picker row moves the selection and then does what `Enter` does, so it cannot open a theme the keyboard would have refused; the same reasoning keeps `move_slot` as the only implementation of the arrows. The cells themselves come from the frame that painted them rather than from a layout recomputed afterwards, because a second description of the layout points clicks at the wrong cell *silently* — the wrong colour changes and nothing says so. Three things are deliberately absent: clicking the chrome does nothing (a frame where every click does something cannot distinguish the ones that change a colour), there are no hover or press states (a frame that repaints under the pointer is indistinguishable from one repainting for another reason), and the wheel does nothing outside the picker (only the picker has a window, and a wheel notch that moved the colour frame would read as having changed the colours) |
 | 31 | Only the code sample and the live diff are selectable; a selection is painted in the theme's own selection slots | Those two blocks exist so their text can leave the editor — sample a colour, copy the hex, paste the new value. Every other block is inert to a drag, because a swatch that began a text selection when clicked would swallow the click that selects a colour, and the failure is invisible: the selection just looks like nothing happened. The selection style is bound to `selection-background`/`selection-foreground`, the pair the picker already marks a theme with, so a selection reads as part of the theme instead of as a colour from somewhere else |
+| 32 | Textual is a dependency, not an extra: `huebox` installs its editor | An install whose main command fails on open is not a smaller install, it is a broken one. The `editor` extra bought `show` / `list` / `use` / `new` / `import` an install without Textual — and in exchange every one of those commands worked while `edit`, the command the install is for, printed an install line. The missing-extra guard even named an extra nobody could install (`huebox[textual]`), because it joined module names into brackets meant for group names. Same reasoning as decision 16, which made Pygments required when the sample without it read as a bug: a `huebox` that cannot edit is the degraded path, and the degraded path is what the guard was. What stays: the late import, so the commands that never open the editor never pay for it — that was always about cold-start time, never about installability — and `pyte` stays the `test` group, because the harness is not the product |
 
 ---
 
@@ -1290,7 +1286,7 @@ huebox/                the package (replaces huebox.py)
                        the resize handler are Textual's (decision 29)
   editor.py            §4.3 + §14 — the session state and the frame
   app.py               §4.3.2 — the Textual shell: the frame as widgets, the
-                       keys, the mouse (the `editor` extra, §9)
+                       keys, the mouse (Textual is a dependency now, §9)
 tests/                 test_<module>.py per module, via `unittest discover`
 AGENTS.md              architecture + guidelines (repo root, living doc)
 ```

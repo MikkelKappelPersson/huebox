@@ -19,7 +19,7 @@ needs_pyte = unittest.skipUnless(
     harness.pyte is not None, "pyte missing: pip install -e '.[test]'")
 needs_candidate = unittest.skipUnless(
     harness.candidate_available(),
-    "textual missing: pip install -e '.[editor]'")
+    "textual missing: pip install -e .")
 
 
 class TestGoldenPresence(unittest.TestCase):

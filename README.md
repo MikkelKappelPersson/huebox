@@ -30,16 +30,13 @@ read from.
 ```sh
 git clone https://github.com/MikkelKappelPersson/huebox
 cd huebox
-pipx install '.[editor]'   # or: pip install --user '.[editor]'
+pipx install .          # or: pip install --user .
 ```
 
-The one base dependency beyond the stdlib is [Pygments](https://pygments.org),
-which powers the editor's live code sample — it installs automatically,
-and every colour in the sample comes from the theme's own palette.
-The interactive editor needs the `editor` extra ([Textual](https://textual.textualize.io/)):
-`show`, `list`, `use`, `new`, `import` and `--dump` work without it, but
-`huebox edit` says so on stderr and exits 1 instead of opening. Installing
-without the extra (`pipx install .`) still gives you everything else.
+Two dependencies beyond the stdlib, both installed automatically: [Pygments](https://pygments.org),
+which powers the editor's live code sample, and [Textual](https://textual.textualize.io/),
+which the interactive editor runs on. Every colour in the sample comes from
+the theme's own palette.
 
 ## What's new in 0.2
 

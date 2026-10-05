@@ -22,7 +22,6 @@ that belongs to another theme (§13.6, decision 26).
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import sys
 import time
@@ -305,30 +304,15 @@ def _edit_target(args) -> Target:
 def _textual_app():
     """The Textual shell, imported late.
 
-    Not at module level, and that is the whole point of `textual` being an extra
-    (§9): `huebox show`, `list`, `use`, `--dump` and `--formats` must not pay
-    Textual's import, which is the larger half of a cold start. Importing it
-    eagerly also made every CLI subprocess in the suite ~0.7s slower and the
-    `test_themes` module four times slower than it needs to be — which is how the
-    cost was found. The `REQUIRES` check above has already run, so by here the
-    import cannot fail for a missing extra.
+    Not at module level — not because Textual is optional (it is a dependency
+    now, decision 32) but because `huebox show`, `list`, `use`, `--dump` and
+    `--formats` must not pay Textual's import, which is the larger half of a
+    cold start. Importing it eagerly also made every CLI subprocess in the
+    suite ~0.7s slower and the `test_themes` module four times slower than it
+    needs to be — which is how the cost was found.
     """
     from . import app
     return app
-
-
-def _missing_extras() -> list:
-    """Optional-dependency groups the editor needs that are not installed.
-
-    Read off `editor.REQUIRES` rather than named here, so the editor is the one
-    place that says what it needs and cannot drift from it.
-
-    A missing extra is a user error, so it is reported on stderr with the
-    install line and exits 1 — never a traceback from deep inside an import
-    (AGENTS.md). Returns the names, empty when nothing is missing.
-    """
-    return [name for name in editor.REQUIRES
-            if importlib.util.find_spec(name) is None]
 
 
 def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
@@ -363,29 +347,10 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         return 0
 
     if driver is None:
-        # Only the default driver needs the extra. An injected one is a test's
-        # business — it may be the stdlib loop, which needs nothing — so the
-        # check belongs with the choice, not in front of it.
-        #
-        # Two orderings matter here. It comes *after* the tty test, so
-        # `huebox edit | cat` says what is actually wrong with a piped session
-        # instead of asking for an install it will never use; and *before* the
-        # import, which is the whole difference between a clean line on stderr
-        # and an ImportError traceback (AGENTS.md).
-        missing = _missing_extras()
-        if missing:
-            # The message names the *extra group*, not the missing modules.
-            # `_missing_extras` reports modules (`textual`), which is what
-            # `find_spec` needs — but `huebox[textual]` is not a thing anyone
-            # can install. The group is `editor` (`pyproject.toml`), and
-            # joining module names into the brackets once produced exactly
-            # that un-installable line. One group serves the whole editor, so
-            # it is named once rather than derived per module; the test that
-            # guards this reads the group back out of `pyproject.toml`.
-            return _fail("the editor needs the 'editor' extra — install it "
-                         "with `pipx install 'huebox[editor]'` "
-                         "(or `uv tool install 'huebox[editor]'`), or run "
-                         "`huebox show` which needs no extra")
+        # The default driver is the Textual shell, imported late so the tty
+        # test above runs first: `huebox edit | cat` says what is actually
+        # wrong with a piped session instead of opening an editor it will
+        # never use.
         run = _textual_app().run
     else:
         run = driver

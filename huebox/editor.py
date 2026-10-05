@@ -27,16 +27,6 @@ import shutil
 import sys
 from typing import NamedTuple
 
-#: Optional-dependency groups this editor needs to run, checked by `cli` before
-#: the session opens so a missing extra is an error line and an exit 1 rather
-#: than a traceback (AGENTS.md).
-#:
-#: The editor is `app.py`, so `huebox edit` needs Textual and says so with one
-#: stderr line rather than an ImportError. Naming an extra here is never
-#: speculative: `cli` reads this list, and the commit that adds a name is the
-#: one that makes the command use the module needing it.
-REQUIRES: tuple = ("textual",)
-
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
 from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,

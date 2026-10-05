@@ -18,13 +18,14 @@ classifiers = [
     "Topic :: Terminals",
     "Topic :: Utilities",
 ]
-dependencies = ["Pygments>=2.0"]
+# Two runtime dependencies, and the second one is deliberate (spec §9,
+# decision 32): the editor *is* a Textual application now, so an install
+# without Textual is an install whose main command fails on open. `show`,
+# `list`, `use`, `new`, `import` and `--dump` do not import it, so they never
+# pay its import — but they no longer need to be installable without it.
+dependencies = ["Pygments>=2.0", "textual>=8"]
 
-# The Textual migration (docs/001-spec/textual-migration.md §8) adds Textual as
-# an *extra*, not a dependency: `show`, `list`, `detect` and `use` keep exactly
-# one dependency, so `huebox edit` is the only command that needs more.
 [project.optional-dependencies]
-editor = ["textual>=8"]
 test = ["pyte>=0.8"]
 
 [project.scripts]

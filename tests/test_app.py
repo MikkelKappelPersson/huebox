@@ -29,7 +29,7 @@ except ImportError:                                   # pragma: no cover
     huebox_app = None
 
 needs_app = unittest.skipUnless(huebox_app is not None,
-                                "textual missing: pip install -e '.[editor]'")
+                                "textual missing: pip install -e .")
 
 
 def _slots_file(slots):

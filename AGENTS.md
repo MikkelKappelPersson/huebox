@@ -24,7 +24,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode | §15 |
-| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session`; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
+| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session` | §4.3, §13.7, §14 |
 | `huebox/app.py` | the Textual shell: the frame as one widget per block over `render`'s rows, keys, focus, resize, click and wheel | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
@@ -61,9 +61,9 @@ without a compositor (`tests/session.py`) and keeps `_run_editor` about the
 writer and the picker rather than about Textual. The `app` import is inside the
 function: eager, every huebox invocation — `show`, `list`, `--dump` — paid
 Textual's import and the suite got 4x slower on one module, which is how it was
-found. Order in that function matters twice over: the tty test, then the
-`REQUIRES` test, then the import, so a piped session and a missing extra each
-get the line that is actually about them.
+found. Order in that function matters: the tty test, then the import, so a
+piped session says what is actually wrong with it instead of opening an
+editor it will never use.
 
 ## Guidelines
 
@@ -147,11 +147,14 @@ get the line that is actually about them.
   consequences: pin the whole environment when launching the app (Textual reads
   eight variables at import time, §6.4), and never let a golden regenerate to
   make a failure go away — the golden diff *is* the review artefact.
-- **Extras are not dependencies.** `pyproject` keeps one runtime dependency
-  (Pygments); `textual` is the `editor` group and `pyte` the `test` group, so
-  `show` / `list` / `use` / `new` / `import` install without either. The
-  equivalence tests skip without them rather than comparing the reference with
-  itself. `editor.REQUIRES` is what `cli` reads to say so — add a name there
-  only in the same commit that makes `huebox edit` use the module needing it.
+- **One optional group, not two.** `pyproject` keeps two runtime dependencies
+  (Pygments, Textual); `pyte` is the `test` group. An install whose main
+  command fails on open is not a smaller install (decision 32), so Textual
+  stopped being the `editor` extra — and the missing-extra guard went with it,
+  rather than guarding a configuration that can no longer be produced. The
+  equivalence tests still skip without `pyte` rather than comparing the
+  reference with itself. The `app` import stays late in `cli`, but that was
+  always about cold-start time for the commands that never open the editor,
+  never about installability.
 - Keep it single-purpose: colour slots in, colour slots out. Not a config
   editor, not a theme store (§3).

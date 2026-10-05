@@ -25,7 +25,7 @@ needs_pyte = unittest.skipUnless(
     harness.pyte is not None, "pyte missing: pip install -e '.[test]'")
 needs_candidate = unittest.skipUnless(
     harness.candidate_available(),
-    "textual missing: pip install -e '.[editor]'")
+    "textual missing: pip install -e .")
 
 #: The two sizes worth paying a subprocess for. 100x30 is where the §8.3 bars
 #: fit and the frame paints 50 colours; 80x24 is the commonest terminal and the
