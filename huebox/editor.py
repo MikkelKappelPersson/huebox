@@ -86,6 +86,14 @@ FALLBACK_COLS = 80
 CELL_FULL, CELL_MIN = 13, 6
 # the width of one interface cell: `mark name hex`, the name padded to 21
 NAMED_COL_W = 32
+# the side-by-side top block (§8.1, decision 36): the wordmark stands in a
+# fixed left column and the theme subject plus the selected readout in the
+# right one. `TOP_LEFT_W` is the indent, the six letters and the gap between
+# the columns; below `TOP_MIN_COLS` the right column cannot hold even a bare
+# readout (the longest slot name plus its hex), so the frame keeps the
+# stacked header instead.
+TOP_LEFT_W = 12
+TOP_MIN_COLS = 60
 
 
 class Grid(NamedTuple):
@@ -535,6 +543,45 @@ def side_live_rows(slots, cols, height, regions=None):
             at += SIDE_DIFF_ROWS
         regions.append(("sample", at, height - at))
     return [backdrop(line, slots, cols) for line in rows]
+def _pad_left(text: str) -> str:
+    """One left-column cell, padded out to `TOP_LEFT_W` visible columns.
+
+    The pad is plain air: the column holds the wordmark on the first top
+    row and nothing on the other two, so the theme subject beside it starts
+    in the same column on every row of the block.
+    """
+    return text + " " * max(0, TOP_LEFT_W - visible(text))
+
+
+def top_right_rows(label, path, slots, sel, cols):
+    """The right column's three rows: theme, selected, specimen (§8.1).
+
+    Pure, like every widget here: the theme subject, the selected slot's
+    prefix plus whatever rung of the hsv ladder fits the right column, and
+    the specimen with the exact reading where it fits. The caller joins
+    each row to its left-column cell; `cols` is the full frame width, so
+    the right column is `cols - TOP_LEFT_W` wide.
+    """
+    right_w = cols - TOP_LEFT_W
+    key = SLOTS[sel]
+    value = slots.get(key, MISSING)
+    right0 = chrome(label, "foreground", slots, bold=True)
+    if path:
+        tail = "  " + chrome(path, CHROME_MUTED, slots)
+        if visible(right0) + visible(tail) <= right_w:
+            right0 = right0 + tail
+    prefix = (title("selected", slots) + "  "
+              + chrome(key, "foreground", slots) + "  "
+              + chrome(value, CHROME_MUTED, slots) + "   ")
+    right1 = prefix + hsv_readout(slots, value,
+                                  right_w - visible(prefix))
+    specimen = f"  {fg(value)}AaBbCc 0123 {RESET}"
+    exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+    suffix = "   " + chrome(exact, CHROME_MUTED, slots)
+    right2 = (specimen + suffix
+              if visible(specimen) + visible(suffix) <= right_w
+              else specimen)
+    return right0, right1, right2
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
@@ -590,13 +637,35 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     at_extra = lambda: len(body) + len(extra)        # noqa: E731
 
     label = fmt if head is None else head
-    first = ("  " + wordmark(slots) + "  "
-             + chrome(label, "foreground", slots, bold=True))
-    if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
-        first += "  " + chrome(path, CHROME_MUTED, slots)
-    marks.append(("header", at_body()))
-    body.append(first)
-    body.append("")
+    # §8.1 (decision 36) — the top block stacks side by side where the
+    # right column holds a readout: the wordmark in a fixed left column,
+    # the theme subject plus the selected readout on its right. Below
+    # `TOP_MIN_COLS` the right column cannot hold even a bare readout, so
+    # the frame keeps the stacked header and the selected block below the
+    # interface grid instead. `HUEBOX_TOP=0` pins that stacked header at
+    # any width — the same opt-out the panels and the collapsibles have,
+    # for the tests that assert the stacked frame.
+    use_side = (cols >= TOP_MIN_COLS
+                and os.environ.get("HUEBOX_TOP", "1") != "0")
+    right0 = right1 = right2 = ""
+    if use_side:
+        right0, right1, right2 = top_right_rows(label, path, slots,
+                                                 sel, cols)
+        marks.append(("header", at_body()))
+        body.append(clip(_pad_left("  " + wordmark(slots)) + right0,
+                         cols))
+        marks.append(("selected", at_body()))
+        body.append(clip(_pad_left("") + right1, cols))
+        body.append(clip(_pad_left("") + right2, cols))
+        body.append("")
+    else:
+        first = ("  " + wordmark(slots) + "  "
+                 + chrome(label, "foreground", slots, bold=True))
+        if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
+            first += "  " + chrome(path, CHROME_MUTED, slots)
+        marks.append(("header", at_body()))
+        body.append(first)
+        body.append("")
 
     per_row, show_hex = grid.palette_cols, grid.show_hex
     cellw = CELL_FULL if show_hex else CELL_MIN
@@ -635,28 +704,31 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                                 len(PALETTE) + start + column))
     body.append("")
 
-    marks.append(("selected", at_body()))
-    key = SLOTS[sel]
-    value = slots.get(key, MISSING)
-    # §8.3 — the reading of the slot's own colour. It is bars where the row
-    # has room for them and the numbers they replace where it does not, so
-    # `room` is whatever the subject leaves — the row itself never grows
-    # and §15's budget does not move
-    subject = ("  " + title("selected", slots)
-               + "  " + chrome(key, "foreground", slots)
-               + "  " + chrome(value, CHROME_MUTED, slots) + "   ")
-    # §8.3 — the reading of the slot's own colour comes in two parts: the
-    # bars, which are the glance, on this row, and the exact numbers — `hue
-    # 207.0  sat 59.4%  val 93.7%`, which are the truth and cost a degree
-    # and a percent of rounding — on the specimen row below. Neither part
-    # costs a row, and neither gives up a row for the other.
-    exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
-    specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
-    body.append(subject + hsv_readout(slots, value, cols - visible(subject)))
-    body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
-                            if len(exact) + 3 <= cols - visible(specimen)
-                            else ""))
-    body.append("")
+    if not use_side:
+        marks.append(("selected", at_body()))
+        key = SLOTS[sel]
+        value = slots.get(key, MISSING)
+        # §8.3 — the reading of the slot's own colour. It is bars where
+        # the row has room for them and the numbers they replace where it
+        # does not, so `room` is whatever the subject leaves — the row
+        # itself never grows and §15's budget does not move
+        subject = ("  " + title("selected", slots)
+                   + "  " + chrome(key, "foreground", slots)
+                   + "  " + chrome(value, CHROME_MUTED, slots) + "   ")
+        # §8.3 — the reading of the slot's own colour comes in two parts:
+        # the bars, which are the glance, on this row, and the exact
+        # numbers — `hue 207.0  sat 59.4%  val 93.7%`, which are the truth
+        # and cost a degree and a percent of rounding — on the specimen row
+        # below. Neither part costs a row, and neither gives up a row for
+        # the other.
+        exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+        specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
+        body.append(subject + hsv_readout(slots, value,
+                                          cols - visible(subject)))
+        body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
+                                if len(exact) + 3 <= cols - visible(specimen)
+                                else ""))
+        body.append("")
 
     # §14.1 / §15 — the examples strip and the code sample share the
     # leftover rows, each with a floor, and the frame spends its decoration
@@ -768,11 +840,27 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         logo = (mark if mark and use_banner is None and spare >= len(mark)
                 else [])
     if logo:
-        subject = "  " + chrome(label, "foreground", slots, bold=True)
-        if path and len("  ") + len(label) + 2 + len(path) <= cols:
-            subject += "  " + chrome(path, CHROME_MUTED, slots)
-        body[0:2] = logo + [subject, ""]
         shift = len(logo)
+        if use_side:
+            # The banner above is the only huebox on screen now: the top
+            # block's wordmark stands back to air, and the right column
+            # stays where it was, one banner below.
+            palette_row = next(row for name, row in marks
+                               if name == "palette")
+            rights = [right0, right1, right2]
+            # Content rows keep the right column; air stays air: a padded
+            # blank is twelve spaces of fill-reopen rather than the floor,
+            # and the banner test reads the paint, not the plain text.
+            blanked = [clip(_pad_left("") + rights[i], cols)
+                         for i in range(min(palette_row, 3))]
+            blanked += [""] * max(0, palette_row - 3)
+            body[0:palette_row] = logo + blanked
+        else:
+            subject = "  " + chrome(label, "foreground", slots,
+                                       bold=True)
+            if path and len("  ") + len(label) + 2 + len(path) <= cols:
+                subject += "  " + chrome(path, CHROME_MUTED, slots)
+            body[0:2] = logo + [subject, ""]
         marks[:] = [(name, row if name == "header" else row + shift)
                     for name, row in marks]
         if hits is not None:

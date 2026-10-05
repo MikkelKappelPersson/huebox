@@ -851,9 +851,9 @@ class Editor(App):
 
         `named` is `draw_editor`'s own `(name, first, count)` map at the inner
         size, so the groups cannot drift from what the frame painted: the
-        same rule as `hits`. Chrome (`header` / `hints` / `status`) stays
-        full-width outside; controls and examples each get a `Panel` with a
-        themed border and title. Inner blocks keep the inner width; chrome
+        same rule as `hits`. Chrome (the top block, then `hints` / `status`)
+        stays full-width outside; controls and examples each get a `Panel`
+        with a themed border and title. Inner blocks keep the inner width; chrome
         blocks are re-backed to the full width, because a row backed to the
         inner width and padded by the widget would leave two columns on the
         terminal's own background (§8.2) — the pad has no style of its own.
@@ -868,15 +868,27 @@ class Editor(App):
         by_name = {name: (first, count) for name, first, count in named}
 
         def rows_for(names):
-            out = []
-            for name in names:
-                if name in by_name:
-                    first, count = by_name[name]
-                    out.append((name, first, count))
-            return out
+            # Frame order, not group order: `named` tiles the frame, so
+            # filtering it keeps every group in the order the frame
+            # painted — a block the frame moved (the top block put
+            # `selected` above the palette) cannot mount stale.
+            wanted = set(names)
+            return [(name, first, count) for name, first, count in named
+                    if name in wanted]
 
-        header = rows_for(("header",))
-        controls = rows_for(PANEL_CONTROLS)
+        # §8.1 (decision 36) — the side top block is one block: where the
+        # frame put `selected` above the palette grid it is the header's
+        # right column, not a control, so it rides with the header chrome
+        # above the panels. Inside the controls panel it would sit below
+        # the grids it reads, splitting the block across a border — and
+        # the widgets would no longer reassemble the frame in order.
+        top = ["header"]
+        if ("selected" in by_name and "palette" in by_name
+                and by_name["selected"][0] < by_name["palette"][0]):
+            top.append("selected")
+        header = rows_for(top)
+        controls = rows_for(name for name in PANEL_CONTROLS
+                            if name not in top)
         examples = rows_for(PANEL_EXAMPLES)
         hints = rows_for(("hints", "status"))
         # Any block `draw_editor` reported that is in none of the groups
