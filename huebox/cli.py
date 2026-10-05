@@ -374,11 +374,18 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         # and an ImportError traceback (AGENTS.md).
         missing = _missing_extras()
         if missing:
-            groups = ",".join(missing)
-            return _fail(f"the editor needs the '{groups}' extra — install it "
-                         f"with `pipx install 'huebox[{groups}]'` "
-                         f"(or `uv tool install 'huebox[{groups}]'`), or run "
-                         f"`huebox show` which needs no extra")
+            # The message names the *extra group*, not the missing modules.
+            # `_missing_extras` reports modules (`textual`), which is what
+            # `find_spec` needs — but `huebox[textual]` is not a thing anyone
+            # can install. The group is `editor` (`pyproject.toml`), and
+            # joining module names into the brackets once produced exactly
+            # that un-installable line. One group serves the whole editor, so
+            # it is named once rather than derived per module; the test that
+            # guards this reads the group back out of `pyproject.toml`.
+            return _fail("the editor needs the 'editor' extra — install it "
+                         "with `pipx install 'huebox[editor]'` "
+                         "(or `uv tool install 'huebox[editor]'`), or run "
+                         "`huebox show` which needs no extra")
         run = _textual_app().run
     else:
         run = driver

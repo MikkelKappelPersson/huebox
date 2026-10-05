@@ -5,10 +5,13 @@ extra and not a dependency (§8). That makes a missing extra a user error: it ha
 to arrive as one stderr line and exit 1, never as a traceback from an import
 (AGENTS.md).
 
-The guard reads `editor.REQUIRES` rather than naming a package, because until
-the migration's phase 3 lands the editor is still the stdlib one and `huebox
-edit` has to keep working on a bare install. So these tests pin both halves:
-quiet now, and a clean failure the moment the editor declares something.
+The guard reads `editor.REQUIRES` rather than naming a package, so `cli` never
+holds its own copy of the list. The message it prints names something else
+again — the *extra group* that provides those modules — and that distinction
+is the whole subject of the tests below: `_missing_extras` reports modules
+(`textual`, for `find_spec`), while `pipx install 'huebox[…]'` needs the
+group (`editor`, from `pyproject.toml`). Joining module names into the
+brackets once produced `huebox[textual]`, which nobody can install.
 """
 
 import io
@@ -69,20 +72,50 @@ class TestEditorRequirements(unittest.TestCase):
         code, err = self._run_with((MISSING,))
         self.assertEqual(code, 1)
         self.assertTrue(err.startswith("huebox: "), err)
-        self.assertIn(MISSING, err)
         self.assertIn("pipx install", err)
         # one line, and no traceback: that is the whole point of the guard
         self.assertNotIn("\n", err.strip(), err)
         self.assertNotIn("Traceback", err)
 
+    def test_the_message_names_the_extra_group_not_the_module(self):
+        # The failure this guards against shipped: the message joined the
+        # missing *module* names into `huebox[…]`, printing
+        # `pipx install 'huebox[textual]'` — an extra that does not exist.
+        # A user who follows that line installs nothing and gets the same
+        # error back. The group is `editor`; the modules are what `find_spec`
+        # needed, and they do not belong in brackets.
+        _, err = self._run_with((MISSING,))
+        self.assertIn("huebox[editor]", err)
+        self.assertNotIn("huebox[%s]" % MISSING, err)
+
+    def test_several_missing_modules_still_name_the_one_group(self):
+        _, err = self._run_with(("nope_one_huebox", "nope_two_huebox"))
+        self.assertIn("huebox[editor]", err)
+        self.assertNotIn("nope_one_huebox", err)
+        self.assertNotIn("nope_two_huebox", err)
+
+    def test_the_named_extra_exists_in_pyproject(self):
+        # The read-off-don't-name rule, applied to the message itself: every
+        # `huebox[…]` the error offers must be a real key under
+        # `[project.optional-dependencies]`, or the line it prints is one no
+        # install command can honour. This is the test that would have caught
+        # `huebox[textual]`.
+        import re
+
+        _, err = self._run_with((MISSING,))
+        offered = re.findall(r"huebox\[([A-Za-z0-9_-]+)\]", err)
+        self.assertTrue(offered, "the message offers no installable extra")
+        with open(os.path.join(os.path.dirname(_HERE), "pyproject.toml"),
+                  encoding="utf-8") as handle:
+            project = handle.read()
+        section = project.split("[project.optional-dependencies]", 1)[1]
+        for extra in offered:
+            self.assertRegex(section, r"(?m)^%s\s*=" % re.escape(extra),
+                             "'%s' is not an extra in pyproject.toml" % extra)
+
     def test_the_message_offers_the_command_that_needs_no_extra(self):
         _, err = self._run_with((MISSING,))
         self.assertIn("huebox show", err)
-
-    def test_several_missing_extras_are_named_together(self):
-        code, err = self._run_with(("nope_one_huebox", "nope_two_huebox"))
-        self.assertEqual(code, 1)
-        self.assertIn("nope_one_huebox,nope_two_huebox", err)
 
     def test_an_installed_requirement_is_silent(self):
         # The shape the real check takes for textual: importable means the guard
