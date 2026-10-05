@@ -12,6 +12,14 @@ SLOTS = PALETTE + NAMED
 
 MISSING = "#808080"
 
+#: One nudge of the adjust keys (§4.3): a degree of hue, or two percent of
+#: sat/val, times the session's step. Pure and named so the Textual shell
+#: (`app.py`, migration phase 2) and `editor._adjust` cannot drift apart on
+#: what a key press does to a colour — the shell had its own 0.01 steps, which
+#: would have made `q/w` feel different under Textual than under huebox.
+HUE_STEP = 1 / 360
+CHANNEL_STEP = 0.02
+
 
 # --------------------------------------------------------------------------
 # colour maths
@@ -37,6 +45,22 @@ def hsv_to_rgb(h, s, v):
 def luminance(value: str) -> float:
     r, g, b = hex_to_rgb(value)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def step_hsv(value: str, channel: str, direction: int, mult: float) -> str:
+    """`value` nudged one step along `channel` — "h", "s" or "v".
+
+    Hue wraps, so stepping below 0 comes round rather than clamping; sat and val
+    clamp, because a negative one is not a colour.
+    """
+    hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
+    if channel == "h":
+        hue = (hue + direction * HUE_STEP * mult) % 1.0
+    elif channel == "s":
+        sat = max(0.0, min(1.0, sat + direction * CHANNEL_STEP * mult))
+    else:
+        val = max(0.0, min(1.0, val + direction * CHANNEL_STEP * mult))
+    return rgb_to_hex(hsv_to_rgb(hue, sat, val))
 
 
 def readable_fg(value: str) -> str:

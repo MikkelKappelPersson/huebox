@@ -13,6 +13,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
+import session  # noqa: E402
 from huebox import editor  # noqa: E402
 from huebox.color import (NAMED, SLOTS, hex_to_rgb,  # noqa: E402
                          rgb_to_hsv)
@@ -38,13 +39,40 @@ def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None):
     return out.getvalue()
 
 
+def picker_frame(cols=80, rows=24, names=("ash", "ember"), index=0,
+                 current="ash", status="", slots=None):
+    """The picker frame as `app.Picker` composes it: `theme_lines` + backdrop.
+
+    `draw_editor` grew an `overlay=` mode for the whole migration and phase 5
+    took it away again, giving the picker its own widget. The frame is those
+    two calls in that order, and this is where that lives now — if `backdrop`
+    ever goes missing again the floor tests below catch it, which is exactly
+    how it was caught the first time.
+    """
+    slots = FULL_SLOTS if slots is None else slots
+    out = [editor.backdrop(line, slots, cols)
+           for line in editor.theme_lines(list(names), index, current,
+                                          cols, rows, status, slots)]
+    return "\r\n".join(out)
+
+
 def plain(line):
     """One drawn row without its SGR escapes — what layout reads."""
     return ANSI.sub("", line)
 
 
 def lines(text):
-    return text.split("\r\n")[:-1]        # the frame ends with a newline
+    """The frame's rows.
+
+    The frame ends with a newline only when it does **not** fill the screen:
+    written on the bottom row that newline scrolls the frame away, losing the
+    wordmark row (§4.8 of the migration spec, fixed in `draw_editor`). So the
+    trailing element is dropped when it is empty, not unconditionally.
+    """
+    rows = text.split("\r\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    return rows
 
 
 def plain_rows(text):
@@ -180,11 +208,7 @@ class Floor(unittest.TestCase):
                                      [], f"row {row}")
 
     def test_the_picker_frame_has_no_hole_either(self):
-        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
-                mock.patch.object(editor, "term_size", return_value=(80, 24)):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
-                               overlay=(["ash", "ember"], 0, "ash"))
-        for line in lines(out.getvalue()):
+        for line in lines(picker_frame()):
             self.assertEqual(unpainted(line.replace(self.CLEAR, "", 1)), [])
 
     def test_moving_the_background_moves_the_whole_frame(self):
@@ -204,11 +228,7 @@ class Floor(unittest.TestCase):
     def test_the_picker_frame_stands_on_it_too(self):
         # §13.7 — the picker takes the frame over, and the floor is the
         # frame's, so it takes the floor as well
-        with mock.patch.object(sys, "stdout", out := io.StringIO()), \
-                mock.patch.object(editor, "term_size", return_value=(80, 24)):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], "", 1,
-                               overlay=(["ash", "ember"], 0, "ash"))
-        for line in lines(out.getvalue()):
+        for line in lines(picker_frame()):
             self.assertEqual(width(line), 80)
             self.assertTrue(line.replace(self.CLEAR, "", 1)
                             .startswith(bg(FULL_SLOTS["background"])))
@@ -679,16 +699,9 @@ class EditLoop(unittest.TestCase):
         target = path or os.path.join(self.tmp.name, "kitty.conf")
         with open(target, "w", encoding="utf-8") as handle:
             handle.write("# colours\n")
-        with mock.patch.object(editor, "enter_raw", return_value=(7, None)),\
-                mock.patch.object(editor, "exit_raw"),\
-                mock.patch.object(editor, "draw_editor",
-                                  side_effect=note_handler),\
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)),\
-                mock.patch.object(editor, "term_size",
-                                  return_value=(cols or 80, 24)),\
-                mock.patch.object(sys, "stdout", io.StringIO()):
-            editor.edit("kitty", target, dict(slots or FULL_SLOTS), record)
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            session.drive(stream, "kitty", target, dict(slots or FULL_SLOTS),
+                          record, size=((cols or 80), 24), draw=note_handler)
         return writes, draws, handlers, target
 
     def setUp(self):
@@ -696,12 +709,14 @@ class EditLoop(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def test_resize_redraws_without_consuming_a_key_or_writing(self):
-        before = signal.getsignal(signal.SIGWINCH)
-        writes, draws, handlers, _ = self.run_session(["resize", "f", "esc"])
+        # A resize still redraws and still eats no key — the guarantee §15.1
+        # describes. The SIGWINCH handler half of this test went with
+        # `_on_winch`: Textual delivers a `Resize` event and owns the signal, so
+        # asserting huebox installed a handler would assert something the
+        # migration deliberately removed.
+        writes, draws, _handlers, _ = self.run_session(["resize", "f", "esc"])
         self.assertEqual(writes, [])        # §14.2: nothing but Ctrl+S writes
         self.assertEqual(len(draws), 3)      # the resize redrew, ate no key
-        self.assertEqual(handlers, [editor._on_winch] * 3)
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
         self.assertFalse(os.path.exists(
             os.path.join(self.tmp.name, "kitty.conf.huebox.bak")))
 
@@ -1155,18 +1170,13 @@ class ThemeSession(unittest.TestCase):
         writes = []
         stream = iter(keys)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(editor, "enter_raw", return_value=(7, None)),\
-                mock.patch.object(editor, "exit_raw"),\
-                mock.patch.object(editor, "term_size",
-                                  return_value=(100, 30)),\
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)),\
-                mock.patch.object(sys, "stdout", out),\
+        with mock.patch.object(sys, "stdout", out),\
                 mock.patch.object(sys, "stderr", err):
-            editor.edit("ghostty", self.theme, dict(FULL_SLOTS),
-                        lambda name, path, values: writes.append(
-                            (name, path, dict(values))),
-                        backup=False, theme="ember", report=report)
+            session.drive(stream, "ghostty", self.theme, dict(FULL_SLOTS),
+                          lambda name, path, values: writes.append(
+                              (name, path, dict(values))),
+                          backup=False, theme="ember", report=report,
+                          size=(100, 30))
         return writes, out.getvalue(), err.getvalue()
 
     def test_saving_writes_the_truth_file_and_nothing_else(self):
@@ -1571,12 +1581,12 @@ class OverlayFrame(unittest.TestCase):
 
     def overlay_frame(self, cols, rows, names=("ash", "ember", "frost"),
                       index=0, current="ember", status=""):
-        out = io.StringIO()
-        with mock.patch.object(editor, "term_size", return_value=(cols, rows)),\
-                mock.patch.object(sys, "stdout", out):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [], status,
-                               1, overlay=(list(names), index, current))
-        return out.getvalue()
+        """The picker frame, composed the way `app.Picker` composes it."""
+        return "\r\n".join(
+            editor.backdrop(line, FULL_SLOTS, cols)
+            for line in editor.theme_lines(list(names), index, current,
+                                           cols, rows, status,
+                                           dict(FULL_SLOTS)))
 
     def test_the_frame_names_the_themes_and_marks_the_current_one(self):
         body = ANSI.sub("", self.overlay_frame(80, 24))
@@ -1645,134 +1655,191 @@ class OverlayFrame(unittest.TestCase):
         self.assertEqual(self.overlay_frame(60, 16, self.MANY, 4, "theme-04"),
                          self.overlay_frame(60, 16, self.MANY, 4, "theme-04"))
 
-    def test_below_the_minimum_the_hint_replaces_the_picker(self):
-        for cols, rows in ((editor.MIN_COLS - 1, 24),
-                           (80, editor.MIN_ROWS - 1)):
+    def test_below_the_minimum_the_frame_is_a_list_and_nothing_else(self):
+        """What the picker does with no room, now that it is its own widget.
+
+        §13.7 — the picker shares the editor's minimum size, so below it the
+        two frames cannot both be wrong about what to draw. That check used to
+        live in `draw_editor`'s overlay branch; with the branch gone it lives
+        in `Editor.redraw`, and `tests/test_app` is where the assertion is now.
+        What is left here is the picker's own side of the contract: `theme_lines`
+        is a *frame*, and asked for fewer rows than it has, it keeps the rows it
+        can and drops the rest rather than raising or inventing any.
+        """
+        for cols, rows in ((editor.MIN_COLS - 1, 24), (80, editor.MIN_ROWS - 1)):
             with self.subTest(size=(cols, rows)):
-                out = self.overlay_frame(cols, rows, self.MANY)
-                self.assertIn(HINT, out)
-                self.assertNotIn("theme-", out)
-                self.assertNotIn("Enter open", out)
+                got = self.overlay_frame(cols, rows, self.MANY)
+                self.assertLessEqual(got.count("\r\n"), rows,
+                                     "the picker wrote past the screen")
 
 
-class RawMode(unittest.TestCase):
-    """§4.3 — one enter/exit pair per raw session, prompts included.
+def _rows(cols, rows, sel, mult=False, status=""):
+    """The editor frame's rows as plain text — what a click lands on."""
+    out = io.StringIO()
+    with mock.patch.object(sys, "stdout", out):
+        editor.draw_editor("ghostty", "", FULL_SLOTS, sel, [], status, mult,
+                           size=(cols, rows))
+    return plain_rows(out.getvalue())
 
-    The paths that leave raw mode are: the quit (clean or armed), each
-    prompt (hex entry and the picker's name prompts), and any exception out
-    of the loop. Every one of them has to come back to a sane terminal.
+
+def _picker_rows(names, index, current, cols, rows):
+    """The picker frame's rows as plain text."""
+    return [plain(line) for line in
+            editor.theme_lines(names, index, current, cols, rows)]
+
+
+class HitMap(unittest.TestCase):
+    """Every clickable cell, cross-checked against the frame that paints it.
+
+    `frame_hits` is a second description of where the grids are, and that is a
+    real risk: a layout change that moves a row would leave it pointing at the
+    wrong cell, and clicking would select something the user is not looking at,
+    with nothing in the log. So no hit is believed until the painted frame is
+    asked — a hit counts only if the cell it claims carries that slot's marker.
     """
 
-    def run_session(self, keys, answers=(), input_error=None, edit_kwargs=None,
-                    keys_side_effect=None, exit_error=None):
-        events = []
-        entered = []
+    def test_every_hit_claims_a_cell_the_frame_marks(self):
+        for cols, rows in ((120, 30), (100, 30), (80, 24), (60, 16), (40, 12)):
+            hits = editor.frame_hits(cols, rows)
+            # A short frame shows fewer slots, and a slot it does not show has
+            # no cell to click — 15 of 22 at 60x16, 12 at 40x12. The map is
+            # exactly the prefix the frame paints, and claiming a cell below the
+            # trim would mean selecting something the user cannot see.
+            self.assertEqual([hit.slot for hit in hits],
+                             list(range(len(hits))))
+            self.assertLessEqual(len(hits), len(SLOTS))
+            for hit in hits:
+                with self.subTest(cols=cols, slot=hit.slot):
+                    painted = _rows(cols, rows, hit.slot)
+                    self.assertLess(hit.y, len(painted),
+                                    "hit points past the end of the frame")
+                    cell = painted[hit.y][hit.x0 + 1:hit.x0 + 2]
+                    self.assertEqual(
+                        cell, ">",
+                        "row %d col %d does not carry the `>` marker for slot "
+                        "%d (%r)" % (hit.y, hit.x0, hit.slot, cell))
 
-        def enter_raw():
-            state = (10 + len(entered), f"termios-{len(entered)}")
-            entered.append(state)
-            events.append(("enter", state))
-            return state
+    def test_a_hit_is_the_cell_that_cell_wide(self):
+        for cols in (120, 100, 80, 60, 40):
+            hits = {hit.slot: hit for hit in editor.frame_hits(cols, 30)}
+            grid = editor.grid_geometry(cols)
+            cellw = editor.CELL_FULL if grid.show_hex else editor.CELL_MIN
+            self.assertEqual(hits[0].x0, 2)
+            self.assertEqual(hits[1].x0, 2 + cellw)
+            self.assertEqual(hits[0].x1, hits[0].x0 + cellw - 1)
 
-        def exit_raw(fd, saved):
-            events.append(("exit", (fd, saved)))
-            if exit_error is not None:
-                raise exit_error
+    def test_the_interface_cells_sit_below_the_palette(self):
+        for cols in (120, 80, 40):
+            hits = {hit.slot: hit for hit in editor.frame_hits(cols)}
+            self.assertGreater(hits[len(editor.PALETTE)].y,
+                               hits[len(editor.PALETTE) - 1].y,
+                               "the interface grid overlaps the palette's")
 
-        def fake_input(label):
-            events.append(("prompt", label))
-            if input_error is not None:
-                raise input_error
-            return answers.pop(0) if answers else ""
+    def test_chrome_is_not_clickable(self):
+        hits = editor.frame_hits(80, 24)
+        for x, y in ((0, 0), (0, 1), (2, 2), (79, 0)):
+            self.assertIsNone(editor.slot_at(hits, x, y),
+                              "(%d,%d) is chrome, not a colour" % (x, y))
 
-        stream = iter(keys)
-        with mock.patch.object(editor, "enter_raw", enter_raw), \
-                mock.patch.object(editor, "exit_raw", exit_raw), \
-                mock.patch.object(editor, "draw_editor"), \
-                mock.patch.object(editor, "read_key",
-                                  side_effect=keys_side_effect
-                                  or (lambda fd: next(stream))), \
-                mock.patch("builtins.input", fake_input), \
-                mock.patch.object(sys, "stdout", io.StringIO()), \
-                mock.patch.object(sys, "stderr", io.StringIO()):
-            editor.edit("ghostty", "/tmp/huebox.conf", dict(FULL_SLOTS),
-                        lambda name, path, values: "saved",
-                        **(edit_kwargs or {}))
-        return events
+    def test_a_click_anywhere_in_a_cell_selects_that_slot(self):
+        for cols in (120, 80, 40):
+            hits = editor.frame_hits(cols)
+            for hit in hits:
+                with self.subTest(cols=cols, slot=hit.slot):
+                    self.assertEqual(editor.slot_at(hits, hit.x0, hit.y),
+                                     hit.slot)
+                    self.assertEqual(editor.slot_at(hits, hit.x1, hit.y),
+                                     hit.slot,
+                                     "the last column of a cell must still "
+                                     "hit it, or it has a dead sliver")
 
-    def pairs(self, events):
-        """Every exit paired with the enter whose state it restores."""
-        out, live = [], None
-        for kind, payload in events:
-            if kind == "enter":
-                live = payload
-            elif kind == "exit":
-                out.append((live, payload))
-                live = None
-        return out
+    def test_the_picker_windows_so_a_click_lands_on_what_is_shown(self):
+        names = [f"theme-{n:02d}" for n in range(40)]
+        for index in (0, 5, 20, 39):
+            hits = editor.theme_hits(names, index, "", 80, 24)
+            self.assertTrue(hits, "a 40-theme library must be clickable")
+            for hit in hits:
+                with self.subTest(index=index, row=hit.slot):
+                    painted = _picker_rows(names, index, "", 80, 24)
+                    self.assertIn(names[hit.slot], painted[hit.y])
 
-    def test_a_session_without_prompts_enters_once_and_exits_once(self):
-        events = self.run_session(["f", "esc"])
-        self.assertEqual(events, [("enter", (10, "termios-0")),
-                                  ("exit", (10, "termios-0"))])
-
-    def test_a_dirty_quit_exits_the_same_way(self):
-        events = self.run_session(["w", "esc", "esc"])
-        self.assertEqual(len(self.pairs(events)), 1)
-        self.assertEqual(events[-1], ("exit", (10, "termios-0")))
-
-    def test_each_prompt_closes_and_reopens_the_pair(self):
-        library = FakeLibrary().build()
-        events = self.run_session(
-            ["i", "N", "esc"], answers=["#abcdef", "dusk"],
-            edit_kwargs={"theme": "ember", "backup": False,
-                         "library": library})
-        self.assertEqual([kind for kind, _ in events],
-                         ["enter", "exit", "prompt", "enter", "exit", "prompt",
-                          "enter", "exit"])
-        # every exit restores exactly the state its own enter saved
-        self.assertEqual(self.pairs(events),
-                         [((10, "termios-0"), (10, "termios-0")),
-                          ((11, "termios-1"), (11, "termios-1")),
-                          ((12, "termios-2"), (12, "termios-2"))])
-
-    def test_the_closing_exit_uses_the_last_enter_state(self):
-        # the loop's finally restores the termios state of the *current*
-        # raw session, not the one from before a prompt (§4.3)
-        library = FakeLibrary().build()
-        events = self.run_session(
-            ["i", SAVE, "esc"], answers=["#abcdef"],
-            edit_kwargs={"theme": "ember", "backup": False,
-                         "library": library})
-        self.assertEqual(events[-1], ("exit", (11, "termios-1")))
-
-    def test_a_cancelled_prompt_still_closes_the_pair(self):
-        for problem in (EOFError(""), KeyboardInterrupt()):
-            with self.subTest(problem=type(problem).__name__):
-                library = FakeLibrary().build()
-                events = self.run_session(
-                    ["i", "N", "esc"], input_error=problem,
-                    edit_kwargs={"theme": "ember", "backup": False,
-                                 "library": library})
-                self.assertEqual([kind for kind, _ in events],
-                                 ["enter", "exit", "prompt", "enter", "exit",
-                                  "prompt", "enter", "exit"])
-                self.assertEqual(self.pairs(events)[-1],
-                                 ((12, "termios-2"), (12, "termios-2")))
-
-    def test_an_exception_out_of_the_loop_still_exits_raw(self):
-        before = signal.getsignal(signal.SIGWINCH)
-        with self.assertRaises(RuntimeError):
-            self.run_session(["x"], keys_side_effect=["x", RuntimeError("boom")])
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
-
-    def test_the_winch_handler_survives_a_failing_termios_restore(self):
-        # nothing may leave the user with a raw shell *or* a stale handler
-        before = signal.getsignal(signal.SIGWINCH)
-        with self.assertRaises(OSError):
-            self.run_session(["esc"], exit_error=OSError("tty"))
-        self.assertEqual(signal.getsignal(signal.SIGWINCH), before)
+    def test_an_empty_picker_has_nothing_to_hit(self):
+        self.assertEqual(editor.theme_hits([], 0, "", 80, 24), [])
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+class Regions(unittest.TestCase):
+    """The frame names its blocks, and names them where they are (§5.6).
+
+    Phase 5 mounts one widget per block. The only thing standing between that
+    and a frame whose widgets disagree with the frame is this map, so it is
+    pinned hard: the blocks must tile the frame exactly — first at row 0, no
+    gaps, no overlaps, no block reaching past the bottom — at every size and
+    with and without a status line, because the status line is the one block
+    that appears and disappears.
+    """
+
+    def _regions(self, cols, rows, status=""):
+        found = []
+        original = editor.term_size
+        editor.term_size = lambda default=(80, 24): (cols, rows)
+        try:
+            with mock.patch.object(sys, "stdout", io.StringIO()):
+                editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [],
+                                   status, 1, regions=found,
+                                   size=(cols, rows))
+        finally:
+            editor.term_size = original
+        return found
+
+    def test_the_blocks_tile_the_frame(self):
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            for status in ("", "reverted to start"):
+                with self.subTest(size=f"{cols}x{rows}", status=status):
+                    found = self._regions(cols, rows, status)
+                    self.assertTrue(found, "no regions reported")
+                    self.assertEqual(found[0][1], 0,
+                                     "the first block does not start at row 0")
+                    for before, after in zip(found, found[1:]):
+                        self.assertEqual(
+                            before[1] + before[2], after[1],
+                            "%s and %s are not adjacent" % (before[0], after[0]))
+
+    def test_no_block_reaches_past_the_bottom(self):
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            for status in ("", "reverted to start"):
+                with self.subTest(size=f"{cols}x{rows}", status=status):
+                    for name, first, count in self._regions(cols, rows, status):
+                        self.assertGreater(count, 0,
+                                           "%s is an empty block" % name)
+                        self.assertLessEqual(first + count, rows,
+                                             "%s reaches past the frame" % name)
+
+    def test_the_blocks_total_the_rows_the_frame_painted(self):
+        """The count is the frame's height, not the screen's.
+
+        These differ: at 60x16 the frame is fifteen rows and the screen is
+        sixteen. Asserting the blocks reach the bottom of the *screen* would
+        demand a row the frame never drew — which is precisely the failure the
+        second test above exists to forbid."""
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12)):
+            with self.subTest(size=f"{cols}x{rows}"):
+                painted = len(lines(frame(cols, rows)))
+                found = self._regions(cols, rows)
+                self.assertEqual(sum(count for _, _, count in found), painted)
+
+    def test_a_status_line_is_its_own_block_and_the_last(self):
+        found = self._regions(80, 24, "reverted to start")
+        names = [name for name, _, _ in found]
+        self.assertIn("status", names)
+        self.assertEqual(names[-1], "status")
+        self.assertNotIn("status",
+                         [name for name, _, _ in self._regions(80, 24)])
+
+    def test_a_short_frame_drops_its_widgets_before_its_grid(self):
+        """§15 — the frame spends decoration before it spends a widget.
+
+        At 40x12 there is no room for the code sample or the examples strip, so
+        the blocks stop after the grids. A map that reported them anyway would
+        be a map describing a frame that is not the one on screen."""
+        names = [name for name, _, _ in self._regions(40, 12)]
+        self.assertEqual(names, ["header", "palette", "interface"])

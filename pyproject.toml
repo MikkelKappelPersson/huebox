@@ -20,6 +20,13 @@ classifiers = [
 ]
 dependencies = ["Pygments>=2.0"]
 
+# The Textual migration (docs/001-spec/textual-migration.md §8) adds Textual as
+# an *extra*, not a dependency: `show`, `list`, `detect` and `use` keep exactly
+# one dependency, so `huebox edit` is the only command that needs more.
+[project.optional-dependencies]
+editor = ["textual>=8"]
+test = ["pyte>=0.8"]
+
 [project.scripts]
 huebox = "huebox.cli:main"
 

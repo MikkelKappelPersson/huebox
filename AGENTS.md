@@ -23,25 +23,47 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads and the pointer writer, `config_holds_colours`, `resolve()` | §7 |
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push` to terminals, the post-push reload, Ghostty native export, `RAMP` | §13, §13.6 |
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff | §8, §8.1, §14 |
-| `huebox/tui.py` | `term_size`, raw mode, `read_key`, SIGWINCH, `MIN_COLS`/`MIN_ROWS` | §15 |
-| `huebox/editor.py` | draw loop, keys, picker + save-as-new, staged buffer + save | §4.3, §13.7, §14 |
+| `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode | §15 |
+| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session`; `REQUIRES`, the extras the editor needs | §4.3, §13.7, §14 |
+| `huebox/app.py` | the Textual shell: the frame as one widget per block over `render`'s rows, keys, focus, resize, click and wheel | migration §5.5 |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` | §4, §13.5 |
 
 Dependency rule, no exceptions: `color` imports nothing intra-package;
-`formats` and `tui` import `color` only; `detect` imports `formats`;
+`formats` imports `color` only, and `tui` imports nothing intra-package; `detect` imports `formats`;
 `themes` imports `color` + `formats` + `detect` (push resolves its target
 through the same `resolve()` the CLI does, and the native export asks
 `detect` for the config holding the `theme =` line); `render` imports
-`color`; `editor` imports `render` + `tui` + `color`; `cli` imports
+`color`; `editor` imports `render` + `tui` + `color`; `app` imports
+`render` + `tui` + `color` + `editor` (it drives `editor`'s grid geometry and
+step arithmetic, and must not re-implement either); `cli` imports
 everything. No cycles. Every module header cites its spec section.
+
+**`app.py` reuses `draw_editor`'s rows, it does not re-render them.** It
+captures what the writer produced and hands it to Textual as a `Strip`. A
+second copy of the frame's construction would be a second chance to get it
+wrong, and the equivalence harness could then only say the two copies agreed —
+not that either matched what huebox used to do. Take the buffer as a file
+(`HUEBOX_SLOTS`): product code is handed its slots, and the fixtures stay in
+`tests/`.
 
 **Injected seams keep those edges clean.** `editor.py` reaches the outside
 world through four callables `cli.py` builds: the save callback
 (`write(theme, path, slots)` — handed the subject every time, because a
 picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one
-raw-mode prompt pattern, §4.3), and the `Library` object (list / load /
-create) that backs the theme picker (§13.7). Never import `themes` or
-`detect` into `editor` to save a parameter.
+prompt pattern, §4.3, which the shell satisfies by handing the terminal back
+with `App.suspend()` so the call stays synchronous), and the `Library` object
+(list / load / create) that backs the theme picker (§13.7). Never import
+`themes` or `detect` into `editor` to save a parameter.
+
+**`cli` names its session, and imports the shell late.** `_run_editor` takes a
+`driver` defaulting to `app.run`, which is what lets a test drive a session
+without a compositor (`tests/session.py`) and keeps `_run_editor` about the
+writer and the picker rather than about Textual. The `app` import is inside the
+function: eager, every huebox invocation — `show`, `list`, `--dump` — paid
+Textual's import and the suite got 4x slower on one module, which is how it was
+found. Order in that function matters twice over: the tty test, then the
+`REQUIRES` test, then the import, so a piped session and a missing extra each
+get the line that is actually about them.
 
 ## Guidelines
 
@@ -81,6 +103,28 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   `from __future__ import annotations` in every file).
 - **Errors to stderr, prefixed `huebox: `, exit 1.** No tracebacks for user
   errors: missing config, bad theme name, no colours found.
+- **One handler per key.** A key the focused widget binds is the widget's
+  business and the app's `on_key` steps over it. Textual does not promise a
+  binding consumes a key before the app's own handler sees it, and when both
+  acted on an arrow the selection moved two slots per press.
+- **Focus is placed deliberately, after the tree exists.** `mount` is a
+  request, so focusing inline queries an empty tree; and `self.size` during
+  `on_resize` is still the *old* size, so a frame drawn there is laid out for
+  the window the user just left. Both want `call_after_refresh`.
+- **One size, one number.** The frame is laid out from the compositor's size,
+  passed down as `draw_editor`'s `size=`. Asking the terminal as well gives two
+  numbers for one quantity, and the harness cannot see the disagreement: it sets
+  the pty size before launching, so they only diverge on a resize.
+- **A widget that answers to the user says so.** `Frame.ALLOW_SELECT` is off
+  and only the sample and the diff turn it on: Textual makes every widget
+  selectable by default, and a swatch that began a text selection when clicked
+  would swallow the click.
+- **A click is a keypress.** `on_click` resolves to a slot and then goes
+  through `apply_key`; it must never touch a colour or a frame. The clickable
+  cells are recorded by the rows that draw them (`draw_editor` / `theme_lines`
+  take `hits=`), never recomputed — a second copy of the layout is a second
+  chance to aim a click at the wrong cell, silently — and `test_editor`
+  cross-checks every hit against the painted frame.
 - **Layout goes through `clip` / `pack`.** No widget measures width itself;
   layout derives from `term_size()` every frame (§15). Below
   `MIN_COLS`×`MIN_ROWS` (in `tui.py`) the editor draws the too-small hint and
@@ -96,5 +140,18 @@ create) that backs the theme picker (§13.7). Never import `themes` or
   a new format needs round-trip plus byte-identical no-op cases. Run it with
   `-W always` before calling a phase done — the warning count is part of the
   contract.
+- **The colour promise is a test, not a review habit.** Moving anything onto
+  Textual's compositor is gated on I1: the frame after the change must equal
+  the committed golden cell for cell, parsed through `pyte` from a real pty
+  (`tests/candidate.py`, `docs/001-spec/textual-migration.md` §4). Two
+  consequences: pin the whole environment when launching the app (Textual reads
+  eight variables at import time, §6.4), and never let a golden regenerate to
+  make a failure go away — the golden diff *is* the review artefact.
+- **Extras are not dependencies.** `pyproject` keeps one runtime dependency
+  (Pygments); `textual` is the `editor` group and `pyte` the `test` group, so
+  `show` / `list` / `use` / `new` / `import` install without either. The
+  equivalence tests skip without them rather than comparing the reference with
+  itself. `editor.REQUIRES` is what `cli` reads to say so — add a name there
+  only in the same commit that makes `huebox edit` use the module needing it.
 - Keep it single-purpose: colour slots in, colour slots out. Not a config
   editor, not a theme store (§3).

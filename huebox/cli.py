@@ -22,15 +22,16 @@ that belongs to another theme (§13.6, decision 26).
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 import time
 from collections import namedtuple
 
-from . import __version__, themes
+from . import __version__, editor, themes
 from .color import SLOTS
 from .detect import resolve
-from .editor import Library, edit
+from .editor import Library
 from .formats import FORMAT_NAMES, FORMATS
 from .render import render_preview
 from .tui import term_size
@@ -301,7 +302,36 @@ def _edit_target(args) -> Target:
 # running the editor
 # --------------------------------------------------------------------------
 
-def _run_editor(target: Target, spec: PushSpec = None) -> int:
+def _textual_app():
+    """The Textual shell, imported late.
+
+    Not at module level, and that is the whole point of `textual` being an extra
+    (§9): `huebox show`, `list`, `use`, `--dump` and `--formats` must not pay
+    Textual's import, which is the larger half of a cold start. Importing it
+    eagerly also made every CLI subprocess in the suite ~0.7s slower and the
+    `test_themes` module four times slower than it needs to be — which is how the
+    cost was found. The `REQUIRES` check above has already run, so by here the
+    import cannot fail for a missing extra.
+    """
+    from . import app
+    return app
+
+
+def _missing_extras() -> list:
+    """Optional-dependency groups the editor needs that are not installed.
+
+    Read off `editor.REQUIRES` rather than named here, so the editor is the one
+    place that says what it needs and cannot drift from it.
+
+    A missing extra is a user error, so it is reported on stderr with the
+    install line and exits 1 — never a traceback from deep inside an import
+    (AGENTS.md). Returns the names, empty when nothing is missing.
+    """
+    return [name for name in editor.REQUIRES
+            if importlib.util.find_spec(name) is None]
+
+
+def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
     """Open the editor; theme mode writes truth, then pushes (§13.6).
 
     One writer serves the whole session, and it branches on the subject:
@@ -318,6 +348,12 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
     `spec=None` is a caller with no command line behind it, so the session
     writes truth only: a programmatic `edit()` must never push a terminal
     the caller did not ask about.
+
+    `driver` is the session, `app.run` by signature. Naming it is what keeps
+    this function about the *wiring* — the writer, the picker, the backup path —
+    rather than about Textual: the suites below drive the same loop through the
+    stdlib seams so they can feed it keys and capture its frames, which a real
+    compositor will not let them do.
     """
     spec = spec or PushSpec((), None, None, True)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -325,6 +361,27 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
         command = f"huebox edit {target.theme}" if target.theme else "huebox edit"
         _warn(f"not a terminal - run `{command}` in a terminal")
         return 0
+
+    if driver is None:
+        # Only the default driver needs the extra. An injected one is a test's
+        # business — it may be the stdlib loop, which needs nothing — so the
+        # check belongs with the choice, not in front of it.
+        #
+        # Two orderings matter here. It comes *after* the tty test, so
+        # `huebox edit | cat` says what is actually wrong with a piped session
+        # instead of asking for an install it will never use; and *before* the
+        # import, which is the whole difference between a clean line on stderr
+        # and an ImportError traceback (AGENTS.md).
+        missing = _missing_extras()
+        if missing:
+            groups = ",".join(missing)
+            return _fail(f"the editor needs the '{groups}' extra — install it "
+                         f"with `pipx install 'huebox[{groups}]'` "
+                         f"(or `uv tool install 'huebox[{groups}]'`), or run "
+                         f"`huebox show` which needs no extra")
+        run = _textual_app().run
+    else:
+        run = driver
 
     direct_fmt = target.label if target.theme is None else None
     label = spec.fmt or (spec.to[0] if spec.to else "")
@@ -362,9 +419,15 @@ def _run_editor(target: Target, spec: PushSpec = None) -> int:
             return f"saved {theme} - push failed"
         return f"saved {theme} → {_pushed(result)}"
 
-    edit(label, target.path, target.slots, write, backup=direct_fmt is not None,
-         theme=target.theme, report=report, library=_library(notes),
-         notes=notes)
+    # The Textual shell runs the session and reports it on the way out
+    # (`app.run` → `editor.report_session`). The four injected seams are the same
+    # ones `editor.edit` took, unchanged — the writer, the picker's `Library`,
+    # and the two prompt seams the shell satisfies by handing the terminal back
+    # — so the writer above is built once and both readers mean the same thing.
+    run(label, target.path, target.slots, write,
+        backup_path=target.path if direct_fmt is not None else None,
+        theme=target.theme, library=_library(notes), report=report,
+        notes=notes)
     return 1 if failed else 0
 
 

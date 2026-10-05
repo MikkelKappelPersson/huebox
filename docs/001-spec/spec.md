@@ -9,6 +9,13 @@ colour model or the file contract changes in a way that breaks existing configs.
 §§1–12 describe v1 as built. §§13–16 are the plan: the theme library, staged
 editing with live examples, and a responsive layout.
 
+`textual-migration.md` is a separate proposal: replacing the hand-rolled
+terminal I/O and draw loop with Textual, under a cell-for-cell colour
+equivalence harness. It is **not** a format change and does not move this
+document to `docs/002-spec/`; it is cited from here for the rendering
+guarantees it must preserve (§8.2, §14.1) and the §9 dependency rule it would
+amend.
+
 Everything marked `TODO` is a decision we have not made yet — unless a `>` note
 directly below it records the answer, which is how a closed one stays closed
 and still shows what was asked. Everything else is either a rule the code
@@ -489,6 +496,25 @@ frame already drew.
 - A small package (§17), installable via `pipx` or `uv tool`.
 - No network access at runtime, for any command.
 - No writes outside the resolved config and its backup.
+
+**Extras, not dependencies.** Optional-dependency groups exist so that the one
+dependency above stays one:
+
+| Group | Holds | Cost to install it |
+| --- | --- | --- |
+| `editor` | Textual, for the interactive editor | `huebox edit` only |
+| `test` | pyte, for the colour-equivalence harness (§10) | never, for a user |
+
+`show`, `list`, `use`, `new`, `import` and `--dump` install **one** dependency
+and need no extra. A missing extra is a user error: one line on stderr with the
+install line and exit 1, never a traceback (AGENTS.md). The editor declares
+what it needs in `editor.REQUIRES` and `cli` reads that, so the two cannot
+drift.
+
+> The `editor` group is **empty of effect until the Textual migration's phase
+> 3** (`textual-migration.md` §10), because the editor is still the stdlib one.
+> Declaring it early would break `huebox edit` on a bare install for no reason;
+> the guard is built and tested now, and the name is added when it is true.
 
 ## 10. Testing
 

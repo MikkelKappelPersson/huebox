@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(_HERE))  # repo root: `import huebox`
 sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 
 import huebox  # noqa: E402
+import session  # noqa: E402
 from huebox import cli, editor, themes  # noqa: E402
 from huebox.color import MISSING, SLOTS  # noqa: E402
 
@@ -959,6 +960,7 @@ class FakeTTY:
         raise OSError("no fd: the test drives the key stream")
 
 
+
 class FakeOut(io.StringIO):
     """stdout that claims to be a terminal and still captures the frame."""
 
@@ -970,21 +972,15 @@ class EditorWiring(LibraryHome):
     """The whole path: an editor session in theme mode writes the truth."""
 
     def session(self, keys, spec=None):
-        stream = iter(keys)
         out, err = FakeOut(), io.StringIO()
         with mock.patch.object(sys, "stdin", FakeTTY()), \
                 mock.patch.object(sys, "stdout", out), \
-                mock.patch.object(sys, "stderr", err), \
-                mock.patch.object(editor, "enter_raw",
-                                  return_value=(7, None)), \
-                mock.patch.object(editor, "exit_raw"), \
-                mock.patch.object(editor, "term_size",
-                                  return_value=(100, 30)), \
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)):
+                mock.patch.object(sys, "stderr", err):
             cli._run_editor(cli.Target("ember", "theme ember",
                                        self.theme_file("ember"),
-                                       themes.load("ember")), spec)
+                                       themes.load("ember")), spec,
+                            driver=session.driver_factory(keys,
+                                                         size=(100, 30)))
         return out.getvalue(), err.getvalue()
 
     def test_ctrl_s_writes_the_theme_file(self):
@@ -1021,21 +1017,16 @@ class _PushSession(LibraryHome):
         themes.create("ember", FULL)
 
     def session(self, keys, spec):
-        stream = iter(keys)
         out, err = FakeOut(), io.StringIO()
         with mock.patch.object(sys, "stdin", FakeTTY()), \
                 mock.patch.object(sys, "stdout", out), \
                 mock.patch.object(sys, "stderr", err), \
-                mock.patch.object(editor, "enter_raw",
-                                  return_value=(7, None)), \
-                mock.patch.object(editor, "exit_raw"), \
                 mock.patch.object(editor, "term_size",
-                                  return_value=(100, 30)), \
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)):
+                                  return_value=(100, 30)):
             status = cli._run_editor(
                 cli.Target("ember", "theme ember", self.theme_file("ember"),
-                           themes.load("ember")), spec)
+                           themes.load("ember")), spec,
+                driver=session.driver_factory(keys, size=(100, 30)))
         return status, out.getvalue(), err.getvalue()
 
 
@@ -1207,30 +1198,41 @@ class Picker(LibraryHome):
     def session(self, keys, target=None, spec=None, answers=()):
         drawn = []
         real = editor.draw_editor
+        real_lines = editor.theme_lines
         answers = list(answers)
 
         def record(*args, **kwargs):
             drawn.append({"status": args[5], "head": kwargs.get("head"),
-                          "overlay": kwargs.get("overlay")})
+                          "overlay": None})
             return real(*args, **kwargs)
+
+        def record_picker(names, index, current, cols, rows, *args, **kwargs):
+            # §13.7 — since phase 5 the picker is its own frame, drawn by
+            # `theme_lines` and not by `draw_editor`, so a hook on `draw_editor`
+            # alone stops seeing the picker. That is not a smaller hook: the
+            # blocked-switch status is *reported on a picker frame*, and a hook
+            # that missed those frames would say the message was never written.
+            status = args[0] if args else ""
+            drawn.append({"status": status, "head": None,
+                          "overlay": (names, index, current)})
+            return real_lines(names, index, current, cols, rows, *args,
+                              **kwargs)
+
+        editor.theme_lines = record_picker
 
         def ask(label):
             return answers.pop(0) if answers else ""
 
-        stream = iter(keys)
         out, err = FakeOut(), io.StringIO()
         with mock.patch.object(sys, "stdin", FakeTTY()), \
                 mock.patch.object(sys, "stdout", out), \
                 mock.patch.object(sys, "stderr", err), \
-                mock.patch.object(editor, "enter_raw", return_value=(7, None)), \
-                mock.patch.object(editor, "exit_raw"), \
-                mock.patch.object(editor, "term_size", return_value=(80, 24)), \
-                mock.patch.object(editor, "draw_editor", side_effect=record), \
-                mock.patch.object(editor, "read_key",
-                                  side_effect=lambda fd: next(stream)), \
                 mock.patch("builtins.input", side_effect=ask):
             status = cli._run_editor(target or self.theme_target("ember"),
-                                     spec if spec is not None else self.spec)
+                                     spec if spec is not None else self.spec,
+                                     driver=session.driver_factory(
+                                         keys, size=(80, 24), draw=record))
+        editor.theme_lines = real_lines
         return status, drawn, out.getvalue(), err.getvalue()
 
     def test_a_direct_session_says_why_the_flag_cannot_apply(self):

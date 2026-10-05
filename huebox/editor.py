@@ -1,5 +1,13 @@
-"""The interactive editor: draw loop, keys, picker, staged buffer
+"""The editing session: buffer, key surface, picker, and what it saves
 (§4.3, §13.7, §14).
+
+This is huebox's behaviour, not its terminal. `EditorState` holds the buffer,
+`apply_key` is the whole key surface, `draw_editor` is the frame, and the
+module's job is to keep them answerable without a terminal attached — which is
+what let 400-odd tests drive a session by feeding it a key list, and what lets
+the Textual shell (`app.py`) be the editor rather than a second implementation
+of it. The migration deleted `edit()`, the raw-mode loop that used to tie all
+three to a real tty; nothing about the behaviour went with it.
 
 Keystrokes mutate an in-memory buffer; nothing reaches disk until Ctrl+S
 (§14.2). The writer is injected by cli so this module never touches the
@@ -12,19 +20,30 @@ import, so a switch can re-target a save mid-session without a cycle.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import shutil
-import signal
 import sys
 from typing import NamedTuple
 
-from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, hsv_to_rgb,
-                    is_hex, normalize_hex, readable_fg, rgb_to_hex, rgb_to_hsv)
-from .render import (BOLD, CHROME_MUTED, RESET, backdrop, bg, chrome, clip,
+#: Optional-dependency groups this editor needs to run, checked by `cli` before
+#: the session opens so a missing extra is an error line and an exit 1 rather
+#: than a traceback (AGENTS.md).
+#:
+#: The editor is `app.py`, so `huebox edit` needs Textual and says so with one
+#: stderr line rather than an ImportError. Naming an extra here is never
+#: speculative: `cli` reads this list, and the commit that adds a name is the
+#: one that makes the command use the module needing it.
+REQUIRES: tuple = ("textual",)
+
+from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
+                    normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
+from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,
+                     bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_numbers,
                      hsv_readout, sample_lines, title, visible, wordmark)
-from .tui import (MIN_COLS, MIN_ROWS, _on_winch, enter_raw, exit_raw, read_key,
-                  term_size)
+from .tui import term_size
 
 ADJUST = {
     "q": ("h", -1), "w": ("h", +1),
@@ -227,7 +246,8 @@ def _theme_row(name: str, selected: bool, current: bool, slots: dict) -> str:
     return f"  {mark}{flag} {painted}"
 
 
-def theme_lines(names, index, current, cols, rows, status="", slots=None):
+def theme_lines(names, index, current, cols, rows, status="", slots=None,
+                hits=None):
     """The theme picker as a frame of lines (§13.7).
 
     Pure, like the editor frame: rows are the library's names, the session's
@@ -258,6 +278,11 @@ def theme_lines(names, index, current, cols, rows, status="", slots=None):
         start = max(0, min(index - room + 1, len(names) - room))
         for row in range(start, min(len(names), start + room)):
             name = names[row]
+            # the clickable cell, announced by the row that draws it — a second
+            # description of this window would drift from it the moment either
+            # changed, and a click would land on the wrong theme
+            if hits is not None:
+                hits.append(Hit(len(out), 2, cols - 1, row))
             out.append(_theme_row(name, row == index, name == current, slots))
         if start or len(names) > start + room:
             out.append("  " + chrome(f"{start + 1}-"
@@ -270,9 +295,66 @@ def theme_lines(names, index, current, cols, rows, status="", slots=None):
     return [clip(line, cols) for line in out[:rows]]
 
 
+class Hit(NamedTuple):
+    """One clickable cell: the frame row `y`, columns `x0`..`x1`, and the slot.
+
+    Column-inclusive at both ends, because a cell that answered to every column
+    but its last would leave a sliver no one can hit.
+    """
+    y: int
+    x0: int
+    x1: int
+    slot: int
+
+
+def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
+               sel=0, undo=(), status="", mult=1, head=None) -> list:
+    """Every colour cell a frame `cols` wide draws, as `Hit`s.
+
+    The rows are the frame's own: `draw_editor` announces each cell as it paints
+    it (`hits=`), so a click and a swatch cannot disagree about where one is —
+    which is the whole risk of having a hit map at all.
+    """
+    found: list = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        draw_editor(fmt, path, slots or {}, sel, list(undo), status, mult,
+                    head=head, hits=found, size=(cols, rows or 24))
+    return found
+
+
+def theme_hits(names, index, current, cols, rows, slots=None, status="") -> list:
+    """Every picker row, as `Hit`s whose `slot` is the row in the library.
+
+    The window is the point of this one: a row's frame position depends on how
+    far down the library it is, so asking this at the wrong moment describes a
+    picker that is not the one on screen.
+    """
+    found: list = []
+    theme_lines(names, index, current, cols, rows, status=status,
+                slots=slots, hits=found)
+    return found
+
+
+def slot_at(hits, x: int, y: int):
+    """The slot a click at (`x`, `y`) lands on, or None for the chrome."""
+    for hit in hits:
+        if hit.y == y and hit.x0 <= x <= hit.x1:
+            return hit.slot
+    return None
+
+
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                overlay=None, grid=None):
-    cols, rows = term_size()
+                grid=None, hits=None, size=None, regions=None):
+    """The frame, written to stdout.
+
+    `size` overrides the terminal query. Textual knows the size it was given —
+    the pty's — and passing it is both cheaper and more honest than asking the
+    terminal a second time, and it is what lets `frame_hits(cols)` describe the
+    frame at `cols` rather than at whatever the terminal happens to be. Without
+    it the hit map and the frame disagreed at every width but one, which the
+    cross-check in `test_editor` caught.
+    """
+    cols, rows = size or term_size()
     sys.stdout.write("\033[H\033[2J")
     if cols < MIN_COLS or rows < MIN_ROWS:
         # No layout fits: say so instead of drawing a garbled frame.
@@ -282,24 +364,26 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     if grid is None:
         grid = grid_geometry(cols)      # §4.3 — what this frame draws, and
                                         # what the arrows step through
-    if overlay is not None:
-        # §13.7 — the picker owns the frame while it is up. It shares the
-        # editor's minimum size, so the too-small check above already said
-        # what to do when there is no room for either.
-        names, index, current = overlay
-        sys.stdout.write("\r\n".join(
-            backdrop(line, slots, cols)
-            for line in theme_lines(names, index, current, cols, rows,
-                                    status, slots)) + "\r\n")
-        sys.stdout.flush()
-        return
+    # §13.7 — the picker is no longer a second mode of this function. It was
+    # `overlay=` for the whole migration, and phase 5 gave it a widget; the
+    # frame it used to be handed on the side is now `theme_lines`, which is
+    # what it always was underneath.
     body = []
+    # Checkpoints: `(name, first row of the frame)`, each block running until
+    # the next. `at_body` counts rows in `body`; `at_extra` counts rows in the
+    # widgets, which are appended after `body` and so are offset by its length.
+    # Shifted with the hits when decoration is dropped, resolved to spans once
+    # the frame is final.
+    marks = []
+    at_body = lambda: len(body)                      # noqa: E731
+    at_extra = lambda: len(body) + len(extra)        # noqa: E731
 
     label = fmt if head is None else head
     first = "  " + wordmark(slots) + "  " + chrome(label, "foreground", slots,
                                                     bold=True)
     if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
         first += "  " + chrome(path, CHROME_MUTED, slots)
+    marks.append(("header", at_body()))
     body.append(first)
     body.append("")
 
@@ -313,18 +397,30 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         return (f"{bg(value)}{fg(readable_fg(value))}"
                 f"{BOLD if selected else ''}{label.ljust(cellw)}{RESET}")
 
+    marks.append(("palette", at_body()))
     body.append("  " + title("palette", slots))
     for start in range(0, len(PALETTE), per_row):
+        # `len(body)` is this row's index in the frame: `out` is `body` plus
+        # whatever follows, so the index holds. Announcing the cell here rather
+        # than recomputing it elsewhere is what keeps a click and a swatch from
+        # disagreeing about where one is.
+        y = len(body)
+        cells = [i for i in range(start, start + per_row) if i < len(PALETTE)]
         body.append(("  " + "".join(
-            swatch(i, sel == i) for i in range(start, start + per_row)
-            if i < len(PALETTE))).rstrip())
+            swatch(i, sel == i) for i in cells)).rstrip())
+        if hits is not None:
+            for column, index in enumerate(cells):
+                x0 = 2 + column * cellw
+                hits.append(Hit(y, x0, x0 + cellw - 1, index))
     legend = chrome(PALETTE_LEGEND, CHROME_MUTED, slots)
     body.append(legend)
     body.append("")
 
+    marks.append(("interface", at_body()))
     per = grid.named_cols
     body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
+        y = len(body)
         cells = []
         for key in NAMED[start:start + per]:
             index = SLOTS.index(key)
@@ -334,8 +430,14 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             cells.append(f"{bg(value)}{fg(readable_fg(value))}{style}"
                          f" {mark}{key:<21} {value} {RESET}")
         body.append(("  " + "  ".join(cells)).rstrip())
+        if hits is not None:
+            for column in range(len(cells)):
+                x0 = 2 + column * (NAMED_COL_W + 2)
+                hits.append(Hit(y, x0, x0 + NAMED_COL_W - 1,
+                                len(PALETTE) + start + column))
     body.append("")
 
+    marks.append(("selected", at_body()))
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     # §8.3 — the reading of the slot's own colour. It is bars where the row
@@ -384,7 +486,20 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # the legend is a courtesy (the grid is numbered), so the blanks
         # are the decoration proper — nearest the widgets first, leaving
         # the air at the top of the frame
-        del body[decoration[-1]]
+        dropped = decoration[-1]
+        del body[dropped]
+        # A cell recorded above the deleted row keeps its index; one below it
+        # moves up by one. Without this a short frame's hit map points a row
+        # past where its cells were painted, and clicking selects whatever is
+        # actually there — a silent wrong answer, which is what the cross-check
+        # in `test_editor` exists to catch.
+        if hits is not None:
+            for index, hit in enumerate(hits):
+                if hit.y > dropped:
+                    hits[index] = hit._replace(y=hit.y - 1)
+        for index, (_name, row) in enumerate(marks):
+            if row > dropped:
+                marks[index] = (_name, row - 1)
         spare += 1
 
     extra = []
@@ -394,6 +509,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
     if examples >= EXAMPLES_FLOOR:
+        marks.append(("examples", at_extra()))
         extra.append("  " + title("examples", slots,
                              "(live buffer: background / selection / cursor)"))
         extra.extend(example_lines(slots, cols - 2)[:examples - 1])
@@ -425,6 +541,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             # a hunk row to buy either
             lead = 1 if spare_rows - rows_left - 1 >= 2 else 0
             if rows_left >= DIFF_FLOOR - 1:
+                marks.append(("diff", at_extra() + (1 if lead else 0)))
                 if lead:
                     extra.append("")
                 diff = ["  " + title("live diff", slots,
@@ -433,6 +550,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 if spare_rows - lead - rows_left - 1 >= 1:   # a row to spare
                     diff.append("")   # the separator is a row of its own
             extra.extend(diff)      # the hunk draws above the sample
+            marks.append(("sample", at_extra()))
             extra.append("  " + title("live code", slots,
                                   "(truecolor, no reload needed)"))
             extra.extend("    " + line.replace(RESET, RESET + "    ")
@@ -440,15 +558,46 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
             if room_left() - take >= 2:  # rows to spare: the separator
                 extra.append("")
 
+    # The hints and the status are last, and `extra` is not known until the
+    # widgets have had their rows, so these two checkpoints can only be taken
+    # here rather than where the rows themselves are built.
+    marks.append(("hints", at_extra()))
+    if status:
+        marks.append(("status", at_extra() + len(tail) - 1))
+
     out = body + extra + tail
     if len(out) > rows:
         out = out[:rows - len(tail)] + tail
+    if regions is not None:
+        # A checkpoint past the last row is a block the frame cut off. It is
+        # dropped from the list rather than merely not reported, because it is
+        # also every later block's *end*: keeping it would give the block below
+        # a height reaching past the frame, which is a widget claiming rows the
+        # frame never painted — the unpainted-cell failure §8.2 exists to
+        # prevent, one level up. At 40x12 that is the difference between a
+        # frame of six widgets and one of nine, four of them off the bottom.
+        live = [(name, row) for name, row in marks if row < len(out)]
+        edges = [row for _, row in live] + [len(out)]
+        regions.extend((name, row, stop - row)
+                       for (name, row), stop in zip(live, edges[1:]))
+    if hits is not None:
+        # The trim happened after the cells announced themselves, so a short
+        # frame still claims rows it never painted — and a click there would
+        # select something the user cannot see. Off they go.
+        del hits[len(out):]
     # CRLF: raw mode disables ONLCR, so a bare \n would not reset the column
     # §8.2 — every row stands on the buffer's own background, so the frame
     # *is* the theme: the floor, the air between widgets and the column after
     # the last hint all read `background` out of the live buffer
+    #
+    # The trailing CRLF is withheld when the frame fills the screen. Written on
+    # the bottom row it scrolls the terminal: the frame loses its top row (at
+    # 80x24 the `huebox` wordmark) and the terminal's own line appears below.
+    # `out` never exceeds `rows`, so `len(out) == rows` is the only scrolling
+    # case; a row short of the bottom makes the newline harmless and it stays,
+    # keeping the cursor off the frame's last line.
     sys.stdout.write("\r\n".join(backdrop(line, slots, cols) for line in out)
-                     + "\r\n")
+                     + ("\r\n" if len(out) < rows else ""))
     sys.stdout.flush()
 
 
@@ -462,7 +611,7 @@ class EditorState:
     a theme switch (decision 12).
 
     `theme` is the name of the theme being edited (`None` in a legacy
-    direct-mode session), `overlay` the picker's rows while it is up, and
+    direct-mode session), and
     `library` the injected seam the picker asks for themes. Each of those
     can change mid-session, which is why the writer is bound to the state
     and not to `edit()`'s arguments. `grid` is the frame's shape: the
@@ -510,6 +659,40 @@ class EditorState:
                 self.theme if self.theme in self.overlay else "")
 
 
+def report_session(st, report=None, notes=None):
+    """What the session has to say once the frame is done (§13.6, §13.7).
+
+    A function rather than a driver, because the wording is huebox's and not the
+    compositor's: `app.py` runs the session and calls this afterwards, as the
+    raw-mode loop used to, so the migration did not quietly reword what a user
+    reads on exit.
+
+    The push report and the picker's complaints go to stderr, after the frame and
+    never inside it, where they would scroll through the editor. The report's
+    wording is the caller's: it knows what it pushed and what it could not read.
+    """
+    if st.written:
+        if st.theme is not None:
+            print(f"  saved theme {st.theme}  {st.path}")
+            print("")
+        else:
+            print(f"  saved {st.path}")
+            if st.backup_made:
+                print(f"  backup of the pre-save state: "
+                      f"{st.backup_path}.huebox.bak")
+            print("  reload your terminal to see the change\n")
+    elif st.dirty():
+        print("  nothing saved - the buffer was discarded\n")
+    elif st.created:
+        print(f"  created theme {st.created}  {st.path}")
+        print("  Ctrl+S saves it to the terminal\n")
+    else:
+        print("  no changes\n")
+
+    for line in list(report or []) + list(notes or []):
+        print(f"huebox: {line}", file=sys.stderr)
+
+
 def ensure_backup(path):
     """`<path>.huebox.bak` — the pre-save snapshot, once per session (§14.2).
 
@@ -549,17 +732,9 @@ def save_state(st):
 
 def _adjust(st, key):
     name = SLOTS[st.sel]
-    value = st.slots[name]
-    hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
     channel, direction = ADJUST[key]
-    if channel == "h":
-        hue = (hue + direction / 360 * st.mult) % 1.0
-    elif channel == "s":
-        sat = max(0.0, min(1.0, sat + direction * 0.02 * st.mult))
-    else:
-        val = max(0.0, min(1.0, val + direction * 0.02 * st.mult))
-    st.undo.append((name, value))
-    st.slots[name] = rgb_to_hex(hsv_to_rgb(hue, sat, val))
+    st.undo.append((name, st.slots[name]))
+    st.slots[name] = step_hsv(st.slots[name], channel, direction, st.mult)
 
 
 def _prompt(st):
@@ -805,113 +980,3 @@ def apply_key(key, st):
         _adjust(st, key)
     elif key in ("i", "X"):
         _prompt(st)
-
-
-def edit(fmt, path, slots, write, backup=True, theme=None, report=None,
-         library=None, notes=None):
-    """Run one editor session: staged buffer, save on Ctrl+S (§14.2).
-
-    `write` is the session's one save path, called as
-    `write(theme_name_or_None, path, values)`. The name is in the call
-    because the picker can re-target a save mid-session (§13.7): a writer
-    closed over one name would save the wrong file after a switch. The
-    caller's writer is what decides truth-then-push (§13.6) or the v1
-    direct-config write (§13.4).
-
-    `theme` is the subject the session starts with (`None` in the legacy
-    direct mode), `library` the picker's seam onto the theme store,
-    `report` the list a save fills with what its push did and `notes` the
-    list anything else has to say — the picker cannot print inside raw
-    mode, so both are printed after the frame is done (§13.6).
-
-    `backup` is False for files huebox owns (theme files, §13.2 — no .bak
-    there); a terminal-config session snapshots `<path>.huebox.bak` on its
-    first save.
-    """
-    fd = saved = None
-    previous_winch = None
-
-    def prompt_text(label):
-        """The one prompt pattern: drop out of raw mode, read a line, come
-        back in — hex entry (`i`) and every name prompt of §13.7 use it.
-
-        §4.3: the pair is always closed. `finally` re-enters raw mode even
-        when the read raises, so a cancelled prompt (Ctrl+C, EOF) returns
-        to the editor instead of stranding the session with echo on or
-        off; and `edit()`'s finally owns the exit, restoring whatever
-        termios state the *last* `enter_raw` saved.
-        """
-        nonlocal fd, saved
-        exit_raw(fd, saved)
-        sys.stdout.write("\r\033[2J\033[H")
-        try:
-            return input(label).strip()
-        except (EOFError, KeyboardInterrupt):
-            return None          # Ctrl+C inside a prompt cancels the prompt
-        finally:
-            fd, saved = enter_raw()
-
-    st = EditorState(slots, None, prompt_text, path if backup else None,
-                     theme=theme, fmt=fmt, library=library, path=path)
-    st.prompt_name = prompt_text
-    # bound to the state, not to this call's arguments: both the theme and
-    # the path can change while the session runs (§13.7)
-    st.write = lambda values: write(st.theme, st.path, values)
-
-    fd, saved = enter_raw()
-    try:
-        # §15.1 — resize wakes the loop through a flag, not a redraw callback
-        try:
-            previous_winch = signal.signal(signal.SIGWINCH, _on_winch)
-        except (OSError, ValueError, TypeError):
-            pass                      # no winch here; the flag never fires
-        while True:
-            # §15.2 — one geometry per frame, read by the frame and by the
-            # keys: what is drawn and what the arrows step through cannot
-            # disagree, and a resize moves the selection with the layout
-            st.grid = grid_geometry(term_size()[0])
-            draw_editor(st.fmt, session_path(st), st.slots, st.sel, st.undo,
-                        st.status, st.mult, head=head_label(st),
-                        overlay=st.picker_frame(), grid=st.grid)
-            key = read_key(fd)
-            if key == "resize":
-                continue        # no key consumed: the loop just redraws
-            apply_key(key, st)
-            if st.quit:
-                break
-    finally:
-        # §4.3 — the terminal comes back first, and the SIGWINCH handler is
-        # restored even if restoring the terminal itself fails: nothing may
-        # leave the user with a raw shell or a stale handler (review P1)
-        try:
-            exit_raw(fd, saved)
-        finally:
-            if previous_winch is not None:
-                try:
-                    signal.signal(signal.SIGWINCH, previous_winch)
-                except (OSError, ValueError, TypeError):
-                    pass
-
-    if st.written:
-        if st.theme is not None:
-            print(f"  saved theme {st.theme}  {st.path}")
-            print("")
-        else:
-            print(f"  saved {st.path}")
-            if st.backup_made:
-                print(f"  backup of the pre-save state: {st.backup_path}.huebox.bak")
-            print("  reload your terminal to see the change\n")
-    elif st.dirty():
-        print("  nothing saved - the buffer was discarded\n")
-    elif st.created:
-        print(f"  created theme {st.created}  {st.path}")
-        print("  Ctrl+S saves it to the terminal\n")
-    else:
-        print("  no changes\n")
-
-    # §13.6 / §13.7 — the push report and the picker's complaints are
-    # stderr, after the frame is done and never inside the raw-mode loop,
-    # where they would scroll through the editor. The wording is the
-    # caller's: it knows what it pushed and what it could not read.
-    for line in list(report or []) + list(notes or []):
-        print(f"huebox: {line}", file=sys.stderr)

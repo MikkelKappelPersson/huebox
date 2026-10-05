@@ -24,6 +24,13 @@ ESCAPE_END = "mABCDEFGHJKSTfmnsulh"   # SGR and friends: the CSI final byte
 # No DIM: §8.1 says the frame's own text is drawn from the buffer, so no
 # terminal attribute a theme cannot change appears in it.
 
+# §15.4 — below this the layout has nothing honest to draw, so the editor shows
+# one centred hint instead of garbling. These live here, not in `tui.py`: they
+# are layout policy about what a frame can be, and `tui.py` is the terminal-I/O
+# side of the edge (migration §5.2). `tui.py` keeps `term_size`, which does
+# touch the terminal, so `render.py` stays pure.
+MIN_COLS, MIN_ROWS = 40, 12
+
 
 def fg(value: str) -> str:
     r, g, b = hex_to_rgb(value)

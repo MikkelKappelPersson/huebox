@@ -23,6 +23,7 @@ from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            hint_line, hsv_numbers, hsv_readout, key_hint,
                            pack,
                            pair_label, title, visible, wordmark)
+from huebox import render  # noqa: E402
 from huebox.render import _marker  # noqa: E402
 from huebox.render import RESET  # noqa: E402
 
@@ -722,7 +723,7 @@ class Examples(unittest.TestCase):
         slots = {name: "#3f7a3f" for name in huebox.SLOTS}
         slots.update({"background": "#101014", "foreground": "#e6e6ea",
                       "cursor-color": "#e6e6ea", "cursor-text": "#101014"})
-        row = self.rows(slots, huebox.tui.MIN_COLS - 2)[2]
+        row = self.rows(slots, render.MIN_COLS - 2)[2]
         self.assertIn(f"{bg('#e6e6ea')}{fg('#101014')}{CURSOR_CHAR}", row)
 
     def test_rows_are_ascii(self):
