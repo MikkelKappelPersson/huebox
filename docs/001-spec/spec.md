@@ -1153,8 +1153,13 @@ collapsed block hides its rows behind its header while the frame stays drawn
 whole, so the hits above the live area never move and what rides up below it
 names no slot a click could land on. Each header wears only the theme's own
 foreground on its own background, so the open and the shut frame alike stay
-inside the reference closure (migration §4.2). `HUEBOX_COLLAPSIBLE=0` opts
-out to the bare stack the equivalence goldens pin.
+inside the reference closure (migration §4.2). In the panelled layouts the
+live blocks ride inside the examples panel (stacked) or the right-hand panel
+(side-by-side) rather than the bare stack, and the toggles work the same
+there: a shut block hides its rows behind its header, the stacked panel
+shrinks around what remains, and the controls above never move.
+`HUEBOX_COLLAPSIBLE=0` opts out to the bare stack the equivalence
+goldens pin.
 
 ### 14.2 Save, quit, undo
 

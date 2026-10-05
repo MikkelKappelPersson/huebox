@@ -891,6 +891,30 @@ class Editor(App):
                             if name not in top)
         examples = rows_for(PANEL_EXAMPLES)
         hints = rows_for(("hints", "status"))
+
+        def mount_inner(name, first, count):
+            """One block inside a panel, collapsible where the bare stack is.
+
+            A live block rides in a `Live` whose header stands in for the
+            title row — the same construction as `_mount_collapsible`, so
+            an open block costs exactly its rows and a shut one its header.
+            The shut rows are all below the controls, and the live area
+            names no slot, so the click map below cannot land anywhere new.
+            """
+            if name in LIVE_BLOCKS and collapsible_enabled():
+                body = rows_text[first + 1:first + count]
+                kind = BLOCK_WIDGETS.get(name, Frame)
+                child = kind(body, inner_w, name=name)
+                child.styles.width = inner_w
+                child.styles.height = len(body)
+                child.styles.padding = 0
+                child.styles.margin = 0
+                shut = name in self._collapsed
+                return (Live(LIVE_TITLES[name], child, collapsed=shut,
+                              name=name),
+                        1 if shut else count)
+            return mount_block(name, first, count, inner_w), count
+
         # Any block `draw_editor` reported that is in none of the groups
         # (a future widget) stays chrome rather than vanishing: mount it
         # full-width in order. Prototype must not drop rows it does not know.
@@ -916,8 +940,13 @@ class Editor(App):
             return block
 
         header_h = sum(c for _, _, c in header)
-        controls_h = sum(c for _, _, c in controls)
-        examples_h = sum(c for _, _, c in examples)
+        # Panel heights follow what mounted, not what the frame drew: a
+        # shut live block costs its header, so the panel shrinks and the
+        # chrome below rides up to the rows that remain.
+        control_inners = [mount_inner(n, f, c) for n, f, c in controls]
+        example_inners = [mount_inner(n, f, c) for n, f, c in examples]
+        controls_h = sum(h for _, h in control_inners)
+        examples_h = sum(h for _, h in example_inners)
         # Screen geometry for clicks: borders are single rows. Header is
         # bare; each panel adds a top and a bottom border row.
         self._panel_geom = {
@@ -931,16 +960,16 @@ class Editor(App):
             # `extra` unknown rows sit with the header chrome: full-width,
             # never inside a panel whose title would misname them.
             self.mount(mount_block(name, first, count, width))
-        if controls:
-            inners = [mount_block(n, f, c, inner_w) for n, f, c in controls]
+        if control_inners:
+            inners = [widget for widget, _ in control_inners]
             panel = Panel(PANEL_TITLES["controls"], *inners, name="controls")
             panel.styles.width = width
             panel.styles.height = controls_h + 2
             panel.styles.padding = 0
             panel.styles.margin = 0
             self.mount(panel)
-        if examples:
-            inners = [mount_block(n, f, c, inner_w) for n, f, c in examples]
+        if example_inners:
+            inners = [widget for widget, _ in example_inners]
             panel = Panel(PANEL_TITLES["examples"], *inners, name="examples")
             panel.styles.width = width
             panel.styles.height = examples_h + 2
@@ -1028,7 +1057,19 @@ class Editor(App):
         left_panel.styles.height = content_h + 2
         left_panel.styles.padding = 0
         left_panel.styles.margin = 0
-        right_children = [block(name, right[first:first + count], right_inner)
+        def right_block(name, first, count):
+            # The side panel keeps its height: a shut live block hides
+            # its rows behind its header and the panel holds the air, on
+            # its own themed background. The left panel fixes the row, so
+            # nothing below can ride up the way it does in the stacked
+            # panels — and the click geometry above never moves at all.
+            rows_here = right[first:first + count]
+            if name in LIVE_BLOCKS and collapsible_enabled():
+                child = block(name, rows_here[1:], right_inner)
+                return Live(LIVE_TITLES[name], child,
+                            collapsed=name in self._collapsed, name=name)
+            return block(name, rows_here, right_inner)
+        right_children = [right_block(name, first, count)
                           for name, first, count in right_regions]
         right_panel = Panel(PANEL_TITLES["examples"], *right_children,
                             name="examples")

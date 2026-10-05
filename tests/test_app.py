@@ -1348,9 +1348,10 @@ class CollapsibleExamples(unittest.TestCase):
     block's title one for one, so an all-open stack is exactly the frame's
     height. A collapsed block hides its rows behind its header; the frame is
     always drawn whole, so the hits above the live area never move.
-    `HUEBOX_PANELS=0` pins the bare stack the collapsibles are mounted on
-    (panels are the other product grouping), and `HUEBOX_COLLAPSIBLE=0` opts
-    out to the bare rows I1 pins; I2 runs product and proves no new colour
+    `HUEBOX_PANELS=0` pins the bare stack, where the assertions below read
+    the bare rows; the panelled layouts mount the same `Live` blocks
+    (pinned by `CollapsiblePanels`). `HUEBOX_COLLAPSIBLE=0` opts out to
+    the bare rows I1 pins; I2 runs product and proves no new colour
     leaked in.
     """
 
@@ -1448,6 +1449,158 @@ class CollapsibleExamples(unittest.TestCase):
 
 
 @needs_app
+class CollapsiblePanels(unittest.TestCase):
+    """§14.1 in the panelled layouts: the toggles survive the panels.
+
+    The collapsibles were mounted only on the bare stack, so with panels
+    on (the default) `e`/`d`/`c` recorded the collapse and changed nothing.
+    The live blocks ride in the examples panel (stacked) or the right-hand
+    panel (side-by-side) instead — open by default, each shut on its own —
+    and the stacked panel shrinks around what remains while the chrome
+    below rides up.
+    """
+
+    def _editor(self, cols=80, rows=24, collapsed=()):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock,
+            return_value=Offset(cols, rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        mounted = []
+        # Default product: panels on, collapsibles on. No pins — this is
+        # the frame a user actually gets.
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            editor = huebox_app.Editor()
+            editor.query = lambda *a, **k: ()
+            editor.mount = lambda widget: mounted.append(widget)
+            editor._collapsed = set(collapsed)
+            editor.redraw()
+        return editor, mounted
+
+    def _lives(self, mounted):
+        def flat(widgets):
+            for widget in widgets:
+                yield widget
+                for child in flat(list(getattr(
+                        widget, "_pending_children", []))):
+                    yield child
+        return [widget for widget in flat(mounted)
+                if isinstance(widget, huebox_app.Live)]
+
+    def test_open_by_default(self):
+        editor, mounted = self._editor()
+        live = [name for name, _, _ in editor.regions
+                if name in huebox_app.LIVE_BLOCKS]
+        self.assertTrue(live, "no live blocks to collapse")
+        shut = [widget.name for widget in self._lives(mounted)
+                if widget.collapsed]
+        self.assertEqual(shut, [], "a live block mounted shut")
+        self.assertEqual(sorted(widget.name
+                                for widget in self._lives(mounted)),
+                         sorted(live),
+                         "a live block did not ride in a `Live`")
+
+    def test_each_block_shuts_on_its_own(self):
+        editor, _ = self._editor()
+        regions = {name: (first, count)
+                   for name, first, count in editor.regions}
+        live = [name for name in huebox_app.LIVE_BLOCKS
+                if name in regions]
+        self.assertTrue(live, "no live blocks to collapse")
+        for name in live:
+            with self.subTest(block=name):
+                shut_editor, shut_mounted = self._editor(collapsed=(name,))
+                lives = {widget.name: widget.collapsed
+                         for widget in self._lives(shut_mounted)}
+                self.assertTrue(lives[name],
+                                "%s did not shut" % name)
+                for other in live:
+                    if other != name:
+                        self.assertFalse(lives[other],
+                                         "%s shut with %s"
+                                         % (other, name))
+                # The panel shrinks by what the block hid: its rows less
+                # the header standing in for the title — while the controls
+                # above never move.
+                first, count = regions[name]
+                self.assertEqual(shut_editor._panel_geom["examples_h"],
+                                 editor._panel_geom["examples_h"]
+                                 - (count - 1))
+                self.assertEqual(shut_editor._panel_geom["controls_h"],
+                                 editor._panel_geom["controls_h"])
+
+    def test_reopening_restores_the_panel(self):
+        editor, _ = self._editor()
+        geom = dict(editor._panel_geom)
+        shut_editor, _ = self._editor(collapsed=("examples",))
+        self.assertNotEqual(shut_editor._panel_geom["examples_h"],
+                            geom["examples_h"])
+        # `redraw` re-mounts from `_collapsed`: empty again, whole again.
+        shut_editor._collapsed.clear()
+        shut_editor.redraw()
+        self.assertEqual(shut_editor._panel_geom, geom)
+
+    def test_the_regions_still_name_every_block(self):
+        editor, _ = self._editor()
+        shut_editor, _ = self._editor(collapsed=("examples", "sample"))
+        names = [name for name, _, _ in shut_editor.regions]
+        for name, _, _ in editor.regions:
+            self.assertIn(name, names, "the regions lost %s" % name)
+        for hit in shut_editor.hits:
+            self.assertLess(hit.y, len(shut_editor.rows_text),
+                            "a hit points past the painted frame")
+
+    def test_a_collapsed_panel_keeps_grid_clicks(self):
+        """Shutting the strip must not move the swatches above it."""
+        editor, _ = self._editor(collapsed=("examples",))
+        hit = next(hit for hit in editor.hits if hit.slot == 5)
+        # Panels offset content by one border column left and one border
+        # row above the controls; the collapsed strip is below both.
+        self._click(editor, hit.x0 + 1 + 1, hit.y + 1)
+        self.assertEqual(editor.state.sel, 5,
+                         "a click below a collapse selected the wrong slot")
+
+    def _click(self, editor, x, y):
+        from textual.events import Click
+
+        editor.on_click(Click(widget=None, x=x, y=y, delta_x=0, delta_y=0,
+                              button=1, shift=False, meta=False, ctrl=False))
+
+    def test_collapsible_opt_out_mounts_no_lives_in_panels(self):
+        editor, mounted = self._editor()
+        self.assertTrue(self._lives(mounted),
+                        "no collapsible mounted open")
+        del mounted[:]
+        with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+            editor.redraw()
+        self.assertEqual(self._lives(mounted), [],
+                         "opt-out mounted a collapsible")
+
+    def test_the_side_blocks_shut_on_their_own(self):
+        editor, _ = self._editor(cols=100, rows=30)
+        self.assertTrue(editor._side_on, "the side layout did not mount")
+        live = [name for name, _, _ in editor.regions
+                if name in huebox_app.LIVE_BLOCKS]
+        self.assertTrue(live, "no live blocks to collapse")
+        for name in live:
+            with self.subTest(block=name):
+                shut_editor, shut_mounted = self._editor(
+                    cols=100, rows=30, collapsed=(name,))
+                lives = {widget.name: widget.collapsed
+                         for widget in self._lives(shut_mounted)}
+                self.assertTrue(lives[name],
+                                "%s did not shut" % name)
+                # The side row keeps its height — the left panel fixes it
+                # — so the click geometry never moves at all.
+                self.assertEqual(shut_editor._side_geom, editor._side_geom)
+
+
+@needs_app
 class CollapsibleExamplesRunning(unittest.IsolatedAsyncioTestCase):
     """The toggles, under a real compositor."""
 
@@ -1518,3 +1671,56 @@ class CollapsibleExamplesRunning(unittest.IsolatedAsyncioTestCase):
                 await self._press(app, pilot, key)
             self.assertEqual(app._collapsed, set(),
                              "a toggle collapsed the frame behind the picker")
+
+
+@needs_app
+class CollapsiblePanelsRunning(unittest.IsolatedAsyncioTestCase):
+    """The toggles, under a real compositor, with panels on.
+
+    The regression this guards: with the default grouping the keys
+    recorded the collapse and the frame never moved. At 80x24 the
+    stacked panels are up, so `e` must shut the strip inside them.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        # Default product: no pins. `redraw` reads the environment on
+        # mount, so the dict stays patched for the whole test.
+        patcher = mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return huebox_app.Editor()
+
+    async def _press(self, app, pilot, key):
+        from textual import events
+
+        event = events.Key(key, None)
+        event.set_sender(app)
+        app.post_message(event)
+        await pilot.pause()
+
+    async def test_the_keys_collapse_the_panelled_blocks(self):
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._panels_on, "the panels did not mount")
+            self.assertEqual(app._collapsed, set())
+            lives = list(app.query(huebox_app.Live))
+            self.assertTrue(lives, "no live block mounted")
+            before = [widget for widget in lives
+                      if widget.name == "examples"][0]
+            self.assertFalse(before.collapsed)
+            await self._press(app, pilot, "e")
+            self.assertEqual(app._collapsed, {"examples"},
+                             "`e` recorded the collapse and changed nothing")
+            shut = [widget for widget in app.query(huebox_app.Live)
+                    if widget.name == "examples"][0]
+            self.assertTrue(shut.collapsed,
+                            "the strip did not shut inside its panel")
+            self.assertEqual(len(list(app.query(huebox_app.Live))),
+                             len(lives),
+                             "collapsing unmounted a sibling")
+            await self._press(app, pilot, "e")
+            self.assertEqual(app._collapsed, set(),
+                             "second `e` did not reopen the strip")
