@@ -460,9 +460,19 @@ bevel cells only, so no shadow cell can double a face stroke —
 and standing only on air outside the letterforms, never inside
 a counter, where it would read as a second stroke. It draws only out
 of leftover: a frame with no rows below it
-keeps the wordmark instead (decision 33). The static preview
-shows it wherever the row holds it; narrower than that the wordmark stands
-back in, and the narrow preview stays ascii.
+keeps the wordmark instead (decision 33). Between the two stands a mini
+banner: three rows of block art (`█`, `▀`, `▄`), six three-wide letters
+on single-space gaps, 23 columns, pasted as one block and split at its
+gap columns — each letter in its base hue (`palette-1` … `palette-6`),
+bold, with no shadow to stamp (the half-blocks already round the curves,
+and an offset copy would double every stroke). The ladder is raster
+(50 wide, six spare rows), mini (23 wide, three spare rows), wordmark:
+forcing means the raster one, and where even the mini one does not fit
+the wordmark stands back in. The static preview
+shows the tallest logo the row holds; narrower than the mini banner the
+wordmark stands back in. The narrow preview is block art wherever the
+mini stands in, and ascii below it — every glyph still one column either
+way, so a piped preview holds its width.
 
 **Hints are `(key, what)` pairs, not strings.** The hint line paints a key and
 its label separately, so `pack` folds between *whole hints* and never between a
@@ -724,6 +734,8 @@ Append-only. Newest last. One line per decision, with the reason.
 | 31 | Only the code sample and the live diff are selectable; a selection is painted in the theme's own selection slots | Those two blocks exist so their text can leave the editor — sample a colour, copy the hex, paste the new value. Every other block is inert to a drag, because a swatch that began a text selection when clicked would swallow the click that selects a colour, and the failure is invisible: the selection just looks like nothing happened. The selection style is bound to `selection-background`/`selection-foreground`, the pair the picker already marks a theme with, so a selection reads as part of the theme instead of as a colour from somewhere else |
 | 32 | Textual is a dependency, not an extra: `huebox` installs its editor | An install whose main command fails on open is not a smaller install, it is a broken one. The `editor` extra bought `show` / `list` / `use` / `new` / `import` an install without Textual — and in exchange every one of those commands worked while `edit`, the command the install is for, printed an install line. The missing-extra guard even named an extra nobody could install (`huebox[textual]`), because it joined module names into brackets meant for group names. Same reasoning as decision 16, which made Pygments required when the sample without it read as a bug: a `huebox` that cannot edit is the degraded path, and the degraded path is what the guard was. What stays: the late import, so the commands that never open the editor never pay for it — that was always about cold-start time, never about installability — and `pyte` stays the `test` group, because the harness is not the product |
 | 33 | The raster banner draws only out of leftover, and the preview may be box drawing | Decoration never costs a widget a row: the editor builds the frame plain and inserts the banner above it only where the rows below leave room, so everything below shifts down byte-identical. The shadow defaults to the same hue from the bright row, and a grey `palette-8` one stays one argument away. The preview's ascii contract narrows to no-wide-glyphs — box drawing survives a pipe, and truecolor already assumed ANSI |
+| 34 | The header is a three-rung ladder — raster banner, mini banner, wordmark — drawn only out of leftover, forced only to the raster one | The middle rung fills the gap between a six-row banner that needs a wide tall terminal and a one-line wordmark whose thin strokes hide the colours. Forcing still means the raster banner; the middle rung is auto-only, because a flag per rung is chrome around decoration |
+| 35 | The middle rung is a pasted three-row block font (23 columns) instead of four-row line art | The author's own art reads better and costs one row less (three spare rows instead of four), so the rung reaches frames the line art never did. The price is stated plainly: the narrow preview is no longer pure ascii wherever the mini stands in — still no wide glyphs, still holding its width, and ascii again below it |
 
 ---
 

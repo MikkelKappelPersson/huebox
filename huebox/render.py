@@ -393,11 +393,76 @@ def banner_lines(slots, cols=None, shadow=None):
                         and outside[y + BANNER_DY][x0 + dx + BANNER_DX]):
                     cells[y + BANNER_DY][x0 + dx + BANNER_DX] = \
                         (shade, False, glyph)
+    out = _paint_cells(cells)
+    return [clip(line, cols) if cols is not None else line for line in out]
+
+
+# --------------------------------------------------------------------------
+# the mini banner (§8.1)
+# --------------------------------------------------------------------------
+
+# The mini banner (§8.1): the middle rung between the raster banner
+# and the one-line wordmark — three rows of block art, 23 columns,
+# pasted as one block and split at its single-space gap columns.
+# One art per letter, like `BANNER_LETTERS`, is what keeps each letter
+# in its own base hue: a block has no letters left to colour. There is
+# no shadow to stamp — the half-blocks already round the curves, and
+# an offset copy would double every stroke — so the mini banner shows
+# the base row only, where the raster banner spans both.
+MINI_LETTERS = (
+    # h
+    (
+        "█ █",
+        "█▀█",
+        "█ █",
+    ),
+    # u
+    (
+        "█ █",
+        "█ █",
+        "█▄█",
+    ),
+    # e
+    (
+        "█▀▀",
+        "█▀",
+        "█▄▄",
+    ),
+    # b
+    (
+        "█▀▄",
+        "█▀▄",
+        "█▄▀",
+    ),
+    # o
+    (
+        "█▀█",
+        "█ █",
+        "█▄█",
+    ),
+    # x
+    (
+        "█ █",
+        " █",
+        "█ █",
+    ),
+)
+
+MINI_GAP = 1                     # air between letters, as pasted
+MINI_WIDTH = (sum(max(len(line) for line in letter)
+                   for letter in MINI_LETTERS))
+MINI_WIDTH += MINI_GAP * (len(MINI_LETTERS) - 1)
+
+
+def _paint_cells(cells):
+    """One painted row per cell row: adjacent cells in one ink are one run.
+
+    A run per cell would spray a reset per column, and `backdrop` reopens
+    the fill after every one of them (§8.2). Shared by `banner_lines` and
+    `mini_banner_lines`, which differ only in what they put in the cells.
+    """
     out = []
     for row in cells:
-        # adjacent cells in one ink are one run: a run per cell would
-        # spray a reset per column, and `backdrop` reopens the fill after
-        # every one of them (§8.2).
         parts, key, run = [], None, ""
         for cell in list(row) + [None]:
             tag = (cell[0], cell[1]) if cell is not None else None
@@ -415,6 +480,37 @@ def banner_lines(slots, cols=None, shadow=None):
             else:
                 parts.append(" ")
         out.append("".join(parts).rstrip())
+    return out
+
+
+def mini_banner_lines(slots, cols=None):
+    """The mini banner: each letter's blocks in its own base hue (§8.1).
+
+    Letter `i` wears `BANNER_FACE_SLOTS[i]` — the base row, one hue per
+    letter, bold like the raster banner's faces and the one-line
+    `wordmark`. Every colour is read out of `slots` on the call, so the
+    banner is live like the wordmark (§14.1): editing a face slot moves
+    the letter on the same frame as everything else.
+
+    `cols` is the room the row has: narrower than `MINI_WIDTH` gives
+    `[]`, and the caller falls back to `wordmark` — a clipped banner is
+    half a letter, which reads as a rendering bug rather than a logo.
+    Rows are the caller's budget (§15): this function never decides that.
+    """
+    if cols is not None and cols < MINI_WIDTH:
+        return []
+    height = max(len(letter) for letter in MINI_LETTERS)
+    cells = [[None] * MINI_WIDTH for _ in range(height)]
+    x = 0
+    for index, letter in enumerate(MINI_LETTERS):
+        tint = slots.get(BANNER_FACE_SLOTS[index % len(BANNER_FACE_SLOTS)],
+                         MISSING)
+        for y, line in enumerate(letter):
+            for dx, glyph in enumerate(line):
+                if glyph != " ":
+                    cells[y][x + dx] = (tint, True, glyph)
+        x += max(len(line) for line in letter) + MINI_GAP
+    out = _paint_cells(cells)
     return [clip(line, cols) if cols is not None else line for line in out]
 
 
@@ -898,10 +994,13 @@ def render_preview(fmt, path, slots, cols=None, rows=None) -> str:
     cols = cols or 96
     lines = []
     art = banner_lines(slots, cols)
-    if art:
-        # the banner replaces the wordmark where the row holds it;
-        # narrower than that the one-line wordmark stands in (§8.1)
-        lines.extend(art)
+    mark = mini_banner_lines(slots, cols)
+    logo = art or mark
+    if logo:
+        # the logo replaces the wordmark where the row holds it: the
+        # raster banner first, the mini banner below that, and narrower
+        # than either the one-line wordmark stands in (§8.1)
+        lines.extend(logo)
         subject = title(fmt, slots)
     else:
         subject = wordmark(slots) + "  " + title(fmt, slots)

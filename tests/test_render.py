@@ -13,14 +13,15 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 import huebox  # noqa: E402
 from huebox.color import (hex_to_rgb, hsv_to_rgb,  # noqa: E402
                          readable_fg, rgb_to_hex, rgb_to_hsv)
-from huebox.render import (BANNER_FACE_SLOTS, BANNER_LETTERS, BANNER_SHADOWS, BANNER_WIDTH, BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
+from huebox.render import (MINI_LETTERS, MINI_WIDTH, BANNER_FACE_SLOTS, BANNER_LETTERS, BANNER_SHADOWS, BANNER_WIDTH, BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, HSV_COMPACT,
                            HSV_CHROME, HSV_FULL, HSV_TIGHT, MARK,
                            LABEL_WIDTH, PAIR_MIN_COLS,
                            PAIR_WIDTH, SELECTED_TEXT, TOKEN_SLOTS, WORDMARK,
-                           WORDMARK_SLOTS, _sample, backdrop, banner_lines, bg,
+                           WORDMARK_SLOTS, _sample, mini_banner_lines,
+                           backdrop, banner_lines, bg,
                            chrome, fg,
                            hint_line, hsv_numbers, hsv_readout, key_hint,
                            pack,
@@ -183,14 +184,26 @@ class Geometry(unittest.TestCase):
                 self.assertNotIn(unicodedata.east_asian_width(char), ("W", "F"),
                                  f"wide glyph in preview: {line!r}")
 
-    def test_narrow_preview_is_pure_ascii(self):
-        # narrower than the banner the wordmark stands back in, and the
-        # whole preview is ascii again — piped narrow output is unchanged
+    def test_narrow_preview_has_no_wide_glyphs(self):
+        # the mini banner stands in at 40 columns: block art, but every
+        # glyph is still one column, so the piped preview holds its width
         slots = {name: "#ff8800" for name in huebox.SLOTS}
         text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=40)
         for line in text.split("\n"):
+            width = len(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", line))
+            self.assertLessEqual(width, 40, f"width {width} > 40")
+            for char in line:
+                self.assertNotIn(unicodedata.east_asian_width(char), ("W", "F"),
+                                 f"wide glyph in narrow preview: {line!r}")
+
+    def test_tiny_preview_stays_ascii(self):
+        # below the mini banner the wordmark stands back in, and the
+        # whole preview is ascii again — piped tiny output is unchanged
+        slots = {name: "#ff8800" for name in huebox.SLOTS}
+        text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=20)
+        for line in text.split("\n"):
             self.assertTrue(all(ord(ch) < 128 for ch in line),
-                            f"non-ascii in narrow preview: {line!r}")
+                            f"non-ascii in tiny preview: {line!r}")
 
     def test_preview_never_exceeds_width(self):
         slots = {name: "#ff8800" for name in huebox.SLOTS}
@@ -621,6 +634,66 @@ class Typography(unittest.TestCase):
         self.assertEqual(max(visible(line) for line in art), BANNER_WIDTH)
         for line in art:
             self.assertLessEqual(visible(line), BANNER_WIDTH)
+
+    def test_the_mini_banner_is_the_pasted_block(self):
+        # the strings are the source: six three-wide letters split at the
+        # pasted block's single-space gap columns, so the plain art is the
+        # pasted block byte-for-byte (sans trailing air)
+        slots = self.slots()
+        self.assertEqual([_plain(line)
+                          for line in mini_banner_lines(slots, None)],
+                         ["█ █ █ █ █▀▀ █▀▄ █▀█ █ █",
+                          "█▀█ █ █ █▀  █▀▄ █ █  █",
+                          "█ █ █▄█ █▄▄ █▄▀ █▄█ █ █"])
+        self.assertEqual(MINI_WIDTH, 23)
+        self.assertEqual(len(MINI_LETTERS), len(WORDMARK))
+
+    def test_the_mini_banner_faces_wear_the_base_row_in_order(self):
+        # §8.1 — letter `i` wears `BANNER_FACE_SLOTS[i]`, bold like the
+        # raster banner's faces and the one-line `wordmark`
+        slots = self.banner_slots()
+        raw = "\n".join(mini_banner_lines(slots, 96))
+        for letter, slot in zip(WORDMARK, BANNER_FACE_SLOTS):
+            with self.subTest(letter=letter):
+                self.assertIn(f"{BOLD}{fg(slots[slot])}", raw)
+
+    def test_the_mini_banner_is_live(self):
+        # editing a face slot moves the letter on the same frame as
+        # everything else (§14.1)
+        slots = self.banner_slots()
+        moved = dict(slots, **{BANNER_FACE_SLOTS[2]: "#ff00ff"})
+        self.assertNotEqual(mini_banner_lines(slots, 96),
+                            mini_banner_lines(moved, 96))
+        self.assertIn(fg("#ff00ff"),
+                      "\n".join(mini_banner_lines(moved, 96)))
+
+    def test_the_mini_banner_is_narrow_block_art(self):
+        # the middle rung is block art, not ascii — but every glyph is
+        # still one column, so the piped preview holds its width wherever
+        # the mini banner stands in
+        slots = self.slots()
+        art = mini_banner_lines(slots, MINI_WIDTH)
+        self.assertEqual(len(art), 3)
+        for line in art:
+            plain = _plain(line)
+            self.assertTrue(set(plain) <= set("█▀▄ "),
+                            f"stray glyph in mini banner: {plain!r}")
+            for char in plain:
+                self.assertNotIn(unicodedata.east_asian_width(char),
+                                 ("W", "F"),
+                                 f"wide glyph in mini banner: {plain!r}")
+
+    def test_the_mini_banner_fits_its_width_or_yields(self):
+        # narrower than `MINI_WIDTH` gives `[]`, and the caller falls
+        # back to `wordmark` — a clipped banner is half a letter
+        slots = self.slots()
+        self.assertEqual(mini_banner_lines(slots, 22), [])
+        self.assertEqual(mini_banner_lines(slots, MINI_WIDTH - 1), [])
+        art = mini_banner_lines(slots, MINI_WIDTH)
+        self.assertEqual(len(art), 3)
+        self.assertEqual(max(visible(line) for line in art), MINI_WIDTH)
+        for line in art:
+            self.assertLessEqual(visible(line), MINI_WIDTH)
 
     def test_a_key_is_bright_and_its_label_is_teal(self):
         # the key is what the finger has to find; the label explains it

@@ -32,7 +32,7 @@ from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
 from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,
                      banner_lines, bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_numbers,
-                     hsv_readout, sample_lines, title, visible, wordmark)
+                     hsv_readout, mini_banner_lines, sample_lines, title, visible, wordmark)
 from .tui import term_size
 
 ADJUST = {
@@ -560,21 +560,30 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     if status:
         marks.append(("status", at_extra() + len(tail) - 1))
 
-    # The raster banner draws only out of leftover (decision 33): the
-    # frame above is built plain, and where the rows below it leave room
-    # the banner goes in above them. Every mark and hit below shifts down
-    # by `len(art)` and nothing below changes — not a widget, not the air
-    # between them. `use_banner=True` forces it (an overflowing frame
-    # trims like any other); `False` keeps the wordmark.
+    # The header draws only out of leftover (decision 33): the frame above
+    # is built plain, and where the rows below it leave room a logo goes in
+    # above them — the raster banner where it fits, else the mini banner,
+    # else the wordmark the frame was built with. Every mark and hit below
+    # shifts down by the logo's rows and nothing below changes — not a
+    # widget, not the air between them. `use_banner=True` forces the raster
+    # banner (an overflowing frame trims like any other); `False` keeps the
+    # wordmark; `None` walks the ladder. The mini banner is auto-only:
+    # forcing means the raster one, and where even the mini one does not
+    # fit the wordmark stands back in.
+    spare = rows - len(body) - len(extra) - len(tail)
     art = banner_lines(slots, cols)
-    if art and (use_banner or (use_banner is None
-                               and rows - len(body) - len(extra) - len(tail)
-                               >= len(art))):
+    if art and (use_banner or (use_banner is None and spare >= len(art))):
+        logo = art
+    else:
+        mark = mini_banner_lines(slots, cols)
+        logo = (mark if mark and use_banner is None and spare >= len(mark)
+                else [])
+    if logo:
         subject = "  " + chrome(label, "foreground", slots, bold=True)
         if path and len("  ") + len(label) + 2 + len(path) <= cols:
             subject += "  " + chrome(path, CHROME_MUTED, slots)
-        body[0:2] = art + [subject, ""]
-        shift = len(art)
+        body[0:2] = logo + [subject, ""]
+        shift = len(logo)
         marks[:] = [(name, row if name == "header" else row + shift)
                     for name, row in marks]
         if hits is not None:

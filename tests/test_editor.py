@@ -643,14 +643,28 @@ class NormalFrame(unittest.TestCase):
             self.assertIn(fg(base[slot]), mark, slot)
         self.assertNotEqual(mark, row(**{"palette-9": "#ff00ff"}))
 
-    def test_the_banner_appears_only_out_of_leftover(self):
-        # decision 33 — the banner draws out of the rows below the frame,
+    def test_the_header_walks_the_ladder_out_of_leftover(self):
+        # decision 33 — the header draws out of the rows below the frame,
         # never out of a widget: the golden sizes, and tall sizes whose
-        # diff is whole, keep the wordmark, while a tall terminal gets it
+        # diff is whole, keep the wordmark; a taller terminal stands the
+        # mini banner up; a tall one the raster banner — and the diff is
+        # whole throughout, so no rung ever costs a widget a row
         for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12),
-                           (120, 40), (120, 44)):
+                           (120, 40), (120, 41)):
             with self.subTest(size=(cols, rows)):
                 self.assertIn("huebox", plain_rows(frame(cols, rows))[0])
+        for cols, rows in ((120, 42), (120, 44)):
+            with self.subTest(size=(cols, rows)):
+                body = plain_rows(frame(cols, rows))
+                self.assertNotIn("huebox", body[0])
+                # the mini rung's own glyph: the raster banner spends
+                # `█` and the bevel, never half-blocks
+                self.assertIn("▀", "\n".join(body[:3]))
+                self.assertIn("live diff", "\n".join(body))
+                # forced off, the wordmark stands back in
+                self.assertIn("huebox",
+                                plain_rows(frame(cols, rows,
+                                                 banner=False))[0])
         for cols, rows in ((120, 55), (100, 60)):
             with self.subTest(size=(cols, rows)):
                 body = plain_rows(frame(cols, rows))
@@ -680,6 +694,31 @@ class NormalFrame(unittest.TestCase):
                 self.assertEqual((hit.x0, hit.x1), (twin.x0, twin.x1))
                 self.assertEqual(hit.y, twin.y + shift)
                 marked = _rows(120, 55, hit.slot)
+                self.assertEqual(marked[hit.y][hit.x0 + 1:hit.x0 + 2], ">")
+
+    def test_the_mini_banner_leaves_everything_below_where_it_was(self):
+        # like the raster banner: an insertion above the frame at 120x44,
+        # not a reallocation — every row below the header is the wordmark
+        # frame's, shifted down by the mini banner's three rows
+        rows = len(editor.mini_banner_lines(FULL_SLOTS, 120)) + 2
+        auto = lines(frame(120, 44))
+        forced = lines(frame(120, 44, banner=False))
+        self.assertEqual(auto[rows:], forced[2:])
+
+    def test_the_mini_banner_shifts_the_hit_map_with_the_frame(self):
+        # every hit moves down by the mini banner's rows and still lands
+        # on the `>` marker the frame paints for its slot
+        shift = len(editor.mini_banner_lines(FULL_SLOTS, 120))
+        plain = {hit.slot: hit
+                 for hit in editor.frame_hits(120, 44, use_banner=False)}
+        raised = editor.frame_hits(120, 44)
+        self.assertEqual(len(plain), len(raised))
+        for hit in raised:
+            with self.subTest(slot=hit.slot):
+                twin = plain[hit.slot]
+                self.assertEqual((hit.x0, hit.x1), (twin.x0, twin.x1))
+                self.assertEqual(hit.y, twin.y + shift)
+                marked = _rows(120, 44, hit.slot)
                 self.assertEqual(marked[hit.y][hit.x0 + 1:hit.x0 + 2], ">")
 
     def test_a_fold_never_splits_a_key_from_its_label(self):
