@@ -337,7 +337,7 @@ def slot_at(hits, x: int, y: int):
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 grid=None, hits=None, size=None, regions=None,
-                use_banner=None, show_examples=True):
+                use_banner=None):
     """The frame, written to stdout.
 
     `size` overrides the terminal query. Textual knows the size it was given —
@@ -346,12 +346,6 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     frame at `cols` rather than at whatever the terminal happens to be. Without
     it the hit map and the frame disagreed at every width but one, which the
     cross-check in `test_editor` caught.
-
-    `show_examples` is the collapsible-examples state (§14.1): `True` draws the
-    live blocks (examples strip, diff, sample) as always — open by default —
-    while `False` omits them, so the frame is the controls plus the hints and
-    the compositor's `Examples` header stands in their place. The default keeps
-    every existing caller on the bare rows I1 pins.
     """
     cols, rows = size or term_size()
     sys.stdout.write("\033[H\033[2J")
@@ -508,20 +502,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     def room_left():
         return spare - len(extra)
 
-    if show_examples:
-        examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
-        if examples >= EXAMPLES_FLOOR:
-            marks.append(("examples", at_extra()))
-            extra.append("  " + title("examples", slots,
-                                 "(live buffer: background / selection / cursor)"))
-            extra.extend(example_lines(slots, cols - 2)[:examples - 1])
+    examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
+    if examples >= EXAMPLES_FLOOR:
+        marks.append(("examples", at_extra()))
+        extra.append("  " + title("examples", slots,
+                             "(live buffer: background / selection / cursor)"))
+        extra.extend(example_lines(slots, cols - 2)[:examples - 1])
     # §15 — the diff is the last widget to get a row and the first to give
     # one back: it grows out of what the sample did not need, so where the
-    # two compete the sample stays whole and the hunk does not appear.
-    # Collapsed examples (§14.1) skip the whole live area: diff and sample
-    # go with the strip, so the frame is controls plus hints.
+    # two compete the sample stays whole and the hunk does not appear
     diff = []
-    if show_examples and room_left() >= 2:             # header plus at least one line
+    if room_left() >= 2:             # header plus at least one line
         code = [line for line, _ in sample_lines(slots)]
         if code and not code[-1].strip():
             code.pop()               # the lex's trailing newline, not a line

@@ -1922,23 +1922,3 @@ class Regions(unittest.TestCase):
         be a map describing a frame that is not the one on screen."""
         names = [name for name, _, _ in self._regions(40, 12)]
         self.assertEqual(names, ["header", "palette", "interface"])
-
-    def test_collapsed_examples_omit_the_live_blocks(self):
-        """§14.1 — `show_examples=False` leaves controls plus hints."""
-        found = []
-        with mock.patch.object(sys, "stdout", io.StringIO()):
-            editor.draw_editor("ghostty", "", dict(FULL_SLOTS), 0, [],
-                               "", 1, regions=found, size=(100, 30),
-                               show_examples=False)
-        names = [name for name, _, _ in found]
-        for gone in ("examples", "diff", "sample"):
-            self.assertNotIn(gone, names,
-                             "collapsed frame still names %s" % gone)
-        for name in ("header", "palette", "interface", "selected",
-                     "hints"):
-            self.assertIn(name, names,
-                          "collapsed frame lost its %s block" % name)
-        for before, after in zip(found, found[1:]):
-            self.assertEqual(before[1] + before[2], after[1],
-                             "%s and %s are not adjacent"
-                             % (before[0], after[0]))

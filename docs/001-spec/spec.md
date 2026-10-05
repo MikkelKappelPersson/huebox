@@ -1122,15 +1122,18 @@ edge of the frame in that colour would read as a selection running on past
 the text. The three rows are one sentence drawn three times, each with one
 span emphasised; that is the whole comparison.
 
-The live area — the strip, the diff (§14.4) and the code sample — is one
-collapsible, open by default. `e` collapses it to its header and `e` again
-reopens it; clicking the header or pressing Enter on it does the same, through
-Textual's `Collapsible`. Collapsed, the frame is controls plus hints; the
-hits and regions never name a hidden row, so a click cannot land on a colour
-it cannot see. The header wears only the theme's own foreground on its own
-background, so the collapsed and the open frame alike stay inside the
-reference closure (migration §4.2). `HUEBOX_COLLAPSIBLE=0` opts out to the
-bare stack the equivalence goldens pin.
+The three live widgets — the strip, the diff (§14.4) and the code sample —
+are each their own collapsible, all open by default. The strip's header calls
+it `interface text`, which is what it demonstrates: the background, selection
+and cursor pairs the interface is set in. `e` collapses the strip, `d` the
+diff, `c` the code, and each key again reopens it; clicking a header or
+pressing Enter on it does the same, through Textual's `Collapsible`. A
+collapsed block hides its rows behind its header while the frame stays drawn
+whole, so the hits above the live area never move and what rides up below it
+names no slot a click could land on. Each header wears only the theme's own
+foreground on its own background, so the open and the shut frame alike stay
+inside the reference closure (migration §4.2). `HUEBOX_COLLAPSIBLE=0` opts
+out to the bare stack the equivalence goldens pin.
 
 ### 14.2 Save, quit, undo
 

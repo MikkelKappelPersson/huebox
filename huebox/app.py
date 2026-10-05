@@ -172,7 +172,7 @@ def load_slots() -> dict:
 
 
 def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
-               regions=None, show_examples=True):
+               regions=None):
     """The frame as a list of rows, captured from `draw_editor`.
 
     Returns the rows without the trailing-newline decision, which belongs to
@@ -191,17 +191,12 @@ def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
     drawing code rather than recomputed here, so a click cannot land a row away
     from the swatch the user aimed at and a widget cannot claim a row the frame
     did not draw.
-
-    `show_examples` is the collapsible state (§14.1): `False` omits the live
-    blocks, so the hits and regions never name a row the collapsed
-    `Examples` hides.
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
                     state.status, state.mult, head=head, hits=hits,
-                    regions=regions, size=(cols, rows),
-                    show_examples=show_examples)
+                    regions=regions, size=(cols, rows))
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -417,71 +412,85 @@ class Picker(Frame):
 BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
                  "sample": Sample, "diff": Diff}
 
-#: The live blocks the collapsible examples own (§14.1): the strip, the hunk
-#: and the code sample. One logical area split across three blocks of the
-#: frame, which is why they collapse together rather than one by one.
+#: The live blocks, each collapsible on its own (§14.1): the strip, the
+#: hunk and the code sample. Three blocks, three toggles — a collapsed strip
+#: never takes the diff and the sample with it.
 LIVE_BLOCKS = ("examples", "diff", "sample")
+
+#: What the compositor calls the live blocks. The strip demonstrates the
+#: interface text pairs (background, selection, cursor), so that is what its
+#: header says; the bare rows keep `draw_editor`'s own "examples" title, and
+#: I1 pins those — the header already differs by its toggle mark, so the
+#: label is product chrome of the same kind.
+LIVE_TITLES = {"examples": "interface text", "diff": "live diff",
+                "sample": "live code"}
+
+#: One key per live block. All three are free in `apply_key`, so the toggles
+#: never steal a colour key; the picker owns the surface while it is up, so
+#: behind it they stay editor keys (no-ops) rather than collapsing the frame
+#: the user is reading.
+COLLAPSE_KEYS = {"e": "examples", "d": "diff", "c": "sample"}
 
 
 def collapsible_enabled() -> bool:
-    """Whether the examples collapsible is on.
+    """Whether the live collapsibles are on.
 
-    Default on: the live area is an open `Examples` rather than bare rows.
-    `HUEBOX_COLLAPSIBLE=0` opts out back to the frameless stack (tests and
-    the harness use it where they assert the bare rows, never as product).
-    I1 pins bare (`0`) while I2 runs product, so the key must tell them
-    apart — the same rule as the panels prototype that came before it.
+    Default on: each live block rides in an open `Live` rather than as bare
+    rows. `HUEBOX_COLLAPSIBLE=0` opts out back to the frameless stack (tests
+    and the harness use it where they assert the bare rows, never as
+    product). I1 pins bare (`0`) while I2 runs product, so the key must tell
+    them apart — the same rule as the panels prototype that came before it.
     """
     return os.environ.get("HUEBOX_COLLAPSIBLE", "1") != "0"
 
 
-class Examples(Collapsible):
-    """The live area as one collapsible, open by default (§14.1).
+class Live(Collapsible):
+    """One live block as a collapsible, open by default (§14.1).
 
     The rows inside are still `draw_editor`'s, captured rather than
     re-rendered, so the collapsible cannot disagree with the frame about what
-    a live block says — it only puts a toggle around it. Never focusable
-    itself; focus stays on the `Swatches` grids, and the title answers to
-    click and Enter through `Collapsible`'s own toggle.
+    its block says — it only puts a toggle around it. Never focusable itself;
+    focus stays on the `Swatches` grids, and the title answers to click and
+    Enter through `Collapsible`'s own toggle.
 
-    Theme-closed by construction: the CSS below uses only `$background`,
-    `$foreground` and `$border` — the three tokens `TOKEN_SLOTS` already
-    binds — and no tint, no hover wash, no focus ring that would derive a
-    colour the reference never painted. I2 is what proves it.
+    Theme-closed by construction: the CSS below uses only `$background` and
+    `$foreground` — the tokens `TOKEN_SLOTS` already binds — and no tint, no
+    hover wash, no focus ring that would derive a colour the reference never
+    painted. I2 is what proves it.
     """
 
     can_focus = False
     can_focus_children = True
 
     DEFAULT_CSS = """
-    Examples {
+    Live {
         background: $background;
         border: none;
         padding: 0;
         margin: 0;
     }
-    Examples Contents {
+    Live Contents {
         background: $background;
         padding: 0;
         margin: 0;
     }
-    Examples CollapsibleTitle {
+    Live CollapsibleTitle {
         background: $background;
         color: $foreground;
         padding: 0;
         margin: 0;
         text-style: bold;
     }
-    Examples CollapsibleTitle:hover {
+    Live CollapsibleTitle:hover {
         background: $background;
         color: $foreground;
     }
-    Examples CollapsibleTitle:focus {
+    Live CollapsibleTitle:focus {
         background: $background;
         color: $foreground;
         text-style: bold;
     }
-    Examples:focus-within {
+    Live:focus-within {
         background: $background;
     }
     """
@@ -561,12 +570,12 @@ class Editor(App):
         self.state = None
         self.hits: list = []
         self.rows_text: list = []
-        # The examples collapsible, open by default (§14.1): `False` is
-        # expanded, `True` collapsed. Compositor state, not buffer state —
-        # `draw_editor` is handed it as `show_examples` rather than reading
-        # it, so a headless session never collapses and I1 pins the bare
-        # rows it always did.
-        self._examples_collapsed = False
+        # The live collapsibles, all open by default (§14.1): the set of
+        # block names standing collapsed. Compositor state, not buffer state
+        # — the frame is always drawn whole and the collapsed rows are hidden,
+        # never unpainted, so a headless session never collapses and I1 pins
+        # the bare rows it always did.
+        self._collapsed: set = set()
         super().__init__(**kwargs)
         # After `super()`, and in the constructor rather than `on_mount`: Textual
         # delivers a `Resize` during start-up, before `on_mount` runs, and
@@ -648,7 +657,6 @@ class Editor(App):
         # editor's minimum size, so the too-small check covers both frames and
         # is asked once, here, rather than twice inside `draw_editor`.
         picker = state.picker_frame()
-        collapsed = False
         if width < MIN_COLS or height < MIN_ROWS:
             rows_text = [too_small_frame(width)]
         elif picker is not None:
@@ -663,67 +671,36 @@ class Editor(App):
                                                  state.status, state.slots,
                                                  hits=self.hits)]
         else:
-            wanted = self._examples_collapsed and collapsible_enabled()
-            # A collapse with no live area to hide is a no-op: at a size
-            # where the expanded frame has no live blocks either, the header
-            # would stand over nothing and steal a row from the grids.
-            if wanted:
-                probe_hits, probe_regions = [], []
-                frame_rows(self.fmt, session_path(state), state,
-                           width, height, head=self.head_for(state),
-                           hits=probe_hits, regions=probe_regions,
-                           show_examples=True)
-                wanted = any(name in LIVE_BLOCKS
-                             for name, _, _ in probe_regions)
-            collapsed = wanted
-            show = not collapsed
+            # Always drawn whole: a collapsed block hides its pre-drawn rows
+            # behind its header rather than unpainting them, so the hits above
+            # the live area never move and the ones below it name no slot.
             rows_text = frame_rows(self.fmt, session_path(state), state,
                                    width, height, head=self.head_for(state),
-                                   hits=self.hits, regions=self.regions,
-                                   show_examples=show)
-            if collapsed:
-                # The `Examples` header stands where the live area was: one
-                # row of chrome for the blocks `show_examples=False` omitted,
-                # so everything below it shifts down by one and the hits
-                # shift with it — otherwise a click lands a row away from
-                # the swatch it aimed at, silently.
-                split = next((row for name, row, _ in self.regions
-                              if name == "hints"), len(rows_text))
-                for index, hit in enumerate(self.hits):
-                    if hit.y >= split:
-                        self.hits[index] = hit._replace(y=hit.y + 1)
-                shifted = []
-                for name, first, count in self.regions:
-                    if first >= split:
-                        shifted.append((name, first + 1, count))
-                    else:
-                        shifted.append((name, first, count))
-                self.regions = shifted
+                                   hits=self.hits, regions=self.regions)
         self.rows_text = rows_text
 
         for child in list(self.query(Frame)):
             child.remove()
-        for child in list(self.query(Examples)):
+        for child in list(self.query(Live)):
             child.remove()
         # §5.6 — one widget per block of the frame. The blocks are the rows
         # `draw_editor` reported, in order and without gaps, so the widgets stack
         # to exactly the frame's height and not one row more: a stack taller than
         # the screen would give the screen a scrollbar, which is seven of
         # Textual's 168 design tokens arriving in the frame's first paint.
-        # With the collapsible on, the live blocks ride inside one open
-        # `Examples` instead: the header replaces the examples title row one
-        # for one (expanded), or stands where the live area was (collapsed),
-        # so an expanded stack is still exactly the frame's height.
+        # With the collapsibles on, each live block rides inside its own open
+        # `Live` instead: the header replaces the block's title row one for
+        # one, so an all-open stack is still exactly the frame's height. A
+        # collapsed block hides its rows behind its header; what is below it
+        # rides up, and the empty rows at the bottom stand on the screen's own
+        # background — which is the theme's background, like everything else.
         named = ([("picker", 0, len(rows_text))] if picker is not None
                  else list(self.regions)
                  or [("frame", 0, len(rows_text))])
         if (collapsible_enabled() and picker is None
-                and not (width < MIN_COLS or height < MIN_ROWS)):
-            live = [entry for entry in named if entry[0] in LIVE_BLOCKS]
-            if live or collapsed:
-                self._mount_collapsible(width, rows_text, named)
-            else:
-                self._mount_bare(width, rows_text, named)
+                and not (width < MIN_COLS or height < MIN_ROWS)
+                and any(entry[0] in LIVE_BLOCKS for entry in named)):
+            self._mount_collapsible(width, rows_text, named)
         else:
             self._mount_bare(width, rows_text, named)
         # `mount` is a request, not a fact: the widgets do not exist yet, so
@@ -758,14 +735,14 @@ class Editor(App):
 
     def _mount_collapsible(self, width: int, rows_text: list,
                            named: list) -> None:
-        """Mount the frame with the live area inside one `Examples`.
+        """Mount the frame with each live block inside its own `Live`.
 
-        Expanded, the header replaces the examples title row one for one, so
-        the stack is still exactly the frame's height: the body rows keep
-        their rows, the diff and sample keep theirs, and only the title row
-        is the collapsible's own. Collapsed, the header stands where the live
-        area was (the regions and hits were already shifted for it in
-        `redraw`), and the hints ride one row lower than the bare rows.
+        Each header replaces its block's title row one for one, so an
+        all-open stack is still exactly the frame's height: every body row
+        keeps its row and only the three title rows are the collapsibles'
+        own. A collapsed block hides its rows behind its header; what is
+        below it rides up, and the hits never notice — the grids are above
+        the live area and the hints name no slot.
         """
         by_name = {name: (first, count) for name, first, count in named}
 
@@ -778,49 +755,33 @@ class Editor(App):
             block.styles.margin = 0
             return block
 
+        def mount_live(name):
+            first, count = by_name[name]
+            # The header stands in for the title row: the body keeps its
+            # rows, so open or shut the stack below never shifts by more
+            # than what this block hid.
+            body = rows_text[first + 1:first + count]
+            kind = BLOCK_WIDGETS.get(name, Frame)
+            child = kind(body, width, name=name)
+            child.styles.width = width
+            child.styles.height = len(body)
+            child.styles.padding = 0
+            child.styles.margin = 0
+            self.mount(Live(LIVE_TITLES[name], child,
+                            collapsed=name in self._collapsed, name=name))
+
         order = [name for name, _, _ in named]
         live_at = min((order.index(name) for name in LIVE_BLOCKS
                        if name in by_name), default=len(order))
-        # Collapsed: no live blocks in `named`; the header goes where the
-        # hints begin in the shifted regions, i.e. before them.
-        if not any(name in by_name for name in LIVE_BLOCKS):
-            split = next((i for i, (name, _, _) in enumerate(named)
-                          if name in ("hints", "status")), len(named))
-            for name, first, count in named[:split]:
-                self.mount(mount_block(name, rows_text[first:first + count]))
-            self.mount(Examples("examples",
-                                collapsed=self._examples_collapsed,
-                                name="examples"))
-            for name, first, count in named[split:]:
-                # `first` is already shifted for the header in `redraw`, so
-                # step back one to index `rows_text` (which has no header).
-                self.mount(mount_block(
-                    name, rows_text[first - 1:first - 1 + count]))
-            return
         for name, first, count in named:
-            if name not in LIVE_BLOCKS:
-                if order.index(name) < live_at:
-                    self.mount(mount_block(
-                        name, rows_text[first:first + count]))
+            if name in LIVE_BLOCKS:
                 continue
-        children = []
+            if order.index(name) < live_at:
+                self.mount(mount_block(
+                    name, rows_text[first:first + count]))
         for name in LIVE_BLOCKS:
-            if name not in by_name:
-                continue
-            first, count = by_name[name]
-            rows_here = rows_text[first:first + count]
-            if name == "examples":
-                rows_here = rows_here[1:]  # header replaces the title row
-            kind = BLOCK_WIDGETS.get(name, Frame)
-            child = kind(rows_here, width, name=name)
-            child.styles.width = width
-            child.styles.height = len(rows_here)
-            child.styles.padding = 0
-            child.styles.margin = 0
-            children.append(child)
-        self.mount(Examples("examples", *children,
-                            collapsed=self._examples_collapsed,
-                            name="examples"))
+            if name in by_name:
+                mount_live(name)
         seen_live = False
         for name, first, count in named:
             if name in LIVE_BLOCKS:
@@ -901,18 +862,21 @@ class Editor(App):
     def on_key(self, event) -> None:
         # Every key, unhandled by Textual, straight to the one key surface —
         # except the four the grid binds for itself while it has focus, which
-        # are already on their way to `Swatches.action_slot`, and `e`, which
-        # toggles the examples collapsible (§14.1) while the picker is down.
-        # `e` is free in `apply_key`, so the toggle never steals a colour key;
-        # the picker owns the surface while it is up, so `e` behind it stays
-        # an editor key (a no-op) rather than collapsing the frame the user
-        # is reading.
+        # are already on their way to `Swatches.action_slot`, and the three
+        # live-block toggles below. Each of those is free in `apply_key`, so
+        # no toggle ever steals a colour key; the picker owns the surface
+        # while it is up, so behind it they stay editor keys (no-ops) rather
+        # than collapsing the frame the user is reading.
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
             return
-        if (event.key == "e" and self.state.overlay is None
+        if (event.key in COLLAPSE_KEYS and self.state.overlay is None
                 and collapsible_enabled()):
-            self._examples_collapsed = not self._examples_collapsed
+            block = COLLAPSE_KEYS[event.key]
+            if block in self._collapsed:
+                self._collapsed.discard(block)
+            else:
+                self._collapsed.add(block)
             self.redraw()
             return
         apply_key(translate(event.key), self.state)
@@ -922,21 +886,25 @@ class Editor(App):
             self.redraw()
 
     def on_collapsible_collapsed(self, event) -> None:
-        """The header toggled (click or Enter): stay collapsed on redraw."""
+        """A header toggled shut (click or Enter): stay shut on redraw."""
         # Pending toggles can land after the screen is gone (shutdown flush):
         # there is nothing to redraw into then. A toggle that changes nothing
         # (an `Expanded` posted by a fresh mount) must not redraw either, or
         # every mount schedules another mount.
-        if not self.is_running or self._examples_collapsed:
+        name = getattr(getattr(event, "collapsible", None), "name", None)
+        if not self.is_running or name not in LIVE_BLOCKS \
+                or name in self._collapsed:
             return
-        self._examples_collapsed = True
+        self._collapsed.add(name)
         self.redraw()
 
     def on_collapsible_expanded(self, event) -> None:
-        """The header toggled back: stay open on redraw."""
-        if not self.is_running or not self._examples_collapsed:
+        """A header toggled back open: stay open on redraw."""
+        name = getattr(getattr(event, "collapsible", None), "name", None)
+        if not self.is_running or name not in LIVE_BLOCKS \
+                or name not in self._collapsed:
             return
-        self._examples_collapsed = False
+        self._collapsed.discard(name)
         self.redraw()
 
     def action_slot(self, direction: str) -> None:      # pragma: no cover
@@ -959,11 +927,11 @@ class Editor(App):
         editor's carry the slot in, because both are "the number this row means"
         and neither is anything a click has to translate.
 
-        Screen coords survive nesting; `offset` does not: inside an `Examples`
+        Screen coords survive nesting; `offset` does not: inside a `Live`
         the offset is relative to the inner block, while the hit map is
-        frame-relative. The bare frame is identity; the collapsible is the
-        same, because its header replaces the examples title one for one
-        (expanded) or the regions were shifted for it (collapsed).
+        frame-relative. The bare frame is identity; each collapsible header
+        replaces its block's title one for one, so open or shut the rows
+        above the live area never move.
         """
         event.stop()
         # Screen coords survive nesting; `offset` does not. A synthetic
