@@ -248,8 +248,11 @@ class Readout(unittest.TestCase):
                  **{"palette-4": "#61afef"})
     # the narrowest row that can still carry each part, computed from the
     # strings rather than remembered: the subject and the readings' own
-    # chrome on one, the specimen on the other (§8.3)
-    SUBJECT = len("  selected  palette-4  #61afef   ")
+    # chrome on one, the specimen on the other (§8.3). The subject pins the
+    # slot name to `SELECTED_KEY_W` with single spaces and no trailing air,
+    # so it is exactly the indent plus the title plus the longest name plus
+    # the hex: 40 columns, on screen at `MIN_COLS`.
+    SUBJECT = 2 + len("selected") + 1 + editor.SELECTED_KEY_W + 1 + 7
     SPECIMEN = len("    AaBbCc 0123 ")
     EXACT = SPECIMEN + len(hsv_numbers(207 / 360, 0.594, 0.937)) + 3
 
@@ -296,15 +299,16 @@ class Readout(unittest.TestCase):
     def test_both_readings_are_on_screen_where_the_row_fits(self):
         # the bars are the glance, the exact numbers are the truth, and
         # neither of them gives up a row for the other (§8.3). The full
-        # rung needs the right column's width (decision 36), so it is a
-        # 120-column row that carries it; at 100 the compact rung stands in.
+        # rung needs the right column's width (decision 36); the slot-name
+        # field is pinned, so 100 carries the tight rung where it used to
+        # carry compact.
         wide = self.selected(120)
         self.assertEqual(len(self.bars(120)), sum(HSV_FULL))
         for reading in ("hue 207°", "sat  59%", "val  94%"):
             self.assertIn(reading, wide)          # beside its bar
         self.assertIn(self.exact(), self.specimen(120))
         self.assertNotIn(self.exact(), wide)
-        self.assertEqual(len(self.bars(100)), sum(HSV_COMPACT))
+        self.assertEqual(len(self.bars(100)), sum(HSV_TIGHT))
 
     def test_a_bar_carries_the_sweep_and_the_line_and_nothing_else(self):
         # the arrangement that lets the number and the hairline both be
@@ -344,12 +348,12 @@ class Readout(unittest.TestCase):
                       dict(self.SLOTS, **{"palette-4": "#00ff00"}),
                       dict(self.SLOTS, **{"palette-4": "#090000"}),
                       dict(self.SLOTS, **{"palette-4": "#61aaff"})):
-            body = plain_rows(frame(100, 30, sel=4, slots=slots))
+            body = plain_rows(frame(120, 30, sel=4, slots=slots))
             row = next(line for line in body
                        if line.strip().startswith("selected "))
-            self.assertLessEqual(visible(row), 100)
-            bars = self.bars(100, slots=slots)
-            self.assertEqual(len(bars), sum(HSV_COMPACT))
+            self.assertLessEqual(visible(row), 120)
+            bars = self.bars(120, slots=slots)
+            self.assertEqual(len(bars), sum(HSV_FULL))
             if at is None:
                 at = visible(row) - len(bars)
             self.assertEqual(visible(row) - len(bars), at)
@@ -364,15 +368,15 @@ class Readout(unittest.TestCase):
     def test_nudging_the_hue_moves_the_line_and_the_exact_reading(self):
         # the wheel is the whole wheel and does not move; the hairline on it
         # does, and so does the reading below (§14.1)
-        before = self.selected(100)
+        before = self.selected(120)
         st = editor.EditorState(dict(self.SLOTS), lambda values: None)
-        st.sel, st.grid = 4, editor.grid_geometry(100)
+        st.sel, st.grid = 4, editor.grid_geometry(120)
         for key in ("f", "f", "q"):
             editor.apply_key(key, st)
-        after = self.selected(100, slots=st.slots)
+        after = self.selected(120, slots=st.slots)
         self.assertNotEqual(before, after)
         self.assertNotIn("#61afef", after)              # the hex moved
-        self.assertNotEqual(self.bars(100), self.bars(100, slots=st.slots))
+        self.assertNotEqual(self.bars(120), self.bars(120, slots=st.slots))
         self.assertNotEqual(hsv_numbers(*rgb_to_hsv(hex_to_rgb("#61afef"))),
                             hsv_numbers(*rgb_to_hsv(hex_to_rgb(
                                 st.slots["palette-4"]))))
@@ -388,8 +392,8 @@ class Readout(unittest.TestCase):
     def test_the_readout_never_costs_a_row(self):
         # §15 — the readout is a string on a row the frame already drew, so
         # two sizes a rung apart keep the same frame and the same widgets
-        wide, narrow = frame(100, 30), frame(90, 30)
-        self.assertNotEqual(len(self.bars(100)), len(self.bars(90)))
+        wide, narrow = frame(111, 30), frame(100, 30)
+        self.assertNotEqual(len(self.bars(111)), len(self.bars(100)))
         self.assertEqual(len(lines(wide)), len(lines(narrow)))
         self.assertEqual(code_lines(lines(wide)), code_lines(lines(narrow)))
         self.assertEqual(example_rows(lines(wide)),
@@ -435,7 +439,9 @@ class TopBlock(unittest.TestCase):
     def test_the_right_column_keeps_the_ladder(self):
         # full where the right column has the columns, compact a rung
         # down, nothing where even the tight rung does not fit — the same
-        # ladder as §8.3, measured against the column, not the frame
+        # ladder as §8.3, measured against the column, not the frame. The
+        # slot-name field is pinned to the longest slot, so the rungs want
+        # 119 / 111 / 103 columns: 100 is bare where it used to be compact.
         def bars(cols):
             painted = lines(frame(cols, 30, sel=4, slots=self.SLOTS))
             row = next(line for line in painted
@@ -445,7 +451,8 @@ class TopBlock(unittest.TestCase):
                     if (tuple(int(v) for v in cell[:3]) != Readout.FILL
                         or cell[6] != " ")]
         self.assertEqual(len(bars(120)), sum(HSV_FULL))
-        self.assertEqual(len(bars(100)), sum(HSV_COMPACT))
+        self.assertEqual(len(bars(111)), sum(HSV_COMPACT))
+        self.assertEqual(len(bars(100)), sum(HSV_TIGHT))
         self.assertEqual(bars(80), [])
 
     def test_below_the_floor_the_header_stacks_again(self):
@@ -499,6 +506,69 @@ class TopBlock(unittest.TestCase):
         selected = next(line for line in auto
                         if line.strip().startswith("selected "))
         self.assertIn("palette-3", selected)
+
+
+class TopSidePanels(unittest.TestCase):
+    """The top as two unbordered panels side by side (§8.1, decision 37).
+
+    The compositor's top, not the bare frame's: the header logo left, the
+    theme subject plus the selected readout right, each asked at its own
+    panel width through the same painters the frame uses. The bare rows I1
+    pins never move — this is product chrome beside them, padded to the
+    height the frame laid out so everything below rides where it did.
+    """
+
+    SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea")
+
+    def test_the_ladder_is_banner_mini_wordmark(self):
+        wide = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x", 0,
+                                      120)
+        self.assertEqual(wide[:2], (editor.BANNER_LEFT_W,
+                                    120 - editor.BANNER_LEFT_W))
+        self.assertEqual(len(wide[2]), 6)
+        mid = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x", 0,
+                                     80)
+        self.assertEqual(mid[:2], (editor.MINI_LEFT_W,
+                                   80 - editor.MINI_LEFT_W))
+        self.assertEqual(len(mid[2]), 3)
+        narrow = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x",
+                                        0, 60)
+        self.assertEqual(narrow[:2], (editor.TOP_LEFT_W,
+                                      60 - editor.TOP_LEFT_W))
+        self.assertEqual(len(narrow[2]), 1)
+        self.assertIsNone(editor.top_side_panels(self.SLOTS, "ghostty",
+                                                 "/tmp/x", 0, 40))
+
+    def test_the_right_panel_is_the_bare_readout(self):
+        _, right_w, _, right = editor.top_side_panels(
+            self.SLOTS, "ghostty", "/tmp/x", 4, 80)
+        self.assertIn("ghostty", right[0])
+        self.assertIn("selected", right[1])
+        self.assertIn("palette-4", right[1])
+        self.assertIn("AaBbCc", right[2])
+        # measured against the panel, not the frame: joining the two panels
+        # is the full width, no more.
+        left_w = 80 - right_w
+        self.assertGreaterEqual(right_w, editor.TOP_RIGHT_MIN)
+        self.assertEqual(left_w + right_w, 80)
+
+    def test_the_pin_opts_out(self):
+        with mock.patch.dict(os.environ, {"HUEBOX_TOP": "0"}):
+            self.assertIsNone(editor.top_side_panels(
+                self.SLOTS, "ghostty", "/tmp/x", 0, 120))
+
+    def test_the_readout_does_not_move_with_the_selection(self):
+        # `SELECTED_KEY_W` pins the slot-name field to the longest slot, so
+        # the hex, the bars and the specimen start in the same column whether
+        # the selection is `palette-0` or `selection-foreground`.
+        from huebox.render import visible as _visible
+        rows_short = editor.top_right_panel_rows(
+            "ghostty", "/tmp/x", self.SLOTS, 0, 68)
+        rows_long = editor.top_right_panel_rows(
+            "ghostty", "/tmp/x", self.SLOTS,
+            editor.SLOTS.index("selection-foreground"), 68)
+        for short, long in zip(rows_short, rows_long):
+            self.assertEqual(_visible(short), _visible(long))
 
 
 class TooSmall(unittest.TestCase):

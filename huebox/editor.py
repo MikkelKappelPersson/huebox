@@ -94,6 +94,35 @@ NAMED_COL_W = 32
 # stacked header instead.
 TOP_LEFT_W = 12
 TOP_MIN_COLS = 60
+# the top as two unbordered panels side by side (§8.1, decision 37): the
+# header logo in the left panel, the theme subject plus the selected readout
+# in the right one. The left widths are the logo plus a two-column gap of air
+# (the banner and the mini keep their own seats, the wordmark keeps
+# `TOP_LEFT_W`); the right panel needs `TOP_RIGHT_MIN` to hold even a bare
+# readout, the same bare readout `TOP_MIN_COLS` guards.
+TOP_GAP = 2
+TOP_RIGHT_MIN = TOP_MIN_COLS - TOP_LEFT_W
+BANNER_LEFT_W = 52
+MINI_LEFT_W = 25
+# the selected readout's slot-name field (§8.3): pinned to the longest slot
+# (`selection-foreground`), so switching the selection never moves the hex,
+# the bars or the specimen beside it — the eye stays on the colours, not on
+# the layout jumping a column every time the name grows a character.
+SELECTED_KEY_W = max(len(slot) for slot in SLOTS)
+
+
+def selected_core(slots, key, value, indent=""):
+    """The selected readout's subject: title, name field, hex (§8.3).
+
+    Single spaces between the three, no trailing air — the gap before the
+    bars belongs to the bars, not the subject, so a bare row (no bars) is
+    exactly the indent plus the title plus the pinned name field plus the
+    hex: 40 columns stacked, which is what keeps the hex on screen at
+    `MIN_COLS`. One implementation of the subject, asked from both layouts.
+    """
+    return (indent + title("selected", slots) + " "
+            + chrome(f"{key:<{SELECTED_KEY_W}}", "foreground", slots)
+            + " " + chrome(value, CHROME_MUTED, slots))
 
 
 class Grid(NamedTuple):
@@ -562,7 +591,18 @@ def top_right_rows(label, path, slots, sel, cols):
     each row to its left-column cell; `cols` is the full frame width, so
     the right column is `cols - TOP_LEFT_W` wide.
     """
-    right_w = cols - TOP_LEFT_W
+    return top_right_panel_rows(label, path, slots, sel,
+                                 cols - TOP_LEFT_W)
+
+
+def top_right_panel_rows(label, path, slots, sel, right_w):
+    """The right panel's three rows at `right_w` wide (§8.1, decision 37).
+
+    The same three rows `top_right_rows` always painted, measured against
+    the panel's own width instead of the frame's minus `TOP_LEFT_W` — one
+    implementation of what the readout says, asked from two layouts, the
+    same hoist as `swatch_cell` for the side pairs.
+    """
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     right0 = chrome(label, "foreground", slots, bold=True)
@@ -570,11 +610,9 @@ def top_right_rows(label, path, slots, sel, cols):
         tail = "  " + chrome(path, CHROME_MUTED, slots)
         if visible(right0) + visible(tail) <= right_w:
             right0 = right0 + tail
-    prefix = (title("selected", slots) + "  "
-              + chrome(key, "foreground", slots) + "  "
-              + chrome(value, CHROME_MUTED, slots) + "   ")
-    right1 = prefix + hsv_readout(slots, value,
-                                  right_w - visible(prefix))
+    core = selected_core(slots, key, value)
+    bars = hsv_readout(slots, value, right_w - visible(core) - 3)
+    right1 = core + ("   " + bars if bars else "")
     specimen = f"  {fg(value)}AaBbCc 0123 {RESET}"
     exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
     suffix = "   " + chrome(exact, CHROME_MUTED, slots)
@@ -582,6 +620,58 @@ def top_right_rows(label, path, slots, sel, cols):
               if visible(specimen) + visible(suffix) <= right_w
               else specimen)
     return right0, right1, right2
+
+
+def top_left_rows(slots, left_w):
+    """The left panel's logo at `left_w` wide (§8.1, decision 37).
+
+    The same ladder the banner insertion walks — raster where it fits,
+    else mini, else the one-line wordmark — asked at the panel's own
+    width instead of the frame's. Pure like every widget here: every
+    colour is read out of `slots` on the call.
+    """
+    art = banner_lines(slots, left_w)
+    if art:
+        return art
+    mark = mini_banner_lines(slots, left_w)
+    if mark:
+        return mark
+    return ["  " + wordmark(slots)]
+
+
+def top_side_panels(slots, label, path, sel, width):
+    """The top as two unbordered panels side by side, or `None` (§8.1).
+
+    `(left_w, right_w, left, right)`: the header logo in the left panel,
+    the theme subject plus the selected readout in the right one, each
+    row unbacked (the caller backs to its own panel width, §8.2). The
+    ladder is banner, mini, wordmark — the same logos the frame stands up
+    — tried widest first where the right panel still holds a bare readout
+    (`TOP_RIGHT_MIN`). `None` where even the wordmark leaves the right
+    too narrow, and under `HUEBOX_TOP=0`, which pins the stacked header
+    the bare frame keeps for the tests that assert it.
+    """
+    if os.environ.get("HUEBOX_TOP", "1") == "0":
+        return None
+    for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
+        right_w = width - left_w
+        if right_w < TOP_RIGHT_MIN:
+            continue
+        left = top_left_rows(slots, left_w)
+        # the logo must actually fit the panel it was asked for: a banner
+        # in a wordmark-wide panel is a clipped banner, which reads as a
+        # rendering bug rather than a logo (the same rule `banner_lines`
+        # keeps for the frame).
+        if visible(left[0]) > left_w and len(left) > 1:
+            continue
+        if left_w == TOP_LEFT_W and len(left) != 1:
+            continue
+        if left_w != TOP_LEFT_W and len(left) == 1:
+            continue
+        right = list(top_right_panel_rows(label, path, slots, sel,
+                                          right_w))
+        return left_w, right_w, left, right
+    return None
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
@@ -712,9 +802,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # the row has room for them and the numbers they replace where it
         # does not, so `room` is whatever the subject leaves — the row
         # itself never grows and §15's budget does not move
-        subject = ("  " + title("selected", slots)
-                   + "  " + chrome(key, "foreground", slots)
-                   + "  " + chrome(value, CHROME_MUTED, slots) + "   ")
+        subject = selected_core(slots, key, value, indent="  ")
         # §8.3 — the reading of the slot's own colour comes in two parts:
         # the bars, which are the glance, on this row, and the exact
         # numbers — `hue 207.0  sat 59.4%  val 93.7%`, which are the truth
@@ -723,8 +811,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # the other.
         exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
         specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
-        body.append(subject + hsv_readout(slots, value,
-                                          cols - visible(subject)))
+        bars = hsv_readout(slots, value, cols - visible(subject) - 3)
+        body.append(subject + ("   " + bars if bars else ""))
         body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
                                 if len(exact) + 3 <= cols - visible(specimen)
                                 else ""))

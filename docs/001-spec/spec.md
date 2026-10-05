@@ -489,6 +489,25 @@ room for a banner it stands above the block and the wordmark stands back to
 air, so the banner is still the only huebox on screen; the right column
 stays where it was, one banner lower.
 
+**Under the compositor the top is two panels, unbordered, side by side.**
+`[header] [theme/path, selected]` (decision 37): the left panel holds only
+the logo — the raster banner where it fits, else the mini banner, else the
+one-line wordmark, the same ladder the frame stands up — and the right
+panel the theme subject plus the selected readout, the same three rows the
+bare block paints, measured against the panel's own width. No border, no
+title: two `Frame`s in one `Horizontal` on the buffer's own background, so
+the top reads as two columns of chrome rather than as two boxes. The panels
+are padded to the height the frame laid out, so everything below rides
+where it did and the click map never moves — and a click anywhere in the
+top selects nothing, because the top names no slot (§4.3.2). The price is
+stated plainly, the same price decision 36 already paid: the bars are
+measured against the right panel now, so a banner beside a readout shows
+fewer bars than the same readout stacked under it, and the exact numbers
+beneath carry those frames instead. Below `TOP_MIN_COLS` the right panel
+cannot hold even a bare readout, so the compositor keeps the stacked chrome
+it always did; `HUEBOX_TOP=0` pins that stack at any width, the same opt-out
+the bare frame keeps for the tests that assert it.
+
 **Hints are `(key, what)` pairs, not strings.** The hint line paints a key and
 its label separately, so `pack` folds between *whole hints* and never between a
 key and the label it belongs to — which is why `pack` measures display columns
@@ -576,6 +595,22 @@ column every time a number crosses a power of ten, which is a thing the eye
 notices while it is trying to read the colours. With one, `HSV_CHROME` is a
 constant (31 columns) instead of a range, the ladder's thresholds stop moving
 with the slot's value, and the frame is still where it was a frame ago.
+
+**The slot name sits in a field of `SELECTED_KEY_W` columns** — the longest
+slots (`selection-background`, `selection-foreground`), space-padded on the
+right, with single spaces between the title, the name and the hex and no
+trailing air (the gap before the bars belongs to the bars). Without it the
+hex, the bars and the specimen all jump a column every time the selection
+moves between a short name (`palette-0`) and a long one, which is the same
+eye movement the number fields already removed, once per arrow key instead
+of once per ten hue steps. With it the subject is a constant 37 columns
+(39 with the stacked indent) whatever the slot holds, so the bars start in
+the same column on every selection and the ladder's thresholds stop moving
+with the selection too. The price is stated plainly: the field spends the
+columns even where the name is short, so the rungs want 116 / 108 / 100
+columns with the field pinned — a 100-column frame shows the tight rung
+where it used to show compact, and the exact numbers below carry the rest,
+the same trade decisions 36 and 37 already made.
 
 **The exact reading has its own line, under the bars.** A number is rounded to
 a degree and a percent, which is the wrong precision for a frame you are
@@ -757,6 +792,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 34 | The header is a three-rung ladder — raster banner, mini banner, wordmark — drawn only out of leftover, forced only to the raster one | The middle rung fills the gap between a six-row banner that needs a wide tall terminal and a one-line wordmark whose thin strokes hide the colours. Forcing still means the raster banner; the middle rung is auto-only, because a flag per rung is chrome around decoration |
 | 35 | The middle rung is a pasted three-row block font (23 columns) instead of four-row line art | The author's own art reads better and costs one row less (three spare rows instead of four), so the rung reaches frames the line art never did. The price is stated plainly: the narrow preview is no longer pure ascii wherever the mini stands in — still no wide glyphs, still holding its width, and ascii again below it |
 | 36 | The header and the selected readout share one side-by-side top block: `[huebox] [theme/path, selected]` | The scattered header and readout cost five rows for what is one glance — which theme, which slot, where its colour sits. Side by side they cost four (three content rows plus air) and the palette grid moves up a row. The price is stated plainly: the bars are measured against the right column now, so an 80-column terminal shows no bars where it used to show the tight rung, and 100 columns show compact where they showed full — the exact numbers below carry those frames instead. Below 60 columns the column cannot hold a bare readout, so the frame stacks again rather than clipping one. A banner still stands above the block and the wordmark stands back to air, so the banner stays the only huebox on screen |
+| 37 | The compositor's top is two unbordered panels side by side: `[header] [theme/path, selected]` | The bare block already reads side by side in text; under the compositor sharing one full-width `Frame` for both halves makes the header and the readout one widget, and every future top affordance has to go through a function whose job is to be both. Two unbordered panels — the logo left, the readout right, no border, no title, only the theme's own background — keep one implementation of what each half says (`top_left_rows` / `top_right_panel_rows`, the same hoist as the side pairs) and put a themed border nowhere near them. The panels are padded to the height the frame laid out, so everything below rides where it did and the click map never moves; a click in the top selects nothing, because the top names no slot. The price is the same price decision 36 paid, one rung further: the bars are measured against the right panel now, so a banner beside a readout shows fewer bars than the same readout stacked under it |
 
 ---
 

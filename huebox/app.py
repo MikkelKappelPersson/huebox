@@ -58,7 +58,7 @@ from .editor import (MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, EditorState,
                      apply_key, backdrop, draw_editor, grid_geometry,
                      head_label, report_session, session_path, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
-                     too_small_frame)
+                     too_small_frame, top_side_panels)
 from .render import MIN_COLS, MIN_ROWS, visible
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
@@ -846,6 +846,47 @@ class Editor(App):
                % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
 
+    def _top_side_row(self, width: int, state, top_h: int):
+        """The top as two unbordered panels side by side, or `None` (§8.1).
+
+        Left is the header logo, right the theme subject plus the selected
+        readout — the same rows `draw_editor` paints, asked at the panels'
+        own widths through `top_side_panels` rather than re-rendered, so a
+        click and a swatch cannot disagree and I1 keeps pinning the bare
+        rows. Both panels are padded in the buffer's own background to
+        `top_h` (the height the frame laid out), so the chrome below rides
+        exactly where it did and the click geometry never moves. Unbordered:
+        two `Frame`s in a `Horizontal` with no border, no title, only the
+        theme's own background — chrome, never a control (§4.3.2).
+        """
+        top = top_side_panels(state.slots, self.head_for(state) or self.fmt,
+                              session_path(state), state.sel, width)
+        if top is None:
+            return None
+        left_w, right_w, left_raw, right_raw = top
+        slots = state.slots
+        left = [backdrop(line, slots, left_w) for line in left_raw]
+        right = [backdrop(line, slots, right_w) for line in right_raw]
+        left += [backdrop("", slots, left_w)] * max(0, top_h - len(left))
+        right += [backdrop("", slots, right_w)] * max(0, top_h - len(right))
+        left, right = left[:top_h], right[:top_h]
+        left_frame = Frame(left, left_w, name="header")
+        left_frame.styles.width = left_w
+        left_frame.styles.height = top_h
+        left_frame.styles.padding = 0
+        left_frame.styles.margin = 0
+        right_frame = Frame(right, right_w, name="selected")
+        right_frame.styles.width = right_w
+        right_frame.styles.height = top_h
+        right_frame.styles.padding = 0
+        right_frame.styles.margin = 0
+        row = Horizontal(left_frame, right_frame)
+        row.styles.width = width
+        row.styles.height = top_h
+        row.styles.padding = 0
+        row.styles.margin = 0
+        return row
+
     def _mount_panels(self, width: int, rows_text: list, named: list) -> None:
         """Stack the frame's blocks into two bordered panels.
 
@@ -863,6 +904,8 @@ class Editor(App):
         for child in list(self.query(Frame)):
             child.remove()
         for child in list(self.query(Live)):
+            child.remove()
+        for child in list(self.query(Horizontal)):
             child.remove()
         inner_w = width - 2
         by_name = {name: (first, count) for name, first, count in named}
@@ -956,7 +999,18 @@ class Editor(App):
             "examples_h": examples_h,
             "has_examples": bool(examples),
         }
-        for name, first, count in header + extra:
+        top_row = self._top_side_row(width, self.state, header_h)
+        if top_row is not None:
+            # §8.1 (decision 37) — the header and the theme plus selected
+            # readout stand side by side in two unbordered panels, not one
+            # full-width stack: the logo left, the readout right, padded to
+            # the height the frame laid out so everything below rides where
+            # it did and the click map never moves.
+            self.mount(top_row)
+        else:
+            for name, first, count in header:
+                self.mount(mount_block(name, first, count, width))
+        for name, first, count in extra:
             # `extra` unknown rows sit with the header chrome: full-width,
             # never inside a panel whose title would misname them.
             self.mount(mount_block(name, first, count, width))
@@ -978,19 +1032,19 @@ class Editor(App):
             self.mount(panel)
         for name, first, count in hints:
             self.mount(mount_block(name, first, count, width))
-        for child in list(self.query(Horizontal)):
-            child.remove()
 
     def _try_side(self, width: int, height: int, state) -> bool:
         """The side-by-side layout, or `False` to keep the stacked one.
 
-        `selected` full-width above; the controls (palette pairs over
-        interface pairs) and the live blocks in two panels next to each
-        other below. The chrome rows come from a full-width `draw_editor`
-        run — captured, like everywhere — while the panels' contents are
-        `side_left_rows` / `side_live_rows` at their own widths. Anything
-        that does not fit (trimmed chrome, a short middle) returns `False`
-        before mounting anything, and the stacked layout runs instead.
+        The top stands side by side in two unbordered panels (header left,
+        theme plus `selected` right, §8.1 decision 37); the controls (palette
+        pairs over interface pairs) and the live blocks in two bordered
+        panels next to each other below. The chrome rows come from a
+        full-width `draw_editor` run — captured, like everywhere — while the
+        panels' contents are `side_left_rows` / `side_live_rows` at their own
+        widths. Anything that does not fit (trimmed chrome, a short middle)
+        returns `False` before mounting anything, and the stacked layout runs
+        instead.
         """
         full_hits: list = []
         full_regions: list = []
@@ -1040,9 +1094,14 @@ class Editor(App):
         for child in list(self.query(Horizontal)):
             child.remove()
         slots = state.slots
-        for name in ("header", "selected"):
-            first, count = by_name[name]
-            self.mount(block(name, full[first:first + count], width))
+        top_h = header_h + sel_h
+        top_row = self._top_side_row(width, state, top_h)
+        if top_row is not None:
+            self.mount(top_row)
+        else:
+            for name in ("header", "selected"):
+                first, count = by_name[name]
+                self.mount(block(name, full[first:first + count], width))
         left_children = [block("palette", left[0:9], SIDE_LEFT_W),
                          block("interface", left[9:SIDE_LEFT_ROWS],
                                SIDE_LEFT_W)]

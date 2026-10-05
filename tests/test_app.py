@@ -460,14 +460,24 @@ class TheFrameIsWidgets(unittest.TestCase):
     def _frames(self, mounted):
         """Every `Frame` in mount order, descending into panels.
 
-        Top-level mounts are chrome `Frame`s and `Panel`s; the blocks live
-        inside the panels as pending children (mount is mocked, so nothing
-        composes). Flatten both so block order is frame order.
+        Top-level mounts are chrome `Frame`s, the top `Horizontal` (two
+        unbordered panels side by side, §8.1 decision 37) and `Panel`s; the
+        blocks live inside the panels as pending children (mount is mocked,
+        so nothing composes). Flatten panels and the top row so block order
+        is frame order.
         """
+        from textual.containers import Horizontal
         out = []
         for widget in mounted:
             if isinstance(widget, huebox_app.Panel):
                 out.extend(list(getattr(widget, "_pending_children", [])))
+            elif isinstance(widget, Horizontal):
+                # the top row: two unbordered `Frame`s side by side. A side
+                # layout's pair never reaches here (panels off in `_mounted`)
+                # — only the top does, and its children are the header and
+                # the selected readout.
+                out.extend(list(getattr(widget, "_pending_children", [])
+                                or getattr(widget, "_nodes", [])))
             else:
                 out.append(widget)
         return out
@@ -496,30 +506,51 @@ class TheFrameIsWidgets(unittest.TestCase):
         only for scrollbars, and I2's whole job is to reject a colour that was
         not the theme's. The blocks tile the frame exactly (tested in
         `test_editor.Regions`), so their heights must too — plus one border
-        row top and bottom per panel."""
+        row top and bottom per panel. The top stands side by side in two
+        unbordered panels (§8.1 decision 37), so its two heights overlap in y
+        and count once, not twice."""
         editor, mounted = self._mounted()
         frames = self._frames(mounted)
         panels = [w for w in mounted
                   if isinstance(w, huebox_app.Panel)]
         total = sum(len(block.rows_text) for block in frames)
-        self.assertEqual(total, len(editor.rows_text))
-        self.assertEqual(total + 2 * len(panels), 24,
+        top_h = editor._panel_geom["header_h"]
+        # header + selected share the top rows side by side: two heights for
+        # one row budget.
+        total_single = total - top_h
+        self.assertEqual(total_single, len(editor.rows_text))
+        self.assertEqual(total_single + 2 * len(panels), 24,
                          "panels plus blocks do not fill the window exactly")
-        self.assertLessEqual(total + 2 * len(panels), 24,
+        self.assertLessEqual(total_single + 2 * len(panels), 24,
                              "the stack is taller than the screen")
 
     def test_every_block_paints_only_its_own_rows(self):
         editor, mounted = self._mounted()
         frames = self._frames(mounted)
-        painted = [row for block in frames for row in block.rows_text]
-        # Chrome rows are re-backed to the full width on display; compare
-        # past the two pad columns the inner layout does not know about.
-        from huebox.render import visible as _visible
+        # §8.1 (decision 37) — the top is two unbordered panels side by side
+        # (header left, theme plus selected right), not one full-width stack
+        # like the bare rows I1 pins. It cannot reassemble the frame's own
+        # top rows, so it is checked on its own and only what hangs below it
+        # must reassemble.
+        top_h = editor._panel_geom["header_h"]
+        top = frames[:2]
+        self.assertEqual([block.name for block in top],
+                         ["header", "selected"])
+        self.assertEqual([len(block.rows_text) for block in top],
+                         [top_h, top_h])
+        self.assertEqual(top[0].styles.width.value
+                         + top[1].styles.width.value, 80)
         from rich.text import Text as _Text
+        right_plain = [_Text.from_ansi(row).plain for row in top[1].rows_text]
+        self.assertTrue(any("selected" in row for row in right_plain),
+                        "the right top panel lost the selected readout")
+        rest = frames[2:]
+        painted = [row for block in rest for row in block.rows_text]
+        wanted = editor.rows_text[top_h:]
         plain = [_Text.from_ansi(row).plain for row in painted]
-        wanted = [_Text.from_ansi(row).plain for row in editor.rows_text]
-        self.assertEqual(len(plain), len(wanted))
-        for got, want in zip(plain, wanted):
+        wanted_plain = [_Text.from_ansi(row).plain for row in wanted]
+        self.assertEqual(len(plain), len(wanted_plain))
+        for got, want in zip(plain, wanted_plain):
             self.assertTrue(got.startswith(want) or want.startswith(got),
                             "the blocks do not reassemble the frame in order")
 
@@ -1208,14 +1239,15 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
 
 @needs_app
 class SideBySide(unittest.IsolatedAsyncioTestCase):
-    """The wide layout: `selected` above, controls | live side by side.
+    """The wide layout: top pair above, controls | live side by side.
 
     At `SIDE_MIN_W` (100) and up the frame is two panels next to each other
     instead of stacked: the left holds palette pairs over interface pairs
-    (two columns in total), the right the live blocks, and the `selected`
-    readout sits full-width above the pair as bare chrome. Below that width
-    the stacked panels run instead (`PrototypePanels`). Narrow `run_test`
-    sizes elsewhere in this file are that fallback, asserted on purpose.
+    (two columns in total), the right the live blocks, and the top stands
+    side by side above the pair in two unbordered panels (header left,
+    theme plus `selected` right, §8.1 decision 37). Below that width the
+    stacked panels run instead (`PrototypePanels`). Narrow `run_test` sizes
+    elsewhere in this file are that fallback, asserted on purpose.
     """
 
     async def _app(self):
@@ -1249,8 +1281,10 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app._side_on)
             self.assertFalse(app._panels_on)
             rows = list(app.query(Horizontal))
-            self.assertEqual(len(rows), 1)
-            panels = list(rows[0].query(huebox_app.Panel))
+            # the top pair plus the controls | live pair below it.
+            self.assertEqual(len(rows), 2)
+            top, pair = rows
+            panels = list(pair.query(huebox_app.Panel))
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
                              ["palette / interface", "examples"])
@@ -1261,19 +1295,28 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              + right.styles.width.value, 120)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
-    async def test_selected_sits_full_width_above_the_pair(self):
+    async def test_top_sits_side_by_side_above_the_pair(self):
         from textual.containers import Horizontal
 
         app = await self._app()
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             mounted = list(app.query(huebox_app.Frame))
+            header = next(b for b in mounted if b.name == "header")
             selected = next(b for b in mounted if b.name == "selected")
-            # Full window wide, and mounted before the pair's row.
-            self.assertEqual(selected.styles.width.value, 120)
-            row = list(app.query(Horizontal))[0]
+            # Two unbordered panels side by side, not one full-width stack:
+            # the widths meet at the window edge and the heights match the
+            # chrome the frame laid out, so everything below rides where it
+            # did (§8.1 decision 37).
+            self.assertEqual(header.styles.width.value
+                             + selected.styles.width.value, 120)
+            self.assertEqual(header.styles.height.value,
+                             selected.styles.height.value)
+            rows = list(app.query(Horizontal))
+            self.assertEqual(len(rows), 2)
+            top, pair = rows
             kids = list(app.screen.children)
-            self.assertLess(kids.index(selected), kids.index(row))
+            self.assertLess(kids.index(top), kids.index(pair))
 
     async def test_a_click_in_the_left_panel_selects_the_pair(self):
         from textual.events import Click
@@ -1319,6 +1362,46 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                                    delta_x=0, delta_y=0, button=1,
                                    shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
+
+    async def test_a_click_in_the_top_selects_nothing(self):
+        """§4.3.2 — the top is chrome, not a control.
+
+        Two unbordered panels side by side (§8.1 decision 37), and neither
+        answers: the header names no slot and the readout is the readout of
+        the grids below, so a click anywhere in the top must leave the
+        selection where it was.
+        """
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            for x, y in ((5, 0), (100, 1), (60, 2)):
+                app.on_click(Click(widget=None, x=x, y=y,
+                                   delta_x=0, delta_y=0, button=1,
+                                   shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_the_top_has_no_border(self):
+        """Unbordered means unbordered: no `Panel`, no title, no border.
+
+        The top is two `Frame`s in one `Horizontal` on the theme's own
+        background — chrome, never a bordered box. A border would spend two
+        rows the widgets below need and bring border tokens the closure must
+        then account for.
+        """
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            rows = list(app.query(Horizontal))
+            self.assertEqual(len(rows), 2)
+            top, _ = rows
+            self.assertEqual(list(top.query(huebox_app.Panel)), [])
+            left, right = list(top.query(huebox_app.Frame))
+            self.assertEqual((left.name, right.name), ("header", "selected"))
 
     async def test_arrows_walk_pairs_not_rows(self):
         app = await self._app()
