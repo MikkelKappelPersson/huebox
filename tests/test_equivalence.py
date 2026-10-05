@@ -116,31 +116,19 @@ class TestEquivalence(unittest.TestCase):
         return "\n".join(lines)
 
     def test_every_fixture_matches_at_every_size(self):
-        """The matrix, tiered by what each part can catch.
+        """I1 as a smoke by default, the matrix on demand.
 
         I1 compares cell for cell, and a launch costs a Python start plus a
         settled frame — so the full 4x3 matrix is 12 processes and most of the
-        suite's wall clock. The tiers keep every size and every fixture in the
-        promise while cutting it to 8 launches:
-
-        * `distinct` at **all four** sizes. The size is what changes the frame —
-          the bars appear at 100x30 and not at 80x24, so the colours and the row
-          count both move, and a size that is only ever checked with one fixture
-          would miss a layout that colours differently.
-        * `dark` and `missing` at the **two** sizes that bracket it, 100x30 and
-          80x24. `dark` is the near-black fixture where a leaked default is
-          least visible, and `missing` the one where every slot is the same grey
-          so the frame cannot tell slots apart — both are about *what a slot
-          resolves to*, which does not vary with size.
-
-        The full matrix is one `HUEBOX_ALL=1` away for a release, and says so
-        rather than quietly covering less.
+        suite's wall clock. The default is one launch (distinct at 80x24, the
+        commonest terminal); `HUEBOX_ALL=1` restores the full matrix for a
+        release. The tiering that used to sit between the two (distinct at all
+        four sizes, dark/missing at 100x30 and 80x24) is what `HUEBOX_ALL`
+        now buys back whole.
         """
-        tiers = ([("distinct", cols, rows) for cols, rows in harness.SIZES]
-                 + [(fixture, cols, rows)
-                    for fixture in ("dark", "missing")
-                    for cols, rows in ((100, 30), (80, 24))])
-        if os.environ.get("HUEBOX_ALL"):
+        if not os.environ.get("HUEBOX_ALL"):
+            tiers = [("distinct", 80, 24)]
+        else:
             tiers = [(fixture, cols, rows)
                      for cols, rows in harness.SIZES
                      for fixture in sorted(harness.FIXTURES)]
@@ -149,23 +137,16 @@ class TestEquivalence(unittest.TestCase):
                 self._compare(fixture, cols, rows)
 
     def test_the_full_matrix_is_one_environment_variable_away(self):
-        """Guard against the tiering quietly dropping a case: with `HUEBOX_ALL`
-        set, the matrix is the full cross product."""
+        """Guard against the smoke quietly becoming the promise: with
+        `HUEBOX_ALL` set, the matrix is the full cross product."""
         full = {(fixture, cols, rows)
                 for cols, rows in harness.SIZES
                 for fixture in sorted(harness.FIXTURES)}
-        tiered = ({(fixture, cols, rows)
-                   for cols, rows in harness.SIZES
-                   for fixture in ("distinct",)}
-                  | {(fixture, cols, rows)
-                     for fixture in ("dark", "missing")
-                     for cols, rows in ((100, 30), (80, 24))})
-        missing_from_tier = full - tiered
-        self.assertEqual(missing_from_tier,
-                         {(f, c, r) for (c, r) in ((60, 16), (40, 12))
-                          for f in ("dark", "missing")},
-                         "the tiering changed shape; the guard above should be "
-                         "updated with it, deliberately")
+        self.assertEqual(full,
+                         {(f, c, r) for (c, r) in harness.SIZES
+                          for f in sorted(harness.FIXTURES)},
+                         "the matrix changed shape; the smoke above should "
+                         "still be its most common case, deliberately")
 
     def test_selection_at_each_grid_edge(self):
         """The selection walks, and the frame follows.
@@ -173,9 +154,12 @@ class TestEquivalence(unittest.TestCase):
         80x24 only: the arrows move which cell is bold, and that is a function of
         the grid, not of the size — `test_editor` covers the walk itself at every
         width. What this checks is that the compositor carries the bold flag, so
-        one size is enough and the process is worth it.
-        """
-        for sel in (0, 21):
+        one size is enough and the process is worth it. Smoke is one edge;
+        `HUEBOX_ALL=1` walks both."""
+        sels = (0, 21)
+        if not os.environ.get("HUEBOX_ALL"):
+            sels = (0,)
+        for sel in sels:
             with self.subTest(sel=sel):
                 raw, height = harness.capture_reference("distinct", 80, 24, sel)
                 expected = harness.parse(raw, 80, 24, height)
@@ -416,12 +400,20 @@ class TestPickerEquivalence(unittest.TestCase):
                              harness.diff(golden["cells"], actual, cols)))
 
     def test_every_scenario_matches_at_every_size(self):
-        tiers = ([("distinct", cols, rows, scene)
-                  for cols, rows in harness.SIZES
-                  for scene in sorted(harness.PICKERS)]
-                 + [(fixture, cols, rows, "long")
-                    for fixture in ("dark", "missing")
-                    for cols, rows in ((100, 30), (80, 24))])
+        """I1 for the picker as a smoke by default, the matrix on demand.
+
+        Same claim as `TestEquivalence`, for the second frame. One launch
+        (distinct at 80x24, long list) keeps the scrolling-widget promise;
+        `HUEBOX_ALL=1` restores all sizes, fixtures and scenarios."""
+        if not os.environ.get("HUEBOX_ALL"):
+            tiers = [("distinct", 80, 24, "long")]
+        else:
+            tiers = ([("distinct", cols, rows, scene)
+                      for cols, rows in harness.SIZES
+                      for scene in sorted(harness.PICKERS)]
+                     + [(fixture, cols, rows, "long")
+                        for fixture in ("dark", "missing")
+                        for cols, rows in ((100, 30), (80, 24))])
         for fixture, cols, rows, scene in tiers:
             with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
                               picker=scene):

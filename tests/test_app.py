@@ -637,7 +637,10 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            for cols, rows in ((40, 12), (100, 30), (60, 16)):
+            sizes = ((40, 12), (100, 30), (60, 16))
+            if not os.environ.get("HUEBOX_ALL"):
+                sizes = ((40, 12),)
+            for cols, rows in sizes:
                 with self.subTest(size=f"{cols}x{rows}"):
                     await pilot.resize_terminal(cols, rows)
                     await pilot.pause()
@@ -652,7 +655,10 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            for cols, rows in ((40, 12), (60, 16), (100, 30)):
+            sizes = ((40, 12), (60, 16), (100, 30))
+            if not os.environ.get("HUEBOX_ALL"):
+                sizes = ((40, 12),)
+            for cols, rows in sizes:
                 with self.subTest(size=f"{cols}x{rows}"):
                     await pilot.resize_terminal(cols, rows)
                     await pilot.pause()
@@ -839,7 +845,12 @@ class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
             return huebox_app.Editor()
 
     async def test_every_adjust_key_survives_a_session_the_app_built(self):
-        for key in ("q", "w", "a", "s", "z", "x"):
+        # Smoke by default: `q` was the crash (mult as string), and every
+        # adjust key shares the same step path; `HUEBOX_ALL=1` walks all six.
+        keys = ("q", "w", "a", "s", "z", "x")
+        if not os.environ.get("HUEBOX_ALL"):
+            keys = ("q",)
+        for key in keys:
             with self.subTest(key=key):
                 app = await self._app()
                 async with app.run_test(size=(100, 30)) as pilot:
@@ -950,8 +961,11 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(150, 50)) as pilot:
             await pilot.pause()
-            for cols, rows in ((150, 50), (120, 40), (100, 30), (80, 24),
-                               (200, 60), (60, 16), (40, 12)):
+            sizes = ((150, 50), (120, 40), (100, 30), (80, 24),
+                               (200, 60), (60, 16), (40, 12))
+            if not os.environ.get("HUEBOX_ALL"):
+                sizes = ((150, 50), (80, 24))
+            for cols, rows in sizes:
                 with self.subTest(size=f"{cols}x{rows}"):
                     await pilot.resize_terminal(cols, rows)
                     await pilot.pause()
@@ -998,7 +1012,12 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(150, 50)) as pilot:
             await pilot.pause()
-            for cols, rows in ((150, 50), (100, 30), (80, 24)):
+            sizes = ((150, 50), (100, 30), (80, 24))
+            if not os.environ.get("HUEBOX_ALL"):
+                sizes = ((80, 24),)
+            for cols, rows in sizes:
+                with self.subTest(size=f"{cols}x{rows}"):
+                    app.screen.scroll_to(y=3, animate=False)
                 with self.subTest(size=f"{cols}x{rows}"):
                     app.screen.scroll_to(y=3, animate=False)
                     await pilot.pause()

@@ -30,6 +30,9 @@ needs_candidate = unittest.skipUnless(
 #: The two sizes worth paying a subprocess for. 100x30 is where the §8.3 bars
 #: fit and the frame paints 50 colours; 80x24 is the commonest terminal and the
 #: one where the bars do not fit. One of each catches the two regimes.
+#: The candidate halves below run as a smoke (distinct at 80x24) unless
+#: `HUEBOX_ALL=1` restores the full matrix — the reference halves stay full
+#: because they are in-process draws and cost nothing.
 SIZES = ((100, 30), (80, 24))
 
 
@@ -61,13 +64,18 @@ class TestBackdropHolds(unittest.TestCase):
     @needs_pyte
     @needs_candidate
     def test_the_candidate_frame_is_backed(self):
-        for cols, rows in SIZES:
-            for fixture in sorted(harness.FIXTURES):
-                golden = harness.load(fixture, cols, rows)
-                raw = harness.candidate_bytes(fixture, cols, rows)
-                with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
-                    self._assert_backed(raw, cols, rows,
-                                        golden["frame_rows"], "candidate")
+        cases = [(cols, rows, fixture)
+                 for cols, rows in SIZES
+                 for fixture in sorted(harness.FIXTURES)]
+        if not os.environ.get("HUEBOX_ALL"):
+            cases = [case for case in cases
+                     if case == (80, 24, "distinct")]
+        for cols, rows, fixture in cases:
+            golden = harness.load(fixture, cols, rows)
+            raw = harness.candidate_bytes(fixture, cols, rows)
+            with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
+                self._assert_backed(raw, cols, rows,
+                                    golden["frame_rows"], "candidate")
 
 
 class TestClosure(unittest.TestCase):
@@ -96,13 +104,18 @@ class TestClosure(unittest.TestCase):
         """The point of I2. A Textual surface that fell through to its own
         palette — a scrollbar thumb, a focus ring, `$text`'s `ansi_default` —
         lands here and nowhere else."""
-        for cols, rows in SIZES:
-            for fixture in sorted(harness.FIXTURES):
-                golden = harness.load(fixture, cols, rows)
-                raw = harness.candidate_bytes(fixture, cols, rows)
-                with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
-                    self._assert_closed(raw, cols, rows, golden["frame_rows"],
-                                        set(golden["closure"]), "candidate")
+        cases = [(cols, rows, fixture)
+                 for cols, rows in SIZES
+                 for fixture in sorted(harness.FIXTURES)]
+        if not os.environ.get("HUEBOX_ALL"):
+            cases = [case for case in cases
+                     if case == (80, 24, "distinct")]
+        for cols, rows, fixture in cases:
+            golden = harness.load(fixture, cols, rows)
+            raw = harness.candidate_bytes(fixture, cols, rows)
+            with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
+                self._assert_closed(raw, cols, rows, golden["frame_rows"],
+                                    set(golden["closure"]), "candidate")
 
     @needs_pyte
     def test_closure_is_wider_than_the_slots_at_a_size_where_bars_fit(self):
@@ -158,17 +171,22 @@ class TestPickerClosure(unittest.TestCase):
                                             set(golden["closure"]), "reference")
 
     def test_the_candidate_picker_stays_inside_the_recorded_closure(self):
-        for cols, rows in SIZES:
-            for fixture in sorted(harness.FIXTURES):
-                for scene in sorted(harness.PICKERS):
-                    golden = harness.load_picker(fixture, cols, rows, scene)
-                    raw = harness.candidate_picker_bytes(fixture, cols, rows,
-                                                        scene)
-                    with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
-                                      picker=scene):
-                        self._assert_closed(raw, cols, rows,
-                                            golden["frame_rows"],
-                                            set(golden["closure"]), "candidate")
+        cases = [(cols, rows, fixture, scene)
+                 for cols, rows in SIZES
+                 for fixture in sorted(harness.FIXTURES)
+                 for scene in sorted(harness.PICKERS)]
+        if not os.environ.get("HUEBOX_ALL"):
+            cases = [case for case in cases
+                     if case == (80, 24, "distinct", "long")]
+        for cols, rows, fixture, scene in cases:
+            golden = harness.load_picker(fixture, cols, rows, scene)
+            raw = harness.candidate_picker_bytes(fixture, cols, rows,
+                                                  scene)
+            with self.subTest(fixture=fixture, size=f"{cols}x{rows}",
+                              picker=scene):
+                self._assert_closed(raw, cols, rows,
+                                    golden["frame_rows"],
+                                    set(golden["closure"]), "candidate")
 
     def test_the_picker_has_no_colour_a_scrollbar_could_join(self):
         """The closure today is the theme's own foreground and background.

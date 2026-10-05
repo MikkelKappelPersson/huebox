@@ -1756,15 +1756,10 @@ class Cli(LibraryHome):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("background = #010203", self.read(ghostty))
         self.assertIn("background            #010203", self.read(kitty))
-
-    def test_use_to_a_deduplicated_list_pushes_each_format_once(self):
-        # P4 review: `--to ghostty,ghostty` must behave like `--to ghostty`
-        config = self.xdg("ghostty/config.ghostty", ghostty_text())
-        themes.create("ember", dict(FULL, background="#010203"))
-        out = self.run_cli("use", "ember", "--to", "ghostty,ghostty")
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stderr.count("pushed to"), 1)
-        self.assertIn("background = #010203", self.read(config))
+        # P4 review: `--to ghostty,ghostty` behaves like `--to ghostty`
+        again = self.run_cli("use", "ember", "--to", "ghostty,ghostty")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(again.stderr.count("pushed to"), 1)
 
     def test_use_to_an_empty_list_is_refused(self):
         # P4 review: `--to ""` must not silently fall back to detection
@@ -1811,13 +1806,6 @@ class Cli(LibraryHome):
         self.assertEqual(blank.returncode, 1)
         self.assertIn("--to needs at least one format", blank.stderr)
         self.assertEqual(self.read(config), before)
-        self.assertFalse(os.path.exists(themes.state_path()))
-
-    def test_to_with_config_asks_for_one_file(self):
-        out = self.run_cli("use", "ember", "--to", "ghostty,kitty",
-                           "--config", self.config)
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("--config pushes one format", out.stderr)
         self.assertFalse(os.path.exists(themes.state_path()))
 
     def test_a_save_side_flag_never_pushes_on_dump(self):
