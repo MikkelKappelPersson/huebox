@@ -433,8 +433,11 @@ class TheFrameIsWidgets(unittest.TestCase):
         self.addCleanup(patcher.stop)
         mounted = []
 
+        # Bare rows: the collapsible is product chrome, and these three guard
+        # the bare stack I1 pins. `CollapsibleExamples` covers the product.
         with mock.patch.dict(os.environ,
-                             {"HUEBOX_SLOTS": path, "HUEBOX_STATUS": status}):
+                             {"HUEBOX_SLOTS": path, "HUEBOX_STATUS": status,
+                              "HUEBOX_COLLAPSIBLE": "0"}):
             editor = huebox_app.Editor()
             editor.query = lambda *a, **k: ()
             editor.mount = lambda widget: mounted.append(widget)
@@ -1036,3 +1039,146 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.screen.scroll_y, 0.0)
             self.assertEqual(sum(c for _, _, c in app.regions),
                              len(app.rows_text))
+
+
+@needs_app
+class CollapsibleExamples(unittest.TestCase):
+    """§14.1 — the live area is one collapsible, open by default.
+
+    The rows inside are still `draw_editor`'s: the header replaces the
+    examples title one for one (expanded), or stands where the live area
+    was (collapsed). `HUEBOX_COLLAPSIBLE=0` opts out to the bare stack I1
+    pins; I2 runs product and proves no new colour leaked in.
+    """
+
+    def _editor(self, cols=80, rows=24, **kw):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock, return_value=Offset(cols, rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            editor = huebox_app.Editor(**kw)
+        editor.query = lambda *a, **k: ()
+        editor.mount = lambda *a, **k: None
+        editor.redraw()
+        return editor
+
+    def test_enabled_by_default_and_bare_on_zero(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HUEBOX_COLLAPSIBLE", None)
+            self.assertTrue(huebox_app.collapsible_enabled())
+        with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+            self.assertFalse(huebox_app.collapsible_enabled())
+
+    def test_open_by_default(self):
+        editor = self._editor()
+        self.assertFalse(editor._examples_collapsed,
+                         "the examples must start open")
+        live = [name for name, _, _ in editor.regions
+                if name in huebox_app.LIVE_BLOCKS]
+        self.assertTrue(live, "no live blocks to collapse")
+
+    def test_bare_opt_out_mounts_no_examples(self):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size", new_callable=mock.PropertyMock,
+            return_value=Offset(100, 30))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        mounted = []
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path,
+                                          "HUEBOX_COLLAPSIBLE": "0"}):
+            editor = huebox_app.Editor()
+            editor.query = lambda *a, **k: ()
+            editor.mount = lambda widget: mounted.append(widget)
+            editor.redraw()
+        self.assertEqual([w for w in mounted
+                          if isinstance(w, huebox_app.Examples)], [],
+                         "bare opt-out mounted a collapsible")
+
+    def test_collapsed_omits_the_live_blocks(self):
+        editor = self._editor()
+        editor._examples_collapsed = True
+        editor.redraw()
+        names = [name for name, _, _ in editor.regions]
+        for gone in huebox_app.LIVE_BLOCKS:
+            self.assertNotIn(gone, names,
+                             "collapsed regions still name %s" % gone)
+        # The grids are above the live area, so their hits keep their rows:
+        # every hit still points at a painted row of the collapsed frame
+        # (or the one header row standing where the live area was).
+        for hit in editor.hits:
+            self.assertLess(hit.y, len(editor.rows_text) + 1,
+                            "a hit points past the collapsed frame")
+
+    def test_expanded_hits_match_the_painted_cells(self):
+        """Every hit the expanded frame announces is on a painted row."""
+        editor = self._editor(cols=100, rows=30)
+        for hit in editor.hits:
+            self.assertLess(hit.y, len(editor.rows_text),
+                            "a hit points past the painted frame")
+
+
+@needs_app
+class CollapsibleExamplesRunning(unittest.IsolatedAsyncioTestCase):
+    """The toggle, under a real compositor."""
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    async def test_e_collapses_and_expands(self):
+        from textual import events
+
+        app = await self._app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertFalse(app._examples_collapsed)
+            self.assertTrue(list(app.query(huebox_app.Examples)))
+            event = events.Key("e", None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+            self.assertTrue(app._examples_collapsed,
+                            "`e` did not collapse the examples")
+            live = [name for name, _, _ in app.regions
+                    if name in huebox_app.LIVE_BLOCKS]
+            self.assertEqual(live, [],
+                             "collapsed regions still name live blocks")
+            event = events.Key("e", None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+            self.assertFalse(app._examples_collapsed,
+                             "second `e` did not reopen the examples")
+
+    async def test_e_behind_the_picker_is_an_editor_key(self):
+        """The picker owns the surface while it is up (§13.7)."""
+        from textual import events
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path,
+                                          "HUEBOX_PICKER": "long",
+                                          "HUEBOX_PICKER_NAMES": "a,b",
+                                          "HUEBOX_PICKER_INDEX": "0"}):
+            app = huebox_app.Editor()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            self.assertIsNotNone(app.state.overlay)
+            event = events.Key("e", None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+            self.assertFalse(app._examples_collapsed,
+                             "`e` collapsed the frame behind the picker")

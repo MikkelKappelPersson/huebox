@@ -1122,6 +1122,16 @@ edge of the frame in that colour would read as a selection running on past
 the text. The three rows are one sentence drawn three times, each with one
 span emphasised; that is the whole comparison.
 
+The live area — the strip, the diff (§14.4) and the code sample — is one
+collapsible, open by default. `e` collapses it to its header and `e` again
+reopens it; clicking the header or pressing Enter on it does the same, through
+Textual's `Collapsible`. Collapsed, the frame is controls plus hints; the
+hits and regions never name a hidden row, so a click cannot land on a colour
+it cannot see. The header wears only the theme's own foreground on its own
+background, so the collapsed and the open frame alike stay inside the
+reference closure (migration §4.2). `HUEBOX_COLLAPSIBLE=0` opts out to the
+bare stack the equivalence goldens pin.
+
 ### 14.2 Save, quit, undo
 
 - Ctrl+S writes the truth theme file, then pushes (§13.6); status confirms

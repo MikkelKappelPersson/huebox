@@ -100,7 +100,8 @@ def capture_picker(fixture, cols, rows, picker="long", depth="truecolor",
     paints the picker frame before its first draw, so the capture is a settled
     screen with the picker up rather than a keypress timed against a race.
     """
-    key = ("picker", fixture, cols, rows, picker, depth, status)
+    key = ("picker", fixture, cols, rows, picker, depth, status,
+           os.environ.get("HUEBOX_COLLAPSIBLE", "1"))
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, 0, depth,
                              picker=picker, status=status)
@@ -114,7 +115,8 @@ def capture(fixture, cols, rows, sel=0, depth="truecolor"):
     Memoised per `(fixture, cols, rows, sel, depth)`. Pass `fresh=True` to force
     a new process.
     """
-    key = (fixture, cols, rows, sel, depth)
+    key = (fixture, cols, rows, sel, depth,
+           os.environ.get("HUEBOX_COLLAPSIBLE", "1"))
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, sel, depth)
         _CAPTURES[key] = frame_bytes(data)

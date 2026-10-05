@@ -98,9 +98,16 @@ class TestEquivalence(unittest.TestCase):
     """
 
     def _compare(self, fixture, cols, rows, sel=0, depth="truecolor"):
+        from unittest import mock
         golden = harness.load(fixture, cols, rows, sel)
         self.assertIsNotNone(golden, "no golden recorded")
-        raw = harness.candidate_bytes(fixture, cols, rows, sel, depth)
+        # I1 goldens pin the bare rows (`draw_editor` with no compositor
+        # chrome). The examples collapsible is default product, so the
+        # candidate is pinned bare here; the collapsible frame is covered by
+        # `test_app` and I2, and collapsible goldens are a follow-up
+        # re-record, reviewed as one.
+        with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+            raw = harness.candidate_bytes(fixture, cols, rows, sel, depth)
         actual = harness.parse(raw, cols, rows, golden["frame_rows"])
         self.assertEqual(actual, golden["cells"],
                          "frame changed:\n" + self._report(
@@ -161,11 +168,13 @@ class TestEquivalence(unittest.TestCase):
             sels = (0,)
         for sel in sels:
             with self.subTest(sel=sel):
+                from unittest import mock
                 raw, height = harness.capture_reference("distinct", 80, 24, sel)
                 expected = harness.parse(raw, 80, 24, height)
-                actual = harness.parse(
-                    harness.candidate_bytes("distinct", 80, 24, sel),
-                    80, 24, height)
+                # Bare rows, as in `_compare`.
+                with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+                    candidate = harness.candidate_bytes("distinct", 80, 24, sel)
+                actual = harness.parse(candidate, 80, 24, height)
                 self.assertEqual(actual, expected,
                                  "frame changed:\n" + self._report(
                                      harness.diff(expected, actual, 80)))
@@ -185,8 +194,11 @@ class TestDepthProbeAgainstTheApp(unittest.TestCase):
     """
 
     def test_truecolor_matches_the_golden(self):
+        from unittest import mock
         golden = harness.load("distinct", 80, 24)
-        raw = harness.candidate_bytes("distinct", 80, 24, depth="truecolor")
+        # Bare rows, as in `TestEquivalence._compare`.
+        with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+            raw = harness.candidate_bytes("distinct", 80, 24, depth="truecolor")
         actual = harness.parse(raw, 80, 24, golden["frame_rows"])
         self.assertEqual(actual, golden["cells"])
 
@@ -194,7 +206,9 @@ class TestDepthProbeAgainstTheApp(unittest.TestCase):
         """The negative case. Without this the probe above proves nothing: a
         comparison that passes at both depths is a comparison that cannot fail."""
         golden = harness.load("distinct", 80, 24)
-        raw = harness.candidate_bytes("distinct", 80, 24, depth="256")
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"HUEBOX_COLLAPSIBLE": "0"}):
+            raw = harness.candidate_bytes("distinct", 80, 24, depth="256")
         actual = harness.parse(raw, 80, 24, golden["frame_rows"])
         differences = harness.diff(golden["cells"], actual, 80)
         self.assertTrue(differences,
