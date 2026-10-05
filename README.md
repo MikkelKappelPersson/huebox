@@ -30,12 +30,16 @@ read from.
 ```sh
 git clone https://github.com/MikkelKappelPersson/huebox
 cd huebox
-pipx install .          # or: pip install --user .
+pipx install '.[editor]'   # or: pip install --user '.[editor]'
 ```
 
-The one dependency beyond the stdlib is [Pygments](https://pygments.org),
+The one base dependency beyond the stdlib is [Pygments](https://pygments.org),
 which powers the editor's live code sample — it installs automatically,
 and every colour in the sample comes from the theme's own palette.
+The interactive editor needs the `editor` extra ([Textual](https://textual.textualize.io/)):
+`show`, `list`, `use`, `new`, `import` and `--dump` work without it, but
+`huebox edit` says so on stderr and exits 1 instead of opening. Installing
+without the extra (`pipx install .`) still gives you everything else.
 
 ## What's new in 0.2
 
@@ -112,6 +116,12 @@ Run `huebox edit` and drive it with the keyboard.
 | `t` | theme picker — arrows, `Enter` opens, `n` makes a theme from the buffer, `Esc` back |
 | `N` | save the buffer as a new theme (and then save it) |
 | `Esc` | quit — twice if there are unsaved changes |
+
+The mouse works too: click a swatch or interface cell to select it, click a
+picker row to open it, wheel through a long picker list, and drag across the
+code sample or diff to select text for copying. Clicking anywhere else — the
+header, the hints, the empty air — does nothing, and the wheel does nothing
+outside the picker.
 
 Edits live in an in-memory buffer: nothing is written until you press
 `Ctrl+S`. The editor *renders* from that buffer, so everything on screen —
