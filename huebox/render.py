@@ -166,6 +166,258 @@ def title(word: str, slots, note: str = "") -> str:
     return f"{head} {chrome(note, CHROME_MUTED, slots)}" if note else head
 
 
+# --------------------------------------------------------------------------
+# the raster banner (§8.1)
+# --------------------------------------------------------------------------
+
+# `huebox` in six per-letter FIGlet arts (`ansi_shadow`), generated once
+# offline and committed as strings: `uvx --from pyfiglet pyfiglet -f
+# ansi_shadow huebox` reproduces them one letter at a time. The generator
+# is not a dependency; the strings are — with the font's baked-in bevel
+# (`╗║╝╔═` on every right and bottom edge) replaced by air. That bevel is
+# a shadow facet in the letter data, and beside the stamped shadow it
+# reads as a second one. One art per letter (rather than one pasted
+# block) is what keeps the face in the letter's own base hue and the
+# shadow in its bright — a block has no letters left to colour.
+BANNER_LETTERS = (
+    # h
+    (
+        "██   ██",
+        "██   ██",
+        "███████",
+        "██   ██",
+        "██   ██",
+    ),
+    # u
+    (
+        "██    ██",
+        "██    ██",
+        "██    ██",
+        "██    ██",
+        " ██████",
+    ),
+    # e
+    (
+        "███████",
+        "██",
+        "█████",
+        "██",
+        "███████",
+    ),
+    # b
+    (
+        "██████",
+        "██   ██",
+        "██████",
+        "██   ██",
+        "██████",
+    ),
+    # o
+    (
+        " ██████",
+        "██    ██",
+        "██    ██",
+        "██    ██",
+        " ██████",
+    ),
+    # x
+    (
+        "██   ██",
+        " ██ ██",
+        "  ███",
+        " ██ ██",
+        "██   ██",
+    ),
+)
+
+# The shadow's texture: the same six arts with the bevel intact — the
+# edging the faces had stripped. Stamped one right and one down in the
+# letter's bright, it is the cast edge the clean stencil stands in front
+# of. Same order as `BANNER_LETTERS`; the two are zipped, so they travel
+# as a pair. Only the bevel cells are ever stamped: the shadow is composed
+# of `BANNER_BEVEL` and nothing else, so no shadow cell can ever double a
+# face stroke.
+BANNER_BEVEL = frozenset("╗║╝╚╔═")
+BANNER_SHADOWS = (
+    # h
+    (
+        "██╗  ██╗",
+        "██║  ██║",
+        "███████║",
+        "██╔══██║",
+        "██║  ██║",
+        "╚═╝  ╚═╝",
+    ),
+    # u
+    (
+        "██╗   ██╗",
+        "██║   ██║",
+        "██║   ██║",
+        "██║   ██║",
+        "╚██████╔╝",
+        " ╚═════╝",
+    ),
+    # e
+    (
+        "███████╗",
+        "██╔════╝",
+        "█████╗",
+        "██╔══╝",
+        "███████╗",
+        "╚══════╝",
+    ),
+    # b
+    (
+        "██████╗",
+        "██╔══██╗",
+        "██████╔╝",
+        "██╔══██╗",
+        "██████╔╝",
+        "╚═════╝",
+    ),
+    # o
+    (
+        " ██████╗",
+        "██╔═══██╗",
+        "██║   ██║",
+        "██║   ██║",
+        "╚██████╔╝",
+        " ╚═════╝",
+    ),
+    # x
+    (
+        "██╗  ██╗",
+        "╚██╗██╔╝",
+        " ╚███╔╝",
+        " ██╔██╗",
+        "██╔╝ ██╗",
+        "╚═╝  ╚═╝",
+    ),
+)
+
+# The banner spans both palette rows: the face in the base row, one hue
+# per letter, the shadow in the same hue from the bright row. Skipped at
+# both ends like the wordmark skips `palette-8` and `palette-15` — black
+# reads as no letter at all, and white outshouts the five hues beside it.
+BANNER_FACE_SLOTS = ("palette-1", "palette-2", "palette-3",
+                     "palette-4", "palette-5", "palette-6")
+BANNER_GAP = 1                   # blank columns between letters
+BANNER_DX = 0                    # the shadow stands in the bevel's own seats:
+BANNER_DY = 0                    # the font already offsets its edging, and a
+                                 # further step visibly detaches it
+
+
+def _banner_width() -> int:
+    """Columns the banner stands in: letters, gaps, the shadow's fringe."""
+    width, x = 0, 0
+    for letter, silhouette in zip(BANNER_LETTERS, BANNER_SHADOWS):
+        width = max(width, x + BANNER_DX
+                    + max(len(line) for line in silhouette))
+        x += max(len(line) for line in letter) + BANNER_GAP
+    return width
+
+
+BANNER_WIDTH = _banner_width()
+
+
+def banner_lines(slots, cols=None, shadow=None):
+    """The banner: each letter's face in its own bright, its shadow with it.
+
+    Face letter `i` wears `BANNER_FACE_SLOTS[i]` — the base row, one hue
+    per letter, bold like the one-line `wordmark`. The shadow is the
+    letter's original beveled art (`BANNER_SHADOWS`) — the same `╗║╝╔═`
+    edging the clean face had stripped — standing in the bevel's own
+    seats (`BANNER_DX`/`BANNER_DY` stay 0 for the reason above), bevel
+    cells only (`BANNER_BEVEL`; the `█` stays with the face), in the same
+    hue from the bright row —
+    `WORDMARK_SLOTS[i]` — or in `shadow` (a slot name, e.g. `"palette-8"`
+    for a grey drop shadow) when one is given. But only where the face
+    leaves exterior air:
+    flood fill from the canvas border marks the outside, and a shadow
+    cell inside a counter or any other enclosed air is dropped. A shadow
+    inside the letterforms reads as a second stroke — the doubling the
+    banner must never do — while one outside them reads as cast light.
+    Either way every colour is read out of `slots` on the call, so the
+    banner is live like the wordmark (§14.1): editing a face slot moves
+    the letter, editing its bright moves the shadow.
+
+    `cols` is the room the row has: narrower than `BANNER_WIDTH` gives
+    `[]`, and the caller falls back to `wordmark` — a clipped banner is
+    half a letter, which reads as a rendering bug rather than a logo.
+    Rows are the caller's budget (§15): this function never decides that.
+    """
+    if cols is not None and cols < BANNER_WIDTH:
+        return []
+    height = max([len(letter) for letter in BANNER_LETTERS]
+                 + [len(letter) for letter in BANNER_SHADOWS])
+    # (ink, bold, glyph) per cell, None for air. Faces first, so the
+    # flood fill below can tell the letterforms from the air around them.
+    cells = [[None] * BANNER_WIDTH for _ in range(height + BANNER_DY)]
+    bounds = []
+    x = 0
+    for index, (letter, silhouette) in enumerate(zip(BANNER_LETTERS,
+                                                     BANNER_SHADOWS)):
+        face = BANNER_FACE_SLOTS[index % len(BANNER_FACE_SLOTS)]
+        bright = WORDMARK_SLOTS[index % len(WORDMARK_SLOTS)]
+        tint = slots.get(face, MISSING)
+        shade = (slots.get(shadow, MISSING) if shadow
+                 else slots.get(bright, MISSING))
+        for y, line in enumerate(letter):
+            for dx, glyph in enumerate(line):
+                if glyph != " ":
+                    cells[y][x + dx] = (tint, True, glyph)
+        bounds.append((x, shade, silhouette))
+        x += max(len(line) for line in letter) + BANNER_GAP
+    # Exterior air: flood fill from the border through what the faces
+    # leave uninked. The shadow stands only on it — never on a face
+    # cell, never inside a counter — so no shadow cell touches a stroke
+    # it does not stand under.
+    outside = [[False] * BANNER_WIDTH for _ in range(height + BANNER_DY)]
+    stack = ([(cx, cy) for cx in range(BANNER_WIDTH)
+              for cy in (0, height + BANNER_DY - 1)]
+             + [(cx, cy) for cy in range(height + BANNER_DY)
+                for cx in (0, BANNER_WIDTH - 1)])
+    while stack:
+        cx, cy = stack.pop()
+        if not (0 <= cx < BANNER_WIDTH and 0 <= cy < height + BANNER_DY):
+            continue
+        if outside[cy][cx] or cells[cy][cx] is not None:
+            continue
+        outside[cy][cx] = True
+        stack.extend(((cx + 1, cy), (cx - 1, cy),
+                      (cx, cy + 1), (cx, cy - 1)))
+    for x0, shade, silhouette in bounds:
+        for y, line in enumerate(silhouette):
+            for dx, glyph in enumerate(line):
+                if (glyph in BANNER_BEVEL
+                        and outside[y + BANNER_DY][x0 + dx + BANNER_DX]):
+                    cells[y + BANNER_DY][x0 + dx + BANNER_DX] = \
+                        (shade, False, glyph)
+    out = []
+    for row in cells:
+        # adjacent cells in one ink are one run: a run per cell would
+        # spray a reset per column, and `backdrop` reopens the fill after
+        # every one of them (§8.2).
+        parts, key, run = [], None, ""
+        for cell in list(row) + [None]:
+            tag = (cell[0], cell[1]) if cell is not None else None
+            if tag is not None and tag == key:
+                run += cell[2]
+                continue
+            if run:
+                ink, bold = key
+                parts.append(f"{BOLD if bold else ''}{fg(ink)}"
+                             f"{run}{RESET}")
+                run = ""
+            key = tag
+            if cell is not None:
+                run = cell[2]
+            else:
+                parts.append(" ")
+        out.append("".join(parts).rstrip())
+    return [clip(line, cols) if cols is not None else line for line in out]
+
+
 def key_hint(slots, key: str, what: str) -> str:
     """`arrows move` for a hint line: the key bright, its label beside it.
 
@@ -645,7 +897,14 @@ def render_preview(fmt, path, slots, cols=None, rows=None) -> str:
     # cli always passes the live width; 96 stays the piped default.
     cols = cols or 96
     lines = []
-    subject = wordmark(slots) + "  " + title(fmt, slots)
+    art = banner_lines(slots, cols)
+    if art:
+        # the banner replaces the wordmark where the row holds it;
+        # narrower than that the one-line wordmark stands in (§8.1)
+        lines.extend(art)
+        subject = title(fmt, slots)
+    else:
+        subject = wordmark(slots) + "  " + title(fmt, slots)
     if path and len(path) < cols:
         subject += "  " + chrome(path, CHROME_MUTED, slots)
     lines.append(subject)

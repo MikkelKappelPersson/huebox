@@ -447,7 +447,22 @@ it is the one sentence in the frame that must be read first.
 hues in palette order (`palette-9` … `palette-14`), bold, at the top where it
 is read once per frame — the header line and the static preview alike. It is
 the only rainbow huebox draws, and it is live like everything else: editing
-`palette-11` recolours the *u*.
+`palette-11` recolours the *u*. Where the rows below leave room the wordmark
+stands up as a raster banner: the same six letters in FIGlet `ansi_shadow`
+with its baked-in bevel replaced by air (the bevel is a shadow facet in
+the letter data, and beside the stamped shadow it reads as a second one),
+generated once offline and committed as strings (the generator is not a
+dependency). The banner spans both palette rows — each face in its base hue
+(`palette-1` … `palette-6`), its shadow in the same hue from the bright row
+(`palette-9` … `palette-14`), stamped from the original beveled art in its
+own seats — the edging the faces lost survives as the shadow's texture,
+bevel cells only, so no shadow cell can double a face stroke —
+and standing only on air outside the letterforms, never inside
+a counter, where it would read as a second stroke. It draws only out
+of leftover: a frame with no rows below it
+keeps the wordmark instead (decision 33). The static preview
+shows it wherever the row holds it; narrower than that the wordmark stands
+back in, and the narrow preview stays ascii.
 
 **Hints are `(key, what)` pairs, not strings.** The hint line paints a key and
 its label separately, so `pack` folds between *whole hints* and never between a
@@ -708,6 +723,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 30 | The mouse points at things already on the frame; it never adds a meaning. A click resolves through the same key surface as the keyboard, and a cell is clickable only if the frame published it while painting | Every mouse affordance is a second way to do something the keys already do, and the cost of a second model is that the two can disagree about what happened. Clicking a picker row moves the selection and then does what `Enter` does, so it cannot open a theme the keyboard would have refused; the same reasoning keeps `move_slot` as the only implementation of the arrows. The cells themselves come from the frame that painted them rather than from a layout recomputed afterwards, because a second description of the layout points clicks at the wrong cell *silently* — the wrong colour changes and nothing says so. Three things are deliberately absent: clicking the chrome does nothing (a frame where every click does something cannot distinguish the ones that change a colour), there are no hover or press states (a frame that repaints under the pointer is indistinguishable from one repainting for another reason), and the wheel does nothing outside the picker (only the picker has a window, and a wheel notch that moved the colour frame would read as having changed the colours) |
 | 31 | Only the code sample and the live diff are selectable; a selection is painted in the theme's own selection slots | Those two blocks exist so their text can leave the editor — sample a colour, copy the hex, paste the new value. Every other block is inert to a drag, because a swatch that began a text selection when clicked would swallow the click that selects a colour, and the failure is invisible: the selection just looks like nothing happened. The selection style is bound to `selection-background`/`selection-foreground`, the pair the picker already marks a theme with, so a selection reads as part of the theme instead of as a colour from somewhere else |
 | 32 | Textual is a dependency, not an extra: `huebox` installs its editor | An install whose main command fails on open is not a smaller install, it is a broken one. The `editor` extra bought `show` / `list` / `use` / `new` / `import` an install without Textual — and in exchange every one of those commands worked while `edit`, the command the install is for, printed an install line. The missing-extra guard even named an extra nobody could install (`huebox[textual]`), because it joined module names into brackets meant for group names. Same reasoning as decision 16, which made Pygments required when the sample without it read as a bug: a `huebox` that cannot edit is the degraded path, and the degraded path is what the guard was. What stays: the late import, so the commands that never open the editor never pay for it — that was always about cold-start time, never about installability — and `pyte` stays the `test` group, because the harness is not the product |
+| 33 | The raster banner draws only out of leftover, and the preview may be box drawing | Decoration never costs a widget a row: the editor builds the frame plain and inserts the banner above it only where the rows below leave room, so everything below shifts down byte-identical. The shadow defaults to the same hue from the bright row, and a grey `palette-8` one stays one argument away. The preview's ascii contract narrows to no-wide-glyphs — box drawing survives a pipe, and truecolor already assumed ANSI |
 
 ---
 

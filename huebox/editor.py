@@ -30,7 +30,7 @@ from typing import NamedTuple
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
 from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,
-                     bg, chrome, clip,
+                     banner_lines, bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_numbers,
                      hsv_readout, sample_lines, title, visible, wordmark)
 from .tui import term_size
@@ -298,7 +298,8 @@ class Hit(NamedTuple):
 
 
 def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
-               sel=0, undo=(), status="", mult=1, head=None) -> list:
+               sel=0, undo=(), status="", mult=1, head=None,
+               use_banner=None) -> list:
     """Every colour cell a frame `cols` wide draws, as `Hit`s.
 
     The rows are the frame's own: `draw_editor` announces each cell as it paints
@@ -308,7 +309,8 @@ def frame_hits(cols: int, rows: int = 24, fmt="ghostty", path="", slots=None,
     found: list = []
     with contextlib.redirect_stdout(io.StringIO()):
         draw_editor(fmt, path, slots or {}, sel, list(undo), status, mult,
-                    head=head, hits=found, size=(cols, rows or 24))
+                    head=head, hits=found, size=(cols, rows or 24),
+                    use_banner=use_banner)
     return found
 
 
@@ -334,7 +336,8 @@ def slot_at(hits, x: int, y: int):
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
-                grid=None, hits=None, size=None, regions=None):
+                grid=None, hits=None, size=None, regions=None,
+                use_banner=None):
     """The frame, written to stdout.
 
     `size` overrides the terminal query. Textual knows the size it was given —
@@ -358,6 +361,22 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # `overlay=` for the whole migration, and phase 5 gave it a widget; the
     # frame it used to be handed on the side is now `theme_lines`, which is
     # what it always was underneath.
+    # §8.1 — the hints are `(key, what)` pairs: the key is the bright half,
+    # its label the quiet one. Same widths as the plain strings they
+    # replaced, so this row count is unchanged at every terminal size.
+    # Built before the first body row: the banner insertion below needs
+    # the whole frame — body, widgets and `tail` — before it can know
+    # whether the rows below leave room.
+    tail = ["  " + line for line in hint_line(slots, [
+        ("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"), ("z/x", "light"),
+        ("f", f"x{mult}"), ("i", "hex"), ("^S", "save"),
+        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"),
+        ("N", "as new"), ("Esc", "quit")],
+        # two spaces, not three: the picker added two keys to this line and
+        # one more row here would come out of the examples strip's budget
+        cols - 2)]
+    if status:
+        tail.append(f"  {BOLD}{status}{RESET}")
     body = []
     # Checkpoints: `(name, first row of the frame)`, each block running until
     # the next. `at_body` counts rows in `body`; `at_extra` counts rows in the
@@ -369,8 +388,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     at_extra = lambda: len(body) + len(extra)        # noqa: E731
 
     label = fmt if head is None else head
-    first = "  " + wordmark(slots) + "  " + chrome(label, "foreground", slots,
-                                                    bold=True)
+    first = ("  " + wordmark(slots) + "  "
+             + chrome(label, "foreground", slots, bold=True))
     if path and len("  huebox  ") + len(label) + 2 + len(path) <= cols:
         first += "  " + chrome(path, CHROME_MUTED, slots)
     marks.append(("header", at_body()))
@@ -449,20 +468,6 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                             if len(exact) + 3 <= cols - visible(specimen)
                             else ""))
     body.append("")
-
-    # §8.1 — the hints are `(key, what)` pairs: the key is the bright half,
-    # its label the quiet one. Same widths as the plain strings they
-    # replaced, so this row count is unchanged at every terminal size.
-    tail = ["  " + line for line in hint_line(slots, [
-        ("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"), ("z/x", "light"),
-        ("f", f"x{mult}"), ("i", "hex"), ("^S", "save"),
-        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"),
-        ("N", "as new"), ("Esc", "quit")],
-        # two spaces, not three: the picker added two keys to this line and
-        # one more row here would come out of the examples strip's budget
-        cols - 2)]
-    if status:
-        tail.append(f"  {BOLD}{status}{RESET}")
 
     # §14.1 / §15 — the examples strip and the code sample share the
     # leftover rows, each with a floor, and the frame spends its decoration
@@ -554,6 +559,27 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     marks.append(("hints", at_extra()))
     if status:
         marks.append(("status", at_extra() + len(tail) - 1))
+
+    # The raster banner draws only out of leftover (decision 33): the
+    # frame above is built plain, and where the rows below it leave room
+    # the banner goes in above them. Every mark and hit below shifts down
+    # by `len(art)` and nothing below changes — not a widget, not the air
+    # between them. `use_banner=True` forces it (an overflowing frame
+    # trims like any other); `False` keeps the wordmark.
+    art = banner_lines(slots, cols)
+    if art and (use_banner or (use_banner is None
+                               and rows - len(body) - len(extra) - len(tail)
+                               >= len(art))):
+        subject = "  " + chrome(label, "foreground", slots, bold=True)
+        if path and len("  ") + len(label) + 2 + len(path) <= cols:
+            subject += "  " + chrome(path, CHROME_MUTED, slots)
+        body[0:2] = art + [subject, ""]
+        shift = len(art)
+        marks[:] = [(name, row if name == "header" else row + shift)
+                    for name, row in marks]
+        if hits is not None:
+            for index, hit in enumerate(hits):
+                hits[index] = hit._replace(y=hit.y + shift)
 
     out = body + extra + tail
     if len(out) > rows:

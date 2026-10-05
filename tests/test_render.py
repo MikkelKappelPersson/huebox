@@ -3,6 +3,7 @@
 import os
 import re
 import sys
+import unicodedata
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -12,14 +13,15 @@ sys.path.insert(0, _HERE)                   # tests dir: cross-test imports
 import huebox  # noqa: E402
 from huebox.color import (hex_to_rgb, hsv_to_rgb,  # noqa: E402
                          readable_fg, rgb_to_hex, rgb_to_hsv)
-from huebox.render import (BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
+from huebox.render import (BANNER_FACE_SLOTS, BANNER_LETTERS, BANNER_SHADOWS, BANNER_WIDTH, BOLD, CALL_SLOT, CHROME_KEY,  # noqa: E402
                            CHROME_LABEL, CHROME_MUTED, CURSOR_CHAR, DIFF_ADDED,
                            DIFF_BODY, DIFF_CONTEXT, DIFF_HUNK, DIFF_MARKS,
                            DIFF_REMOVED, EXAMPLE_PHRASE, HSV_COMPACT,
                            HSV_CHROME, HSV_FULL, HSV_TIGHT, MARK,
                            LABEL_WIDTH, PAIR_MIN_COLS,
                            PAIR_WIDTH, SELECTED_TEXT, TOKEN_SLOTS, WORDMARK,
-                           WORDMARK_SLOTS, _sample, backdrop, bg, chrome, fg,
+                           WORDMARK_SLOTS, _sample, backdrop, banner_lines, bg,
+                           chrome, fg,
                            hint_line, hsv_numbers, hsv_readout, key_hint,
                            pack,
                            pair_label, title, visible, wordmark)
@@ -30,6 +32,24 @@ from huebox.render import RESET  # noqa: E402
 
 def _plain(text):
     return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+
+
+def _banner_cells(row):
+    """Painted cells of a banner row as `(column, glyph, bold)`."""
+    found, column, bold, ink = [], 0, False, False
+    for token in re.findall(r"\x1b\[[0-9;]*m|[^\x1b]", row):
+        if token == BOLD:
+            bold = True
+        elif token == RESET:
+            bold, ink = False, False
+        elif token.startswith("\x1b["):
+            ink = True
+        elif ink:
+            found.append((column, token, bold))
+            column += 1
+        else:
+            column += 1
+    return found
 
 
 class Sample(unittest.TestCase):
@@ -151,13 +171,26 @@ class Geometry(unittest.TestCase):
         self.assertTrue(huebox.clip("一二三四五", 4).startswith("\033[0m")
                         or "\033[0m" in huebox.clip("一二三四五", 4))
 
-    def test_preview_is_pure_ascii(self):
+    def test_preview_has_no_wide_glyphs(self):
+        # the banner is box drawing, not ascii — but every glyph is still
+        # one column where `clip`/`visible` count it, so the preview's
+        # columns hold wherever ambiguous counts narrow (decision 33 notes
+        # the UTF-8 assumption this keeps).
         slots = {name: "#ff8800" for name in huebox.SLOTS}
         text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=120, rows=40)
-        body = text
-        for line in body.split("\n"):
+        for line in text.split("\n"):
+            for char in line:
+                self.assertNotIn(unicodedata.east_asian_width(char), ("W", "F"),
+                                 f"wide glyph in preview: {line!r}")
+
+    def test_narrow_preview_is_pure_ascii(self):
+        # narrower than the banner the wordmark stands back in, and the
+        # whole preview is ascii again — piped narrow output is unchanged
+        slots = {name: "#ff8800" for name in huebox.SLOTS}
+        text = huebox.render_preview("ghostty", "/tmp/x", slots, cols=40)
+        for line in text.split("\n"):
             self.assertTrue(all(ord(ch) < 128 for ch in line),
-                            f"non-ascii in preview: {line!r}")
+                            f"non-ascii in narrow preview: {line!r}")
 
     def test_preview_never_exceeds_width(self):
         slots = {name: "#ff8800" for name in huebox.SLOTS}
@@ -475,6 +508,119 @@ class Typography(unittest.TestCase):
         moved = dict(slots, **{WORDMARK_SLOTS[0]: "#ff00ff"})
         self.assertIn(fg("#ff00ff"), wordmark(moved))
         self.assertNotEqual(wordmark(slots), wordmark(moved))
+
+    def banner_slots(self):
+        # the banner spans both palette rows, so its tests need both:
+        # the base row for the faces, the bright row for the shadows
+        slots = self.slots()
+        slots.update(dict(zip(
+            ("palette-1", "palette-2", "palette-3",
+             "palette-4", "palette-5", "palette-6"),
+            ("#c05c5c", "#5cc05c", "#c0a05c",
+             "#5c8cc0", "#c05c8c", "#5cc0c0"))))
+        return slots
+
+    def test_the_banner_faces_wear_the_base_row_in_order(self):
+        # §8.1 — face letter `i` wears `BANNER_FACE_SLOTS[i]` from the
+        # base row, bold like the one-line wordmark
+        slots = self.banner_slots()
+        raw = "\n".join(banner_lines(slots, 96))
+        for letter, slot in zip(WORDMARK, BANNER_FACE_SLOTS):
+            with self.subTest(letter=letter):
+                self.assertIn(f"{BOLD}{fg(slots[slot])}", raw)
+
+    def test_the_banner_shadow_is_the_same_hue_one_row_brighter(self):
+        # face in the base row, shadow in the same hue from the bright
+        # row — and nothing else anywhere on the rows
+        slots = self.banner_slots()
+        raw = "\n".join(banner_lines(slots, 96))
+        spent = {rgb_to_hex(tuple(int(part) for part in found))
+                 for found in re.findall(r"38;2;(\d+);(\d+);(\d+)", raw)}
+        self.assertEqual(spent, {slots[slot]
+                                 for slot in BANNER_FACE_SLOTS + WORDMARK_SLOTS})
+
+    def test_the_banner_shadow_takes_a_slot_name(self):
+        # `"palette-8"` for a grey drop shadow: the fringe rows carry it
+        slots = self.slots()
+        raw = "\n".join(banner_lines(slots, 96, shadow="palette-8"))
+        self.assertIn(fg(self.GREY), raw)
+
+    def test_the_banner_shadow_stands_below_the_face(self):
+        # the copy peeks out from under the face and nowhere else: the
+        # top row opens on a face glyph, and the last row is shadow-only
+        # fringe — painted, and never bold
+        slots = self.slots()
+        art = banner_lines(slots, 96)
+        self.assertTrue(_plain(art[0]).startswith("█"))
+        self.assertTrue(_plain(art[-1]).strip())
+        self.assertNotIn(BOLD, art[-1])
+        self.assertIn(BOLD, art[0])
+
+    def test_the_banner_shadow_stands_outside_the_letterforms(self):
+        # flood fill from the border over the faces marks the outside;
+        # no shadow cell may stand on air the fill cannot reach — a
+        # shadow inside a counter reads as a second stroke (decision 33)
+        slots = self.banner_slots()
+        art = banner_lines(slots, 96)
+        face, shad = set(), set()
+        for y, row in enumerate(art):
+            for column, _glyph, bold in _banner_cells(row):
+                (face if bold else shad).add((column, y))
+        outside = set()
+        stack = [(x, y) for x in range(BANNER_WIDTH)
+                 for y in (0, len(art) - 1)]
+        stack += [(x, y) for y in range(len(art))
+                  for x in (0, BANNER_WIDTH - 1)]
+        while stack:
+            x, y = stack.pop()
+            if not (0 <= x < BANNER_WIDTH and 0 <= y < len(art)):
+                continue
+            if (x, y) in outside or (x, y) in face:
+                continue
+            outside.add((x, y))
+            stack.extend(((x + 1, y), (x - 1, y),
+                          (x, y + 1), (x, y - 1)))
+        self.assertTrue(shad, "the banner casts no shadow at all")
+        self.assertEqual(sorted(shad - outside), [])
+
+    def test_the_face_is_solid_block_and_the_shadow_keeps_the_bevel(self):
+        # the stripped edging survives as the shadow's texture: every
+        # face cell is `█`, and the shadow still spends `╗║╝╔═`
+        self.assertEqual(len(BANNER_LETTERS), len(WORDMARK))
+        self.assertEqual(len(BANNER_SHADOWS), len(WORDMARK))
+        slots = self.banner_slots()
+        face_glyphs, shad_glyphs = set(), set()
+        for row in banner_lines(slots, 96):
+            for _column, glyph, bold in _banner_cells(row):
+                (face_glyphs if bold else shad_glyphs).add(glyph)
+        self.assertEqual(face_glyphs, {"█"})
+        self.assertTrue(shad_glyphs, shad_glyphs)
+        self.assertTrue(shad_glyphs <= set("╗║╝╚╔═"), shad_glyphs)
+
+    def test_the_banner_is_live(self):
+        # the two rows answer to the buffer independently: editing a face
+        # slot moves the letter, editing its bright moves the shadow
+        slots = self.banner_slots()
+        moved = dict(slots, **{BANNER_FACE_SLOTS[2]: "#ff00ff"})
+        self.assertNotEqual(banner_lines(slots, 96),
+                            banner_lines(moved, 96))
+        self.assertIn(fg("#ff00ff"), "\n".join(banner_lines(moved, 96)))
+        shaded = dict(slots, **{WORDMARK_SLOTS[2]: "#00ff00"})
+        self.assertNotEqual(banner_lines(slots, 96),
+                            banner_lines(shaded, 96))
+        self.assertIn(fg("#00ff00"), "\n".join(banner_lines(shaded, 96)))
+
+    def test_the_banner_fits_its_width_or_yields(self):
+        # narrower than `BANNER_WIDTH` gives `[]`, and the caller falls
+        # back to `wordmark` — a clipped banner is half a letter
+        slots = self.slots()
+        self.assertEqual(banner_lines(slots, 40), [])
+        self.assertEqual(banner_lines(slots, BANNER_WIDTH - 1), [])
+        art = banner_lines(slots, BANNER_WIDTH)
+        self.assertEqual(len(art), 6)
+        self.assertEqual(max(visible(line) for line in art), BANNER_WIDTH)
+        for line in art:
+            self.assertLessEqual(visible(line), BANNER_WIDTH)
 
     def test_a_key_is_bright_and_its_label_is_teal(self):
         # the key is what the finger has to find; the label explains it

@@ -28,14 +28,15 @@ HINT = ("terminal too small — need "
 SAVE = editor.SAVE_KEY
 
 
-def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None):
+def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None,
+          banner=None):
     """draw_editor's output at a chosen size, captured as a string."""
     out = io.StringIO()
     with mock.patch.object(editor, "term_size", return_value=(cols, rows)), \
             mock.patch.object(sys, "stdout", out):
         editor.draw_editor("ghostty", "/tmp/huebox.conf",
                            FULL_SLOTS if slots is None else slots, sel,
-                           list(undo), status, mult)
+                           list(undo), status, mult, use_banner=banner)
     return out.getvalue()
 
 
@@ -641,6 +642,45 @@ class NormalFrame(unittest.TestCase):
                      "palette-13", "palette-14"):
             self.assertIn(fg(base[slot]), mark, slot)
         self.assertNotEqual(mark, row(**{"palette-9": "#ff00ff"}))
+
+    def test_the_banner_appears_only_out_of_leftover(self):
+        # decision 33 — the banner draws out of the rows below the frame,
+        # never out of a widget: the golden sizes, and tall sizes whose
+        # diff is whole, keep the wordmark, while a tall terminal gets it
+        for cols, rows in ((100, 30), (80, 24), (60, 16), (40, 12),
+                           (120, 40), (120, 44)):
+            with self.subTest(size=(cols, rows)):
+                self.assertIn("huebox", plain_rows(frame(cols, rows))[0])
+        for cols, rows in ((120, 55), (100, 60)):
+            with self.subTest(size=(cols, rows)):
+                body = plain_rows(frame(cols, rows))
+                self.assertNotIn("huebox", body[0])
+                self.assertIn("live diff", "\n".join(body))
+
+    def test_the_banner_leaves_everything_below_where_it_was(self):
+        # the banner is an insertion above the frame, not a reallocation:
+        # every row below the header is the wordmark frame's, shifted down
+        rows = len(editor.banner_lines(FULL_SLOTS, 120)) + 2
+        auto = lines(frame(120, 55))
+        forced = lines(frame(120, 55, banner=False))
+        self.assertEqual(auto[rows:], forced[2:])
+
+    def test_the_banner_shifts_the_hit_map_with_the_frame(self):
+        # every hit moves down by the banner's rows and still lands on
+        # the `>` marker the frame paints for its slot — a click must aim
+        # where the swatch went, not where it was
+        shift = len(editor.banner_lines(FULL_SLOTS, 120))
+        plain = {hit.slot: hit
+                 for hit in editor.frame_hits(120, 55, use_banner=False)}
+        raised = editor.frame_hits(120, 55)
+        self.assertEqual(len(plain), len(raised))
+        for hit in raised:
+            with self.subTest(slot=hit.slot):
+                twin = plain[hit.slot]
+                self.assertEqual((hit.x0, hit.x1), (twin.x0, twin.x1))
+                self.assertEqual(hit.y, twin.y + shift)
+                marked = _rows(120, 55, hit.slot)
+                self.assertEqual(marked[hit.y][hit.x0 + 1:hit.x0 + 2], ">")
 
     def test_a_fold_never_splits_a_key_from_its_label(self):
         # the hint row is painted a token at a time; the fold lands between
