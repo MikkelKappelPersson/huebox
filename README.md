@@ -30,7 +30,7 @@ read from.
 ```sh
 git clone https://github.com/MikkelKappelPersson/huebox
 cd huebox
-pipx install .          # or: pip install --user .
+uv tool install .     # or: pipx install . / pip install --user .
 ```
 
 Two dependencies beyond the stdlib, both installed automatically: [Pygments](https://pygments.org),
