@@ -1,6 +1,6 @@
 # huebox — specification
 
-Status: **living draft** · Format version: **1** · Last updated: 2026-10-02
+Status: **living draft** · Format version: **1** · Last updated: 2026-10-16
 
 This is the working spec for huebox. It is a single living document: edit it in
 place as the tool changes, and move it to `docs/002-spec/spec.md` only when the
@@ -9,12 +9,12 @@ colour model or the file contract changes in a way that breaks existing configs.
 §§1–12 describe v1 as built. §§13–16 are the plan: the theme library, staged
 editing with live examples, and a responsive layout.
 
-`textual-migration.md` is a separate proposal: replacing the hand-rolled
-terminal I/O and draw loop with Textual, under a cell-for-cell colour
-equivalence harness. It is **not** a format change and does not move this
-document to `docs/002-spec/`; it is cited from here for the rendering
-guarantees it must preserve (§8.2, §14.1) and the §9 dependency rule it would
-amend.
+`textual-migration.md` was the proposal to replace the hand-rolled terminal
+I/O and draw loop with Textual, under a cell-for-cell colour equivalence
+harness. It **landed** (merged to `main` as the editor under Textual's
+compositor), and it is still not a format change, so this document stays at
+`docs/001-spec/`. It is cited from here for the rendering guarantees it
+preserves (§8.2, §14.1) and for §4.3.2, which it made possible.
 
 Everything marked `TODO` is a decision we have not made yet — unless a `>` note
 directly below it records the answer, which is how a closed one stays closed
@@ -130,31 +130,93 @@ the frame and the keys (§15.2), so what is drawn and what the arrows step
 through cannot disagree — including across a resize, where the selection
 follows the new layout.
 
-**Raw-mode guarantee.** A session enters raw mode exactly once, in `edit()`,
-before its draw loop, and leaves it exactly once, in the `finally` that wraps
-that loop. The paths out of raw mode are therefore all the same path:
+**Terminal-mode guarantee.** huebox no longer puts the terminal into raw mode
+itself. A session runs as a Textual application, and Textual owns raw mode,
+resize, input decoding and the alternate screen; huebox owns only what it
+draws. So the guarantee is one-sided and easier to state than the one it
+replaces: **every path out of the session restores the terminal**, because
+there is only one owner and it restores on the way down.
 
-1. the loop's `finally` on a clean quit (`Esc`, `Q`, `Ctrl+C`);
-2. the same, after an armed dirty quit discarded the buffer;
-3. a prompt — hex entry (`i` / `X`), the picker's name prompt (`n`, `N`) and
-   its exists-confirm follow-up — each of which drops out of raw mode for one
-   line and re-enters it in its own `finally`;
-4. any exception out of the draw, the key reader or a handler.
+The paths out are a clean quit (`Esc`, `Q`, `Ctrl+C`), the same after an
+armed dirty quit discarded the buffer, a prompt — hex entry (`i` / `X`), the
+picker's name prompt (`n`, `N`) and its exists-confirm follow-up — and any
+exception out of a handler. A prompt is a suspend and re-enter of the whole
+application rather than a termios save/restore pair, so there is no longer a
+window in which the terminal is half-configured, and a prompt cancelled with
+`Ctrl+C` or EOF returns to the editor rather than stranding the session. Only
+`SIGKILL`, or a terminal that goes away underneath the process, can leave a
+shell without echo.
 
-The theme picker never leaves raw mode: it is drawn and read inside the same
-loop, so opening it is not a fourth path.
+### 4.3.2 The mouse
 
-`exit_raw` in that `finally` restores the termios state saved by the *most
-recent* `enter_raw`, which matters because every prompt has closed and reopened
-the pair since the session started. A prompt cancelled with `Ctrl+C` or EOF
-returns to the editor rather than stranding the session, and each exit is
-paired with an enter. The `SIGWINCH` handler (§15.1) is installed after
-entering raw mode and restored in the same `finally`, in a nested block that
-runs even if restoring the terminal itself fails — no path leaves a user with a
-raw shell or with huebox's resize handler still installed. `Ctrl+C` needs no
-signal handling at all: raw mode clears `ISIG`, so it arrives as byte `0x03`
-and takes the Esc path. Only `SIGKILL`, or a terminal that goes away
-underneath the process, can leave a shell without echo.
+Every key in §4.3 still works, and every one of them still means what this
+document says it means. The mouse is an **alternative way to point at
+something already on the frame**, never a second model of what a frame means
+(decision 30). That is the whole rule, and it is why the mouse can be described
+in one table instead of a section of its own semantics.
+
+| Pointer | Action |
+| --- | --- |
+| click a palette swatch or an interface cell | select that slot — exactly what the arrows do, including §4.3.1's geometry |
+| click a picker row | move the selection there and open it — exactly what `↓` then `Enter` do |
+| wheel over the picker | move the selection up or down one row, so the window follows (§13.7) |
+| drag across the live code sample or the live diff | select that text, so it can be copied |
+
+Three things that are deliberately **not** true:
+
+- **Clicking the chrome does nothing.** The header, the readings, the hints and
+  the air between widgets are not controls. A click that lands on no cell is
+  not an error and does not move the selection: making the whole frame a form
+  would mean every click did *something*, and the ones that do nothing would
+  be indistinguishable from the ones that change a colour.
+- **The wheel does nothing in the editor.** Only the picker scrolls, because
+  only the picker has a window (§13.7). A wheel notch that moved the colour
+  frame would be read as having changed the colours.
+- **Nothing is hovered, pressed or highlighted on its own.** There is no hover
+  state and no click animation. A frame that repaints under the pointer is
+  indistinguishable from one that is repainting for another reason, and the
+  selection marker `>` already says where the selection is.
+
+**A click resolves through the same key surface as the keyboard.** Clicking a
+picker row moves the selection and then does what `Enter` does — the same
+call, not a second implementation of it — so the two cannot disagree about
+what a theme is or about what happens to a dirty buffer. And a click can only
+ever land on a cell the frame itself published: the frame announces its
+clickable cells as it paints them, rather than a second copy of the layout
+computing them afterwards. A second description of the layout is a second
+chance to point a click at the wrong cell, and the failure is silent — the
+wrong colour changes, and nothing says so.
+
+**Focus follows the selection.** The two grids are one logical control split
+across two rows of the frame, so whichever grid holds the selected cell has
+focus, and walking the selection out of the palette moves focus into the
+interface grid. Two consequences follow from the same rule, and both are about
+not stranding the user:
+
+- The **picker takes focus** while it is up (§13.7). Focus left on a grid
+  underneath would let an arrow move the *colour* selection behind a list the
+  user is reading.
+- A frame too short to show the selected slot **drops focus entirely**, and
+  the keys are handled by the session instead. A short frame can show twelve
+  of the twenty-two slots (40x12), and a selection below the fold must still
+  be movable, or the frame would trap the user on the slots it can show.
+
+**The frame never scrolls.** §15 lays the blocks out to fill the window
+exactly, and the screen is told it cannot scroll, so a wheel notch cannot move
+it. That is not tidiness: a scroll offset exposes cells that were painted for a
+window that no longer exists, and nothing repaints them because nothing
+believes they changed — which a user sees as a stale header above the real one.
+
+**Text selection is the exception, and it is bounded** (decision 31). The code
+sample and the live diff are the only blocks whose text can be taken away,
+because those
+are the two whose purpose is that the text leaves the editor — sample a
+colour, copy the hex, paste the new value. Everything else in the frame is
+inert to a drag: a swatch that began a text selection when clicked would
+swallow the click that selects a colour. A selection is painted in the theme's
+own `selection-background` and `selection-foreground`, the same pair the picker
+marks a theme with, so it reads as part of the theme rather than as a colour
+from somewhere else.
 
 ## 5. Colour model
 
@@ -316,6 +378,15 @@ config path is ambiguous between formats?
   it.
 - Layout must hold in narrow terminals; `pack()` and `clip()` guarantee nothing
   overflows and nothing wraps badly.
+- The editor runs under a compositor huebox does not control (§4.3.1,
+  decision 29), so the frame's colours are a **contract, not an
+  implementation detail**: every colour the editor paints must be a slot, and
+  a cell must never show the terminal's background. Both are enforced against
+  a recorded reference rather than asserted from the code that produces them
+  (§10, I1 and I2). The code sample and the live diff are the two blocks whose
+  text can be selected (§4.3.2), and a selection is painted in the theme's own
+  `selection-background` / `selection-foreground` — the same pair the picker
+  marks a theme with.
 
 **How much of the palette the sample shows.** The sample is a sample, not a
 swatch grid: it paints what a zig lexer can actually tell apart, and the
@@ -511,10 +582,10 @@ install line and exit 1, never a traceback (AGENTS.md). The editor declares
 what it needs in `editor.REQUIRES` and `cli` reads that, so the two cannot
 drift.
 
-> The `editor` group is **empty of effect until the Textual migration's phase
-> 3** (`textual-migration.md` §10), because the editor is still the stdlib one.
-> Declaring it early would break `huebox edit` on a bare install for no reason;
-> the guard is built and tested now, and the name is added when it is true.
+> The `editor` group is now **in effect**: `huebox edit` runs on Textual, and
+> `show`, `list`, `use`, `new`, `import` and `--dump` still install one
+> dependency and need no extra. The guard built ahead of the migration is what
+> made that split a single decision rather than a release.
 
 ## 10. Testing
 
@@ -539,6 +610,35 @@ drift.
 - the theme picker frame at the same sizes, including a library larger than
   the screen (it scrolls), and the picker flows at the key level: open,
   move, open, blocked-while-dirty, new-from-buffer, save-as-new (§13.7)
+- the mouse, at the same level of detail as the keys it mirrors: a click on
+  each clickable cell type, a click on the chrome doing nothing, a click and
+  an arrow reaching the same frame, the picker click resolving to what `Enter`
+  does, the wheel moving the picker and nothing else, and a selection over the
+  sample or diff yielding text and painting only theme colours (§4.3.2)
+
+**Colour equivalence (the migration's harness, and why it stays).** The
+editor runs under a compositor that huebox does not control, so "the frame is
+unchanged" is not something the unit tests above can say. Two checks say it,
+and both are part of `discover` rather than an optional extra:
+
+- **I1 — the frame is the golden frame, cell for cell.** Goldens are captured
+  from the pre-migration editor and compared against the running application
+  launched in a pty, read back through a VT emulator. Every glyph, every
+  foreground, every background and every attribute, at every size and fixture.
+- **I2 — closure.** Every colour on screen must be one the reference painted,
+  and no cell may show the terminal's background. This is what catches a
+  widget reaching for a framework default instead of a theme slot, which is the
+  failure mode a compositor swap actually has.
+
+Both are recorded before the migration and never regenerate themselves: a
+missing golden is a test failure, not a silent re-record. Re-recording one is a
+reviewed change, and two have been — a picker's trailing-newline defect and a
+harness value no real session could produce — each one a defect the harness
+found rather than a change it accepted.
+
+The lesson recorded from both is worth keeping: **the harness has to be able
+to disagree with the product, and it is worth proving it can.** A comparison
+that has never failed proves nothing about a change that has not happened.
 
 **TODO — the gaps.** Add explicit cases for: `config-file` includes, `theme =`
 indirection, inline Alacritty tables, malformed hex input, and a read-only or
@@ -557,9 +657,9 @@ unwritable config.
 Collected, unsorted. Theme-library, staged-save and resize questions live with
 their sections (§§13–15); this list is v1-only:
 
-1. Raw-mode restoration and signal handling (§4.3) — **decided**: the
-   guarantee in §4.3 (one enter/exit pair per session, prompts close and
-   reopen it, the resize handler is restored in the same `finally`).
+1. Terminal-mode restoration and signal handling (§4.3) — **decided**: the
+   guarantee in §4.3.1. huebox owns neither any more — Textual restores the
+   terminal on every path out, and huebox owns only what it draws.
 2. Accumulated drift from HSV round-trips (§5.1) — **answered at 0.2**: the
    buffer stores hex, so nothing accumulates between keystrokes; the residue
    is quantisation, not drift.
@@ -591,7 +691,7 @@ Append-only. Newest last. One line per decision, with the reason.
 | 8 | Staged editing: buffer renders live, files change only on Ctrl+S | Live-everywhere preview without churning the config per keystroke |
 | 9 | Push reuses the line-level writers, safety contract unchanged | One write path, one guarantee |
 | 10 | A dirty Esc needs a second Esc to discard | No silent loss, no modal prompt inside raw mode |
-| 11 | Resize = SIGWINCH flag + select-timeout wake + full redraw from live size | Follows the terminal without polling or restructuring input parsing |
+| 11 | ~~Resize = SIGWINCH flag + select-timeout wake + full redraw from live size~~ — **superseded by decision 29** | The approach was right for a hand-rolled read loop and became moot when the editor stopped owning one: a compositor delivers a resize as an event, and a signal plus a polling timeout is not a thing that can be handed back a real driver's behaviour |
 | 12 | Switching themes is blocked while the buffer is dirty | Choosing a theme must never silently drop edits |
 | 13 | `huebox.py` becomes package `huebox/`, one module per spec area (§17) | The theme library needs somewhere maintainable to live; split first, behaviour-neutral |
 | 14 | AGENTS.md owns architecture + guidelines; the spec owns behaviour | Keeps “what” and “how” in the doc each reader reaches for |
@@ -609,6 +709,9 @@ Append-only. Newest last. One line per decision, with the reason.
 | 26 | A Ghostty save is exported as that theme's own file whenever the config is organised by theme; the invariant is *a theme's colours never land in a file that belongs to another theme*, and `--ghostty-in-place` cannot break it. A `theme =` naming a file that is missing is a broken chain, so a save repairs it by exporting that theme | Decision 22 assumed the in-place path was name-blind but harmless. It is neither: with `theme = Nightspice` in the config, saving theme `test` wrote `test`'s colours into `themes/Nightspice`, so the terminal changed and the theme's name became a lie, and the next save of the real Nightspice overwrote it. The one line a `theme =` swap moves is visible, reversible and reported; silently re-badging somebody else's theme file is not. Where the colours are inline or in an include there is no theme name in play, so the edit stays in place and nobody's layout changes. The dangling case follows from the same reasoning: a pointer to a file that is not there is not a colourless config, it is a config in the state Ghostty itself calls an error |
 | 27 | A push that succeeded ends with the terminal reloading its config, and opening a theme in the picker is a save — so choosing a theme is choosing it for the terminal too | A push that has to be followed by a keypress is a half-finished action: the user asked for the colours to change, and the report saying "now press ctrl+shift+," is huebox telling them to finish its work. The reload is last, best effort and never load-bearing, and each terminal is asked through the interface it actually has (ghostty: the `SIGUSR2` its own application handles; kitty: `kitty @ load-config`), so there is nothing to configure. Opening a theme in the picker already writes `state.toml` — "opening is choosing" (§13.4) — so the push belongs in the same gesture; a theme you picked and then had to press `Ctrl+S` for was a half-picked theme |
 | 28 | The git diff is its own live widget, not a second language inside the code sample, and it is drawn only out of rows the sample did not need | The sample's job is to spend the zig lexer's whole vocabulary (§8); a diff has no lexer, so folding one in would cost the sample half of what it demonstrates. Standing alone it spends the two slots nothing else could — the red and green — and it fills spare rows rather than taking them: the sample is the widget the editor exists to show, and a frame too short for both is exactly the frame that was there before the diff existed |
+| 29 | The editor runs as a Textual application: Textual owns raw mode, resize and input decoding, and huebox's guarantee narrows to *every path out of the session restores the terminal* | A terminal driver has to get `SIGWINCH`, escape-sequence decoding and an interrupted read right, and huebox had been re-implementing all three on top of `termios`. Owning less is what makes the guarantee hold: there is one owner and it restores on the way down, so the prompt path — which used to be a termios save/restore pair, and therefore a window in which the terminal was half-configured — is now a suspend and re-enter of the whole application. The frame is drawn after the compositor's next refresh rather than inside the resize event, because a resize event fires before the new size is applied and a frame drawn there is laid out for the window the user just left |
+| 30 | The mouse points at things already on the frame; it never adds a meaning. A click resolves through the same key surface as the keyboard, and a cell is clickable only if the frame published it while painting | Every mouse affordance is a second way to do something the keys already do, and the cost of a second model is that the two can disagree about what happened. Clicking a picker row moves the selection and then does what `Enter` does, so it cannot open a theme the keyboard would have refused; the same reasoning keeps `move_slot` as the only implementation of the arrows. The cells themselves come from the frame that painted them rather than from a layout recomputed afterwards, because a second description of the layout points clicks at the wrong cell *silently* — the wrong colour changes and nothing says so. Three things are deliberately absent: clicking the chrome does nothing (a frame where every click does something cannot distinguish the ones that change a colour), there are no hover or press states (a frame that repaints under the pointer is indistinguishable from one repainting for another reason), and the wheel does nothing outside the picker (only the picker has a window, and a wheel notch that moved the colour frame would read as having changed the colours) |
+| 31 | Only the code sample and the live diff are selectable; a selection is painted in the theme's own selection slots | Those two blocks exist so their text can leave the editor — sample a colour, copy the hex, paste the new value. Every other block is inert to a drag, because a swatch that began a text selection when clicked would swallow the click that selects a colour, and the failure is invisible: the selection just looks like nothing happened. The selection style is bound to `selection-background`/`selection-foreground`, the pair the picker already marks a theme with, so a selection reads as part of the theme instead of as a colour from somewhere else |
 
 ---
 
@@ -752,7 +855,7 @@ plus exit 1, never a rolled-back truth.
 
 As built: a push returns report lines, not an exit code, and the caller
 routes them. The editor prints them on stderr after the session (never
-inside the raw-mode loop) and the status bar carries the one-line verdict,
+from inside the draw) and the status bar carries the one-line verdict,
 `saved ember → ghostty`; `use` prints them on stderr and exits 1 if any
 target failed. A push never rolls the truth file back, so a failed push
 leaves a saved theme and a failing exit code — fix the target and press
@@ -856,7 +959,8 @@ The export as built:
 ### 13.7 TUI theme switching
 
 - `t` opens a theme overlay: arrows + Enter to open, `n` for new (name via
-  the same prompt trick as `i`), `Esc` back.
+  the same prompt trick as `i`), `Esc` back. The mouse reaches the same
+  places: a click on a row opens it, the wheel walks the list (§4.3.2).
 - **Enter is a save, not a peek** (decision 27): opening a theme runs the
   ordinary save path, so the truth file is written, the theme is pushed and
   the terminal is reloaded. Opening already wrote `state.toml` (§13.4), so
@@ -882,7 +986,16 @@ As built:
   whole key surface: arrows move the selection, `Enter` opens, `n` creates
   from the buffer, `Esc` / `t` / `Q` / `Ctrl+C` all just put the editor back.
   No colour edit, no save and no quit can happen behind a list the user is
-  reading.
+  reading. It takes **focus** for the same reason (§4.3.2): with focus on a
+  grid underneath, an arrow would move the colour selection behind the list.
+- **The window is a function of the selection.** A library longer than the
+  window shows `8-26 of 34` and the window is centred on the selected row, so
+  moving the selection is what scrolls. The wheel moves the selection rather
+  than the viewport, which is the same thing here: a viewport that moved on
+  its own would move that counter, and the counter is the only indication the
+  user has of where they are in a list longer than the screen. There is no
+  scrollbar — the counter is the scrollbar, and a themed one would spend
+  colours the theme does not have.
 - **Opening a theme resets the session around it**: the buffer becomes the
   loaded colours, `saved` is that same snapshot (so the new theme is clean),
   the undo log is empty, the selection starts at slot 0, and the pending-discard
@@ -916,7 +1029,7 @@ As built:
   hand-written theme's dropped keys and grey gaps (§13.2), a creation whose
   theme file or state write failed, and a `--to` named in a legacy direct
   session where it has no push target. All of it is stderr,
-  after raw mode is over, exactly like the push report (§13.6).
+  after the session is over, exactly like the push report (§13.6).
 
 ### 13.8 Open questions (§13)
 
@@ -998,8 +1111,9 @@ span emphasised; that is the whole comparison.
   get no `.bak` — huebox owns them (history/versioning is an open question).
 - Esc with a clean buffer quits. Esc with a dirty buffer arms
   `unsaved changes — Esc again to discard`; the second Esc discards. Ctrl+C
-  follows the Esc path; during a prompt it cancels the prompt (raw-mode
-  restoration is the guarantee in §4.3). A write failure surfaces as
+  follows the Esc path; during a prompt it cancels the prompt (the terminal
+  is restored by the session on the way out — §4.3.1). A write failure
+  surfaces as
   `write failed: …` in the status bar and leaves the buffer dirty — `saved`
   is never snapshot on a failed write.
 - `--dump` and `show` read saved files only. The buffer lives and dies inside
@@ -1055,31 +1169,36 @@ diff's clothes (§3, non-goals).
 
 ## 15. Responsive layout — the plan
 
-What exists: `term_size()` already queries the live size every call and the
-editor already full-redraws every keypress. What is missing: while blocked in
-`read_key` a resize produces a stale frame until the next keypress, and there
-is no small-size story.
+What exists: layout is computed from the live size every frame, and the frame
+redraws on a resize with no input. **Item 1 is done and no longer ours**: the
+editor runs as a Textual application, so the compositor owns `SIGWINCH`, the
+input loop and the resize itself. huebox is told the new size and re-derives
+the frame from it, which is item 2's rule and nothing more. What is left is
+the small-size story and anything below that needs it.
 
-1. SIGWINCH sets a dirty flag; `read_key` is restructured around `select()`
-   with a short timeout (~0.1 s) so the loop wakes, sees the flag and redraws
-   — resize follows within a frame even with no input. Byte-at-a-time escape
-   parsing semantics are preserved. A SIGWINCH landing *mid-sequence* raises
-   the flag but does not break the sequence: PEP 475 retries the interrupted
-   `os.read` automatically, so parsing continues and the redraw happens at
-   the next idle tick.
+1. ~~Resize is `SIGWINCH` + a `select()` timeout so a blocked read can wake.~~
+   **Done, by Textual** (superseded by decision 29): a resize arrives as a
+   compositor resize event rather than a signal and a flag, and it is not
+   something a hand-rolled read loop can be given back. The one thing huebox
+   still owns is *when* to re-derive: a resize event fires before the
+   compositor has applied the new size, so drawing inside it lays the frame
+   out for the window the user just left. The frame is drawn after the
+   compositor's next refresh, when the two agree.
 2. Layout is computed from the current (cols, rows) every frame. No cached
    coordinates survive across frames. The frame's grid — how many swatches
    and interface cells fit to a row — is part of that per-frame computation
    and is handed to the arrow keys along with the draw (§4.3.1), so the
-   selection and the layout are one calculation, not two that can drift.
+   selection and the layout are one calculation, not two that can drift. The
+   frame also reports where its blocks landed, so each block is a widget
+   placed where the frame decided rather than a layout computed a second time.
 3. `pack()` / `clip()` remain the only width-sensitive primitives; every new
    widget (examples strip, theme overlay) must go through them. Both measure
    display columns with SGR escapes left out (`visible()`, §8.1), so a widget
    may hand `pack` painted items and the fold still lands between them.
 4. Below a minimum size, render a centered
    `terminal too small — need WxH` screen instead of garbling.
-   **`MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in `tui.py`
-   beside `term_size()`. Phase 1 proposed these numbers and left them
+   **`MIN_COLS = 40`, `MIN_ROWS = 12`** — the constants live in `render.py`
+   beside the layout they bound. Phase 1 proposed these numbers and left them
    tunable "until the theme picker lands"; phase 5 kept them, because the
    picker is not the wide widget it was feared to be: it replaces the frame
    rather than insetting a box (decision 19), its widest row is a name that
@@ -1167,8 +1286,11 @@ huebox/                the package (replaces huebox.py)
   detect.py            §7
   themes.py            §13 (created with the library)
   render.py            §8 + §14 gallery
-  tui.py               §15
-  editor.py            §4.3 + §14
+  tui.py               §15 — `term_size()` alone; raw mode, the key reader and
+                       the resize handler are Textual's (decision 29)
+  editor.py            §4.3 + §14 — the session state and the frame
+  app.py               §4.3.2 — the Textual shell: the frame as widgets, the
+                       keys, the mouse (the `editor` extra, §9)
 tests/                 test_<module>.py per module, via `unittest discover`
 AGENTS.md              architecture + guidelines (repo root, living doc)
 ```
