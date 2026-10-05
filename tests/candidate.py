@@ -100,10 +100,13 @@ def capture_picker(fixture, cols, rows, picker="long", depth="truecolor",
     paints the picker frame before its first draw, so the capture is a settled
     screen with the picker up rather than a keypress timed against a race.
     """
-    # `HUEBOX_PANELS` changes the bytes (borders): same key without it would
-    # hand I1's bare capture to I2's panelled check, or the reverse.
+    # `HUEBOX_PANELS` and `HUEBOX_COLLAPSIBLE` both change the bytes
+    # (borders / collapsible headers): same key without them would hand I1's
+    # bare capture to I2's product check, or the reverse.
     panels = os.environ.get("HUEBOX_PANELS", "1")
-    key = ("picker", fixture, cols, rows, picker, depth, status, panels)
+    collapsible = os.environ.get("HUEBOX_COLLAPSIBLE", "1")
+    key = ("picker", fixture, cols, rows, picker, depth, status, panels,
+           collapsible)
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, 0, depth,
                              picker=picker, status=status)
@@ -117,10 +120,12 @@ def capture(fixture, cols, rows, sel=0, depth="truecolor"):
     Memoised per `(fixture, cols, rows, sel, depth)`. Pass `fresh=True` to force
     a new process.
     """
-    # `HUEBOX_PANELS` changes the bytes (borders): I1 pins bare (`0`) while
-    # I2 runs product panels, so the key must tell them apart.
+    # `HUEBOX_PANELS` and `HUEBOX_COLLAPSIBLE` both change the bytes
+    # (borders / headers): I1 pins bare (`0`) while I2 runs product, so the
+    # key must tell them apart.
     panels = os.environ.get("HUEBOX_PANELS", "1")
-    key = (fixture, cols, rows, sel, depth, panels)
+    collapsible = os.environ.get("HUEBOX_COLLAPSIBLE", "1")
+    key = (fixture, cols, rows, sel, depth, panels, collapsible)
     if key not in _CAPTURES:
         data, _ = run_in_pty(fixture, cols, rows, sel, depth)
         _CAPTURES[key] = frame_bytes(data)
