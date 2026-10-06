@@ -38,6 +38,13 @@ afterwards, add that directory to your `PATH` (e.g. at the end of
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+To use it in the terminal you already have open, reload the config
+instead of restarting it:
+
+```sh
+source ~/.bashrc
+```
+
 Beyond the stdlib it needs [Pygments](https://pygments.org) (the code
 sample) and [Textual](https://textual.textualize.io/) (the editor), both
 installed automatically.
