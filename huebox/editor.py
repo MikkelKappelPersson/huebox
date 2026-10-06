@@ -649,7 +649,7 @@ def top_meta_rows(label, path, slots, sel):
 
 
 def top_editor_meta(label, path, slots, sel):
-    """Prototype helper for the bordered `editor` panel (`HUEBOX_EDITOR_PANEL=1`).
+    """Helper for the bordered `editor` panel (default; see `editor_panel_enabled`).
 
     The selected subject, its hex and the specimen all live in the editor
     box; metadata keeps only the theme. Returns `(meta_rows, head, meta_w)`
@@ -681,13 +681,24 @@ def top_editor_meta(label, path, slots, sel):
     return rows, [combined, ""], meta_w
 
 
+def top_split_enabled() -> bool:
+    """Whether the readout splits metadata | one HSV axis per row.
+
+    Default on: each of the three rows is `[metadata | one HSV axis]`, so
+    the three bars share one width and the row count does not move.
+    `HUEBOX_TOP_NEW=0` opts back out to the single-line readout (one row
+    with all three bars), which the tests pin where they assert it.
+    """
+    return os.environ.get("HUEBOX_TOP_NEW", "1") != "0"
+
+
 def top_right_panel_rows_split(label, path, slots, sel, right_w):
-    """Prototype: metadata left, three equal HSV bars right (`HUEBOX_TOP_NEW=1`).
+    """Metadata left, three equal HSV bars right (default; see `top_split_enabled`).
 
     Same three rows `top_right_panel_rows` paints, re-partitioned: each row
     is `[metadata | one HSV axis]`, so the three bars share one width and
     the row count does not move. Returns `None` where even a minimal bar
-    does not fit — the caller keeps the current single-line readout.
+    does not fit — the caller keeps the single-line readout.
     """
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
@@ -717,7 +728,7 @@ def top_right_panel_rows(label, path, slots, sel, right_w):
     implementation of what the readout says, asked from two layouts, the
     same hoist as `swatch_cell` for the side pairs.
     """
-    if os.environ.get("HUEBOX_TOP_NEW", "0") == "1":
+    if top_split_enabled():
         split = top_right_panel_rows_split(label, path, slots, sel,
                                             right_w)
         if split is not None:

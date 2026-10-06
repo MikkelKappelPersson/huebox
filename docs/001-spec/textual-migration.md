@@ -9,8 +9,8 @@ way that breaks existing configs; this migration changes neither — the 22
 slots (§5) and the line-level write contract (§6.2) are untouched — so it lives
 here and is cited by section.
 
-The deal this document makes: **Textual may own the screen, and not one cell
-of the frame may change colour.** Everything below exists to make that claim
+The deal this document makes: **Textual may own the screen, and no colour
+may appear that the theme did not paint.** Everything below exists to make that claim
 testable rather than aspirational, because it is the one promise worth
 breaking huebox over, and the one a migration breaks silently if left
 unwatched.
@@ -45,10 +45,8 @@ compositor — and the compositor is the risk, not the widgets.
 
 ## 2. Goals
 
-1. **Colour equivalence.** For every fixture and size, the migrated editor's
-   cell grid equals today's, cell for cell (§4.1).
-2. **Closure.** No colour appears in the frame that is not one of the theme's
-   own 22 slots (§4.2).
+1. **Closure.** No colour appears in the frame that the reference did not
+   paint, and no cell shows the terminal's background (§4.2).
 3. Mouse: click a swatch to select it, click a picker row to open it, scroll a
    list longer than the screen.
 4. Polished layout: panels, borders, focus rings — all painted in theme slots.
@@ -66,55 +64,34 @@ compositor — and the compositor is the risk, not the widgets.
 - Reflowing the layout. Textual's CSS layout is deliberately **not** used to
   lay out the frame in phase A; see §5.5.
 
-## 4. The invariant — colours 1:1
+## 4. The invariant — no new colours
 
 The whole migration is governed by one harness. If it is not understood and
 built first, nothing else in this document is safe to attempt.
 
-### 4.1 I1 — equivalence
+### 4.1 Fidelity — the candidate paints what the editor wrote
 
-For a fixture `(slots, cols, rows, sel, mult, head, status)`, two cell grids
-are produced and compared:
+For a fixture `(slots, cols, rows, sel)`, two cell grids are produced and
+compared, both parsed through `pyte` as a terminal would parse them:
 
-- **Reference.** Today's code: `render` rows → the exact SGR string they emit
-  today → fed to a `pyte.Screen`. No framework, no terminal, no Textual.
-- **Candidate.** The migrated app, run headless in a pty, its captured byte
-  stream → `pyte.Screen`.
+- **Reference.** Captured live on every run: `draw_editor`'s rows, no
+  framework, no terminal, no Textual.
+- **Candidate.** The app, held bare and run in a pty, its captured byte
+  stream replayed into the settled screen.
 
-Both grids are compared cell for cell over `char`, `fg`, `bg`, `bold`,
-`reverse`. `pyte.screens.Char` is a NamedTuple with exactly these fields and
-normalises every colour to a 6-hex-digit string or the sentinel `'default'`,
-so the comparison is apples-to-apples across encoding.
-
-`I1 holds` ⟺ the two grids are equal across the frame region.
-
-**The frame region is declared, never inferred.** Two traps, both found by
-running the harness before writing it:
-
-- `pyte`'s `Screen.buffer` is a sparse `defaultdict` keyed by row, and huebox's
-  `\033[2J` (`editor.py:276`) **registers erased rows as present-and-default**.
-  At 120x50 that put rows 39–49 in the buffer, which a "rows present" derivation
-  would have mistaken for frame and failed on 1320 cells that are correctly the
-  terminal's own.
-- Deriving the region from the *painted extent* instead would be circular — I2
-  would be checking its own premise.
-
-So the harness takes the region from the **reference side's own geometry**: the
-number of rows `render.py` emitted (the length of the row list behind
-`"\r\n".join(...)`) times the fixture's `cols`. That is independent of both
-grids under comparison, so I2 stays falsifiable. The harness separately
-asserts that the candidate's painted extent equals the declared region, which
-is what catches a migrated app that paints short.
-
-Measured frame height is `min(rows - 1, 39)` — it fills the screen at 80x24
-(23 rows) and 100x40 (39 rows), and stops at 39 in a 50-row terminal, leaving
-rows 39–49 to the terminal per §8.2.
+The grids must be equal cell for cell over `char`, `fg`, `bg` and attrs.
+The frame region is declared from the reference's own geometry — its emitted
+row count times the fixture's `cols` — never inferred from the painted extent,
+which would be the check verifying its own premise. There
+is deliberately no recorded file between them: the comparison proves the
+compositor is faithful, and frame *correctness* is asserted where the bytes
+are produced (`test_render`, `test_editor`). A frozen golden would conflate
+the two — and, as §4.8 showed, can end up enforcing the bug it was meant to
+catch.
 
 ### 4.2 I2 — closure
 
-`I1` alone cannot see a colour that Textual introduced in a place today's frame
-happens to agree with, nor one that only differs in a widget the fixture does
-not reach. So a second, independent invariant:
+The invariant:
 
 > **I2.** No cell in the frame region has a `bg` of `'default'`, and every
 > non-`'default'` `fg` and `bg` in it is a member of the **declared closure
@@ -149,13 +126,11 @@ The `bg == 'default'` half is §8.2 stated mechanically. It holds at every
 measured size with **zero** violations, which makes it a free regression guard
 for the property the migration is most likely to break.
 
-Together: I1 says *we did not change*; I2 says *nothing new leaked in*. A
-migration that passes both has not altered the frame and has not smuggled a
-fourth colour source past it.
+Together: I2 says *nothing new leaked in*.
 
-### 4.3 Where `I1` is asserted
+### 4.3 Fixtures
 
-`tests/test_equivalence.py`, against fixtures in `tests/harness.py`. Three, each
+`tests/harness.py` holds three fixtures, each
 for a reason rather than for coverage:
 
 - **`distinct`** — twelve distinct hues plus the six named slots, so no two
@@ -173,26 +148,12 @@ At the four §10 sizes, and with the selection walked to `sel=0` and `sel=21` �
 the first and last of the 22 slots (§5), the two moves that would repaint the
 wrong cell.
 
-### 4.4 Goldens — capture before touching anything
-
-The reference side must be **frozen**, or the two sides can drift together and
-the comparison stays green while the frame changes underneath it.
-
-Phase 0 therefore commits `tests/golden/<size>/<fixture>.json` — the reference
-grid, cell for cell — generated by today's code before a single line of the
-migration exists. From then on I1 asserts *candidate == golden*, not
-*candidate == reference*. Regenerating a golden is a spec change, reviewed as
-one, and the diff of the golden is the review artefact: a frame change shows up
-as a literal list of changed cells with their old and new colours.
-
-This is the mechanism that makes the migration reviewable. Without it, "the
-tests pass" is not evidence of anything.
 
 ### 4.5 Depth probe — the 256-colour blind spot
 
 `pyte` normalises `38;5;196` and `38;2;255;0;0` to the same hex. So a Textual
-widget that quietly degrades to the 256-colour palette is **invisible** to I1
-and I2 — on a truecolor terminal the two are indistinguishable, and the frame
+widget that quietly degrades to the 256-colour palette is **hard to see**
+— on a truecolor terminal the two are indistinguishable, and the frame
 looks correct until someone runs over SSH on a 256-colour host.
 
 **Confirmed, with the mechanism, against Textual 8.2.8.** The same phase-A app
@@ -209,9 +170,9 @@ the environment **at import time** (`textual.constants.COLOR_SYSTEM`, default
 `auto`), so it cannot be fixed inside the running app — it has to be pinned in
 the candidate's environment, and `auto` must never be what the harness sets.
 
-So every fixture runs **twice**, the candidate launched once at each depth, and
-both grids must equal the golden. The depth is set by the env, not by
-`COLORTERM` alone: `TEXTUAL_COLOR_SYSTEM` plus `TERM`/`COLORTERM` together.
+So every fixture runs at a pinned depth, the candidate launched with the
+environment in `color_depth_env`, and `auto` must never be what the harness sets.
+
 
 ### 4.6 What the harness cannot see
 
@@ -222,7 +183,7 @@ Stated plainly, so it is not over-trusted:
   (§8.1) is still the source of truth for width and keeps its own unit tests.
 - Anything outside the frame region. §8.2 leaves the terminal's own colours
   there by definition; the alt-screen change (§7.1) is asserted separately, not
-  by I1.
+  by the closure check.
 - Terminals whose own truecolor handling differs. Out of scope.
 
 ### 4.7 The measured baseline
@@ -255,14 +216,11 @@ because the formula had been fitted to a frame that had already lost a row to
 the §4.8 scroll. The height is now read from the reference's own output, and
 the test asserts *no rows lost* rather than a formula.
 
-Goldens are flat per-cell records, ~44 KB each and 524 KB in total for all
-twelve. Run-length encoding was tried and dropped: measured against the real
-frame it compressed nothing, because a row is full of SGR 0s and so no two
-neighbouring cells ever share all four fields.
+
 
 ### 4.8 A defect the harness found in huebox, not in Textual — fixed
 
-Phase 0's goldens came out off by one row at 80x24, and the harness turned out
+Phase 0's captures came out off by one row at 80x24, and the harness turned out
 to be right and the frame wrong.
 
 At any size where the renderer emitted as many rows as the terminal had, the
@@ -306,9 +264,11 @@ than by reading:
 - `tests/test_editor.py`'s `lines()` did `split("\r\n")[:-1]` with the comment
   *"the frame ends with a newline"* — now conditional on the trailing element
   being empty. An unconditional `[:-1]` would have silently dropped a real row.
-- The goldens are **re-recorded**, because the phase-0 set encoded the scrolled
-  frame. Left alone, I1 would have *enforced* the bug: a migrated editor would
-  have had to reproduce the missing wordmark to pass.
+- The recorded grids were **re-recorded**, because the phase-0 set encoded the scrolled
+  frame. Left alone, the equivalence check would have *enforced* the bug: a migrated editor would
+  have had to reproduce the missing wordmark to pass. (Both the goldens and that
+  check are removed since; what stays is `TestFrameGeometry`, asserting no rows
+  lost live on every run.)
 
 ## 5. Architecture
 
@@ -335,7 +295,7 @@ risk, and they are not at risk.
 1. **Per-row.** Today `draw_editor()` returns one string with cursor moves
    embedded (`editor.py:276`). Under Textual the compositor positions cells, so
    the frame must be consumable row by row. The painted bytes of each row are
-   **unchanged** — that is what I1 pins.
+   **unchanged** — that stability is what keeps the frame's bytes comparable.
 2. **`MIN_COLS`/`MIN_ROWS` move here** from `tui.py:12`. They are layout policy
    and `render.py` is the surviving pure module; the too-small hint
    (`editor.py:178`) is a rendering decision, not a terminal-I/O one.
@@ -389,36 +349,36 @@ Mouse is added by hit-testing the click against the grid geometry
 
 This is deliberately the *least* Textual-shaped version, and it is the right
 first step: it moves the compositor underneath the frame while keeping the
-frame's construction identical, so I1 has one variable at a time.
+frame's construction identical, so there is one variable at a time.
 
 ### 5.6 Phase B — decomposition, gated
 
 Only after A is byte-identical is the frame split into real widgets: palette
 grid, interface grid, code sample, examples strip, picker list. Each extraction
-lands as its own commit and must re-pass I1 and I2 before the next. A widget
+lands as its own commit and must re-pass I2 before the next. A widget
 that cannot be made theme-closed is not extracted.
 
-**I1 covered one frame of two.** Phase 4 found the gap the hard way: the
+**The frame was one of two.** Phase 4 found the gap the hard way: the
 picker's own frame is drawn by `theme_lines`, has its own windowing, and had
 been free to change without anything noticing. So before any widget work the
-picker was pinned the same way the frame was — 36 goldens, 3 scenarios × 3
-fixtures × 4 sizes, and I2's closure over them (`--record-picker`). The three
+picker was pinned the same way the frame was — 36 captures, 3 scenarios × 3
+fixtures × 4 sizes, and I2's closure over them. The three
 scenarios are chosen by what they can catch:
 
 | Scenario | Library | What it is for |
 | --- | --- | --- |
-| `short` | 3 themes, 7 rows | A picker **shorter** than the screen. The case a `ScrollView` gets wrong: a scrolling container fills its viewport, so the natural widget version paints sixteen rows of background where the golden has seven. Visually identical, and seven cells I1 will not forgive. |
+| `short` | 3 themes, 7 rows | A picker **shorter** than the screen. The case a `ScrollView` gets wrong: a scrolling container fills its viewport, so the natural widget version paints sixteen rows of background where the reference has seven. |
 | `edge` | 20 themes, exactly 24 rows at 80x24 | Fills the screen to the row — where a trailing newline scrolls. |
-| `long` | 34 themes, selection at `t25` | Overflows at every size, with the window partway down the list. A golden pinned to the top cannot tell a scroll from a no-scroll. The current theme is `t20` and the selection `t25`, so `*` and `>` are **different rows** — the case where a scrolling widget conflates "selected" with "current" and quietly opens the wrong theme. |
+| `long` | 34 themes, selection at `t25` | Overflows at every size, with the window partway down the list. A capture pinned to the top cannot tell a scroll from a no-scroll. The current theme is `t20` and the selection `t25`, so `*` and `>` are **different rows** — the case where a scrolling widget conflates "selected" with "current" and quietly opens the wrong theme. |
 
 Pinning it found a defect immediately. The overlay branch of `draw_editor`
 wrote its trailing CRLF unconditionally, so a picker that filled the screen
 scrolled the terminal and lost its top row — the `huebox  themes` header, at
 60x16 with 34 themes. Same defect as the editor frame's (phase 0, `4b239fe`),
 same fix: withhold the newline when the rows fill the screen. The picker
-goldens were recorded once before the fix, which captured the bug, and
-re-recorded after — the one legitimate §4.4 re-record, and it is why
-`test_the_header_survives_a_library_that_fills_the_screen` exists.
+captures were taken once before the fix, which captured the bug, and
+re-taken after — and it is why
+`test_the_picker_header_survives_a_library_that_fills_the_screen` exists.
 
 **What B actually buys, said honestly.** The frame is an absolute, static
 layout: nothing in it scrolls, and the only interactive thing in it is the
@@ -477,8 +437,8 @@ screenshot shows:
 And the colour is the theme's, because `TOKEN_SLOTS` now binds
 `screen-selection-*` to `selection-background` / `selection-foreground` — the
 same pair the picker marks a theme with. A selection in a theme editor that is
-not the theme's colour is the whole subject of §6.2, and I2 cannot see it: the
-goldens never have a selection down.
+not the theme's colour is the whole subject of §6.2, and I2 cannot see it: a
+capture never has a selection down.
 
 **One thing `ALLOW_SELECT = True` would have broken.** Textual makes *every*
 widget selectable by default and the screen checks the *app's* `ALLOW_SELECT`,
@@ -487,15 +447,15 @@ when clicked, and clicking a swatch is how a colour is selected. `Frame` turns
 it off and `Selectable` turns it on. The failure would have been silent: the
 selection looks like nothing happened.
 
-**And then the harness itself lied, twice.** See §7: I1 compares one frame
-against one golden and never sends a key, so a session built by the app — as
+**And then the harness itself lied, twice.** A frame comparison compares one frame
+and never sends a key, so a session built by the app — as
 opposed to one built by `EditorState`, which is what the headless suites drive
 — was never exercised at all. That gap hid a crash in every HSL key.
 
-**And a bug I1 was structurally unable to see.** `redraw` read the frame's
+**And a bug a frame comparison was structurally unable to see.** `redraw` read the frame's
 height from the compositor and `draw_editor` read it from the terminal: one
 number, two sources. The harness sets a pty's window size *before* launching,
-so the two always agreed there and no golden could disagree. On a resize they
+so the two always agreed there and no capture could disagree. On a resize they
 did not — and `on_resize` fires *before* Textual applies the new size, so the
 frame was drawn for the window the user had just left, one resize behind,
 forever. Three separate mistakes stacked in one line: two sources for one
@@ -665,9 +625,7 @@ stacked top/bottom below that. The left panel draws the palette column-major
 — pairs `(0, 8)` down to `(7, 15)`, then the named slots two-up in two-row
 cells (name over hex, so the panel is 50 wide and the examples keep their
 pair labels) — so the arrows walk it through a vertical grid
-(`editor.side_grid`); the bare `draw_editor` frame is unchanged, and I1
-still pins its rows with the candidate held bare. Panelled goldens are the
-follow-up re-record.
+(`editor.side_grid`); the bare `draw_editor` frame is unchanged.
 
 ## 8. Dependencies and packaging
 
@@ -702,8 +660,7 @@ Added:
 
 | Suite | Asserts |
 | --- | --- |
-| `test_equivalence.py` | I1 at all four sizes × all fixtures, both depths (§4.5) |
-| `test_closure.py` | I2 — no cell outside the 22 slots |
+| `test_closure.py` | I2 — no cell outside the reference closure |
 | `test_markup.py` | §6.3 fixtures |
 | `test_render.py` | **unchanged** — 60 existing tests, as the gate on §5.2 |
 
@@ -714,12 +671,10 @@ renames.
 
 ## 10. Rollout order
 
-0. **Harness first, no product code.** Golden capture (§4.4), the pyte driver,
-   the depth probe, I1 wired against *today's* editor. Phase 0 is done when
-   I1 passes for the un-migrated editor — the test is green before it can
-   possibly be useful, which is how you know it is measuring something.
-   **Landed:** `tests/harness.py`, `tests/test_equivalence.py`,
-   `tests/test_closure.py`, `tests/golden/`, and the `test` extra in
+0. **Harness first, no product code.** The pyte driver,
+   the depth probe, I2 wired against *today's* editor.
+   **Landed:** `tests/harness.py`,
+   `tests/test_closure.py`, and the `test` extra in
    `pyproject.toml`. 389 tests green under `-W always`, and green again with
    pyte absent (14 skipped), because pyte is an extra and not a dependency.
 1. Packaging: the two extras, the `edit` guard, §9 amendment. No behaviour
@@ -727,17 +682,14 @@ renames.
    `editor.REQUIRES` declaration with `cli`'s clean-failure guard, and §9's
    extras table. 395 tests green under `-W always`.
 2. Textual shell around the existing draw: App, keys, resize, raw mode.
-   `render.py` untouched; frame still painted by huebox. I1 green. **Landed:**
+   `render.py` untouched; frame still painted by huebox. **Landed:**
    `huebox/app.py` (one `Frame` widget over `draw_editor`'s captured rows,
    arrow bindings through `move_slot`, `on_resize` re-deriving at the new
    width), `tests/candidate.py` (the pty launcher with its environment pinned
    per §6.4), and `tests/test_app.py` for the launch contract and the token
-   binding. `editor.REQUIRES` stays empty — `cli` still opens the stdlib
-   session until phase 3, so naming `textual` now would break `huebox edit`
-   for a module the command does not yet run. I1 and I2 both green at every
-   size and fixture; §4.5's probe confirmed live against the app.
+   binding.
 3. Phase A: the single custom widget, `render.py` per-row, `tui.py` retired,
-   `MIN_COLS`/`MIN_ROWS` relocated. I1 + I2 green. **Partly landed.** The single
+   `MIN_COLS`/`MIN_ROWS` relocated. I2 green. **Partly landed.** The single
    custom widget was phase 2; this phase made the app the *session* — it drives
    `EditorState` and `apply_key` rather than reimplementing either, so selection,
    adjust, undo, revert, step size, the picker overlay, the save and the two-armed
@@ -761,16 +713,13 @@ renames.
    no longer exists, and what replaces it (`TestTerminalHygiene`) asserts the
    promise that survives — a prompt hands the terminal back and cancels
    cleanly.
-4. Mouse: hit-testing against the existing grid geometry. I1 unaffected —
-   mouse changes input, not output. **Landed.** `draw_editor` and
+4. Mouse: hit-testing against the existing grid geometry. The mouse changes
+   input, not output. **Landed.** `draw_editor` and
    `theme_lines` now announce their own clickable cells (`hits=`), and
    `frame_hits` / `theme_hits` / `slot_at` are thin readers of that. Clicking a
    swatch or an interface cell sets the selection; clicking a picker row
    moves the picker's selection and lets `apply_key` do what Enter does, so the
    two cannot diverge; the wheel walks the picker and does nothing in the frame.
-   I1 needed no change — not one golden moved — which is the phase's whole
-   claim, asserted as a test (`a click that changes nothing paints nothing`,
-   byte for byte).
 
    **Why the cells are announced rather than computed.** A second description of
    the layout is a second chance to point a click at the wrong cell, and the
@@ -780,20 +729,19 @@ renames.
    otherwise have shipped wrong are the reason: the hit map was built at the
    *terminal's* width rather than the frame's, and a short frame's indices were
    taken before the decoration row was deleted.
-5. Phase B: decomposition, one widget per commit, I1 + I2 before each next.
+5. Phase B: decomposition, one widget per commit, I2 before each next.
 6. Polish: panels, focus, borders, scrollbar styling — theme-closed or not
    used (§6.2).
 7. Docs: README mouse/scroll/alt-screen notes, AGENTS.md dependency rule,
    this document's TODOs closed.
 
 Each phase keeps the suite green. **No phase starts before the previous one's
-I1 is green.**
+I2 is green.**
 
 ## 11. Risks
 
 | Risk | Detected by |
 | --- | --- |
-| Silent colour drift | I1 + goldens (§4.4) |
 | Textual chrome leaking a colour | I2 (§4.2) |
 | Assuming the frame is only 22 colours | Closure set enumerated (§4.2) — it is 39 today |
 | Palette degradation on a 256-colour host | Depth probe (§4.5) |
@@ -810,12 +758,14 @@ I1 is green.**
    floor. Both own a compositor; Textual's widget model is the better fit.
 2. **`textual` is an optional extra.** Goal 6 — non-interactive commands keep
    one dependency (§8).
-3. **pyte is the oracle.** It is a real VT emulator, so the comparison is
+3. **pyte is the oracle.** It is a real VT emulator, so the checks are
    against what a terminal would actually display, not against a model of it.
-4. **Goldens are committed before the migration begins** (§4.4). Without a
-   frozen reference the comparison can be green and wrong.
-5. **Two invariants, not one.** I2 catches what I1 structurally cannot (§4.2).
-6. **Every fixture runs at both colour depths** (§4.5). `pyte` normalisation
+4. ~~**Goldens are committed before the migration begins** (§4.4). Without a
+   frozen reference the comparison can be green and wrong.~~ — **removed with
+   I1.** The reference is captured live on every run instead.
+5. **One invariant.** I2 catches a fourth colour source: anything Textual
+   paints that the reference did not (§4.2).
+6. **Pin the colour depth** (§4.5). `pyte` normalisation
    hides palette degradation otherwise.
 7. **Phase A before Phase B** (§5.5, §5.6). One variable at a time; B is
    optional, A is shippable.
@@ -826,12 +776,10 @@ I1 is green.**
 10. **This document lives in `docs/001-spec/`.** The colour model (§5) and the
     file contract (§6.2) do not change, so `spec.md`'s own rule does not move it
     to `docs/002-spec/`.
-11. **Fix the one-line scroll defect, then re-record goldens** (§4.8).
+11. **Fix the one-line scroll defect** (§4.8).
     Frame height is content-dependent, so at 80x24, 40x12 and 100x40 the frame
     filled the screen and the trailing newline scrolled it: the wordmark row was
-    lost. The goldens captured in phase 0 encoded that loss, and I1 would
-    otherwise *enforce* it — a migrated editor would have to reproduce the bug
-    to pass. **Done**, with the goldens re-recorded and the tests asserting no
+    lost. **Done**, with the tests asserting no
     rows lost. Pre-existing and unrelated to Textual; found by parsing output as
     a terminal instead of as a string.
 12. **Bind all 168 tokens, not the ones today's CSS happens to use** (§6.2).
@@ -852,7 +800,7 @@ next person, not a fact to go look up.
    time, listed and pinned.
 3. Whether the theme picker becomes a real focusable list in phase B or stays a
    phase-A widget with key bindings. Still open, and deliberately per
-   extraction: the answer depends on whether the list's rows survive I1 as
+   extraction: the answer depends on whether the list's rows survive as
    separate widgets, which is only knowable once there is something to extract.
 4. ~~Whether mouse support should be toggleable~~ — **answered, §7.2.**
    `App.run(mouse=False)`. Not building it; the cost of adding it is one
@@ -864,7 +812,7 @@ next person, not a fact to go look up.
    to say about it.
 6. ~~The frame scrolls a line at 80x24, 40x12 and 100x40~~ — **answered and
    fixed, §4.8.** The trailing CRLF is withheld when the frame fills the
-   screen; the goldens are re-recorded and `TestFrameGeometry` asserts no rows
+   screen; `TestFrameGeometry` asserts no rows
    lost rather than a height formula, since the height turns out to be
    content-dependent.
 ## 14. What phase 2 actually found
@@ -899,13 +847,10 @@ HSV by `0.01` where huebox nudges by `1/360` and `0.02`: no test would have
 caught that, because it only shows up in a key press. The arithmetic now lives
 once in `color.step_hsv`, used by `editor._adjust` and by the shell.
 
-**Result.** I1 and I2 hold at all four sizes and all three fixtures: 0 of 1920
-cells differing at 80x24, 0 new colours anywhere, 0 unbacked cells. §4.5's
-probe, run against the real app rather than described, diverges in all 1920
-cells at 256-colour — so the comparison can still fail, which is the only thing
-that makes it mean anything.
+**Result.** I2 holds at every size and fixture: 0 new colours anywhere,
+0 unbacked cells.
 
 Cost: the suite goes from 4 seconds to about 17, all of it pty launches, cut
-from 34 to 22 by memoising captures. Without them the equivalence tests skip
+from 34 to 22 by memoising captures. Without them the closure tests skip
 rather than compare the reference with itself, which would be green and
 meaningless.

@@ -1,6 +1,6 @@
-"""The Textual shell (migration phase 2): `huebox/app.py`.
+"""The Textual shell: `huebox/app.py`.
 
-Two things are worth pinning here beyond what I1 already covers. The **launch
+Two things are worth pinning here. The **launch
 contract** — the `HUEBOX_*` variables the harness sets and the app reads — is a
 seam between two modules that do not import each other, so nothing but a test
 keeps them from drifting. And the **token binding** is §6.2's requirement
@@ -141,7 +141,7 @@ class TestFrameRowsMatchTheWriter(unittest.TestCase):
 
     That is the whole reason phase 2 can promise an unchanged frame: a second
     copy of the frame's construction would be a second chance to get it wrong,
-    and I1 could then only say the two copies agreed.
+    and the two copies agreeing would prove nothing.
     """
 
     def test_the_rows_are_the_ones_draw_editor_writes(self):
@@ -259,8 +259,7 @@ class TheMouse(unittest.TestCase):
 
     The shape of it is the whole claim — `on_click` sets the selection or feeds
     `apply_key`, and never touches a colour. Mouse changes input, not output,
-    which is why I1 stayed green across this phase without a single change to
-    the goldens.
+    which is why this phase changed no frame row.
     """
 
     def _editor(self, cols=80, rows=24, **kw):
@@ -300,12 +299,14 @@ class TheMouse(unittest.TestCase):
     def _screen_point(self, editor, hit):
         """Inner hit → screen coords for `_click`.
 
-        Panels offset content by one border column left and one border row
-        above the controls; the bare frame is identity. All clickable hits
-        live in the controls panel, so this is +1/+1 when panels are on.
+        Panels offset content by one border column left and four border rows
+        above the controls (the `logo`/`info` top costs three — two borders
+        plus the `themes` button's row — and the controls' own one); the bare
+        frame is identity. All clickable hits live in the controls panel, so
+        this is +2/+4 when panels are on.
         """
         if getattr(editor, "_panels_on", False):
-            return hit.x0 + 1 + 1, hit.y + 1
+            return hit.x0 + 1 + 1, hit.y + 4
         return hit.x0 + 1, hit.y
 
     def test_a_click_selects_the_slot_whose_cell_it_was(self):
@@ -328,9 +329,7 @@ class TheMouse(unittest.TestCase):
     def test_a_click_that_changes_nothing_paints_nothing(self):
         """The claim of the phase, asserted.
 
-        I1 covers the frame and the goldens were untouched by all of phase 4,
-        so the mouse cannot have reached a colour. What is left to say here is
-        the part I1 does not: a click that selects nothing must not even redraw
+        What is left to say here is that a click that selects nothing must not even redraw
         the frame differently, byte for byte.
 
         A click that *does* select legitimately repaints — the `>` moves and the
@@ -447,7 +446,7 @@ class TheFrameIsWidgets(unittest.TestCase):
         mounted = []
 
         # Bare rows: the collapsible is product chrome, and these guard the
-        # bare stack I1 pins. `CollapsibleExamples` covers the product.
+        # bare stack. `CollapsibleExamples` covers the product.
         with mock.patch.dict(os.environ,
                              {"HUEBOX_SLOTS": path, "HUEBOX_STATUS": status,
                               "HUEBOX_COLLAPSIBLE": "0"}):
@@ -461,25 +460,35 @@ class TheFrameIsWidgets(unittest.TestCase):
         """Every `Frame` in mount order, descending into panels.
 
         Top-level mounts are chrome `Frame`s, the top `Horizontal` (two
-        unbordered panels side by side, §8.1 decision 37) and `Panel`s; the
+        bordered panels side by side, §8.1 decision 38) and `Panel`s; the
         blocks live inside the panels as pending children (mount is mocked,
-        so nothing composes). Flatten panels and the top row so block order
-        is frame order.
+        so nothing composes). Flatten panels and the top row recursively so
+        block order is frame order.
         """
         from textual.containers import Horizontal
         out = []
-        for widget in mounted:
+
+        def flat(widget):
             if isinstance(widget, huebox_app.Panel):
-                out.extend(list(getattr(widget, "_pending_children", [])))
+                for child in list(getattr(widget, "_pending_children", [])):
+                    yield from flat(child)
             elif isinstance(widget, Horizontal):
-                # the top row: two unbordered `Frame`s side by side. A side
+                # the top row: two bordered `Panel`s side by side. A side
                 # layout's pair never reaches here (panels off in `_mounted`)
-                # — only the top does, and its children are the header and
-                # the selected readout.
-                out.extend(list(getattr(widget, "_pending_children", [])
-                                or getattr(widget, "_nodes", [])))
-            else:
-                out.append(widget)
+                # — only the top does, and its children are the logo and
+                # the info panels holding the header and the selected readout.
+                # The `themes` button rides in the info panel too, and it is
+                # not a `Frame`: only frames tile the bare rows, so only
+                # frames are yielded and the button never reaches the tiling
+                # math below.
+                for child in list(getattr(widget, "_pending_children", [])
+                                or getattr(widget, "_nodes", [])):
+                    yield from flat(child)
+            elif isinstance(widget, huebox_app.Frame):
+                yield widget
+
+        for widget in mounted:
+            out.extend(flat(widget))
         return out
 
     def test_one_widget_per_block(self):
@@ -506,8 +515,8 @@ class TheFrameIsWidgets(unittest.TestCase):
         only for scrollbars, and I2's whole job is to reject a colour that was
         not the theme's. The blocks tile the frame exactly (tested in
         `test_editor.Regions`), so their heights must too — plus one border
-        row top and bottom per panel. The top stands side by side in two
-        unbordered panels (§8.1 decision 37), so its two heights overlap in y
+        row top and bottom per panel row. The top stands side by side in two
+        bordered panels (§8.1 decision 38), so its two heights overlap in y
         and count once, not twice."""
         editor, mounted = self._mounted()
         frames = self._frames(mounted)
@@ -517,29 +526,29 @@ class TheFrameIsWidgets(unittest.TestCase):
         top_h = editor._panel_geom["header_h"]
         # header + selected share the top rows side by side: two heights for
         # one row budget.
-        total_single = total - top_h
+        total_single = total - (top_h + 1)
         self.assertEqual(total_single, len(editor.rows_text))
-        self.assertEqual(total_single + 2 * len(panels), 24,
+        self.assertEqual(total_single + 2 * len(panels) + 3, 24,
                          "panels plus blocks do not fill the window exactly")
-        self.assertLessEqual(total_single + 2 * len(panels), 24,
+        self.assertLessEqual(total_single + 2 * len(panels) + 3, 24,
                              "the stack is taller than the screen")
 
     def test_every_block_paints_only_its_own_rows(self):
         editor, mounted = self._mounted()
         frames = self._frames(mounted)
-        # §8.1 (decision 37) — the top is two unbordered panels side by side
-        # (header left, theme plus selected right), not one full-width stack
-        # like the bare rows I1 pins. It cannot reassemble the frame's own
-        # top rows, so it is checked on its own and only what hangs below it
-        # must reassemble.
+        # §8.1 (decision 38) — the top is two bordered panels side by side
+        # (`logo` left, `info` with theme plus selected right), not one
+        # full-width stack like the bare rows. It cannot reassemble
+        # the frame's own top rows, so it is checked on its own and only what
+        # hangs below it must reassemble.
         top_h = editor._panel_geom["header_h"]
         top = frames[:2]
         self.assertEqual([block.name for block in top],
                          ["header", "selected"])
         self.assertEqual([len(block.rows_text) for block in top],
-                         [top_h, top_h])
+                         [top_h + 1, top_h])
         self.assertEqual(top[0].styles.width.value
-                         + top[1].styles.width.value, 80)
+                         + top[1].styles.width.value, 80 - 4)
         from rich.text import Text as _Text
         right_plain = [_Text.from_ansi(row).plain for row in top[1].rows_text]
         self.assertTrue(any("selected" in row for row in right_plain),
@@ -696,7 +705,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
 class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
     """The frame's size is the compositor's, and not also the terminal's.
 
-    This is a bug I1 could not see, which is the whole reason it is worth a
+    This is a bug a frame comparison could not see, which is the whole reason it is worth a
     test. The harness sets a pty's window size *before* launching, so the
     terminal and the compositor always agreed there and the two numbers never
     diverged. Resize afterwards — which is every resize, and is what a user
@@ -844,9 +853,9 @@ class SelectableBlocks(unittest.IsolatedAsyncioTestCase):
                                 "the drag changed nothing on screen")
 
     async def test_every_colour_a_selection_paints_is_a_theme_slot(self):
-        """I2, for a frame that is not the frame the goldens captured.
+        """I2, for a frame with a selection down.
 
-        The goldens never have a selection down, so nothing in the harness can
+        A capture never has a selection down, so nothing in the harness can
         see what a drag paints. This is the same closure check applied to the
         one frame the harness does not cover: nothing Textual's own, or the
         selection would be a blue in a theme that has no blue.
@@ -906,8 +915,8 @@ def _hex(color):
 class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
     """Every key in §4.3, pressed into a real session built the real way.
 
-    This is the test whose absence let a crash ship. I1 compares one frame
-    against one golden and never sends a key; the headless sessions drive
+    This is the test whose absence let a crash ship. The frame comparisons
+    never send a key; the headless sessions drive
     `EditorState` built by `EditorState.__init__`, where `mult` is the int
     `MULT_STEPS[0]`. The app builds its session in `Editor.build_state`, from
     the environment, and *that* one had `mult` as a string. So the two ways of
@@ -989,8 +998,8 @@ class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
         """`f x1`, never `f xFalse` or `f x'1'`.
 
         The hint line prints the multiplier verbatim, so a string multiplier is
-        visible on screen even before it is fatal — which is how the golden came
-        to record `f xFalse` in the first place."""
+        visible on screen even before it is fatal — which is how `f xFalse`
+        first showed itself."""
         app = await self._app()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -1035,8 +1044,7 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
     the *consequences* made impossible, not the cause found. Two things do it:
     the screen is told it cannot scroll (§15 fills the window exactly, and
     nothing in the frame scrolls — the picker scrolls by selection, because a
-    viewport moving on its own would move the `8-26 of 34` counter and I1 would
-    see it), and any scroll offset left from a resize is cleared.
+    viewport moving on its own would move the `8-26 of 34` counter), and any scroll offset left from a resize is cleared.
     """
 
     async def _app(self):
@@ -1163,7 +1171,7 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             async with app.run_test(size=(80, 24)) as pilot:
                 await pilot.pause()
                 self.assertTrue(app._panels_on)
-                self.assertEqual(len(list(app.query(huebox_app.Panel))), 2)
+                self.assertEqual(len(list(app.query(huebox_app.Panel))), 4)
 
     async def test_zero_opts_out_to_no_panels(self):
         path = _slots_file(harness.FIXTURES["distinct"]["slots"])
@@ -1183,9 +1191,10 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertTrue(app._panels_on)
             panels = list(app.query(huebox_app.Panel))
-            self.assertEqual(len(panels), 2)
+            self.assertEqual(len(panels), 4)
             self.assertEqual([p.border_title for p in panels],
-                             ["palette / interface", "examples"])
+                             ["logo", "info", "palette / interface",
+                              "examples"])
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_borders_are_theme_closed(self):
@@ -1205,13 +1214,13 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             before = app.state.sel
-            header_h = app._panel_geom["header_h"]
+            top_screen = app._panel_geom["top_screen"]
             # Controls panel top border: full-width chrome row.
-            app.on_click(Click(widget=None, x=10, y=header_h,
+            app.on_click(Click(widget=None, x=10, y=top_screen,
                                delta_x=0, delta_y=0, button=1,
                                shift=False, meta=False, ctrl=False))
             # Left border column inside the controls panel.
-            app.on_click(Click(widget=None, x=0, y=header_h + 1,
+            app.on_click(Click(widget=None, x=0, y=top_screen + 1,
                                delta_x=0, delta_y=0, button=1,
                                shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
@@ -1223,8 +1232,9 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             hit = next(h for h in app.hits if h.slot == 1)
-            # Inner → screen: one border column left, one border row above.
-            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + 1,
+            # Inner → screen: one border column left, three border rows above
+            # (the `logo`/`info` top costs two plus the controls' own one).
+            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + 3,
                                delta_x=0, delta_y=0, button=1,
                                shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, 1)
@@ -1244,8 +1254,8 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
     At `SIDE_MIN_W` (100) and up the frame is two panels next to each other
     instead of stacked: the left holds palette pairs over interface pairs
     (two columns in total), the right the live blocks, and the top stands
-    side by side above the pair in two unbordered panels (header left,
-    theme plus `selected` right, §8.1 decision 37). Below that width the
+    side by side above the pair in two bordered panels (`logo` left, theme
+    plus `selected` right as `info`, §8.1 decision 38). Below that width the
     stacked panels run instead (`PrototypePanels`). Narrow `run_test` sizes
     elsewhere in this file are that fallback, asserted on purpose.
     """
@@ -1304,12 +1314,12 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             mounted = list(app.query(huebox_app.Frame))
             header = next(b for b in mounted if b.name == "header")
             selected = next(b for b in mounted if b.name == "selected")
-            # Two unbordered panels side by side, not one full-width stack:
-            # the widths meet at the window edge and the heights match the
-            # chrome the frame laid out, so everything below rides where it
-            # did (§8.1 decision 37).
+            # Two bordered panels side by side, not one full-width stack:
+            # the inner widths meet at the window edge minus both borders
+            # and the heights match the chrome the frame laid out, so
+            # everything below rides where it did (§8.1 decision 38).
             self.assertEqual(header.styles.width.value
-                             + selected.styles.width.value, 120)
+                             + selected.styles.width.value, 120 - 4)
             self.assertEqual(header.styles.height.value,
                              selected.styles.height.value)
             rows = list(app.query(Horizontal))
@@ -1366,7 +1376,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
     async def test_a_click_in_the_top_selects_nothing(self):
         """§4.3.2 — the top is chrome, not a control.
 
-        Two unbordered panels side by side (§8.1 decision 37), and neither
+        Two bordered panels side by side (§8.1 decision 38), and neither
         answers: the header names no slot and the readout is the readout of
         the grids below, so a click anywhere in the top must leave the
         selection where it was.
@@ -1383,13 +1393,13 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                                    shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
 
-    async def test_the_top_has_no_border(self):
-        """Unbordered means unbordered: no `Panel`, no title, no border.
+    async def test_the_top_has_a_border(self):
+        """Bordered means bordered: two `Panel`s, two titles, one border each.
 
-        The top is two `Frame`s in one `Horizontal` on the theme's own
-        background — chrome, never a bordered box. A border would spend two
-        rows the widgets below need and bring border tokens the closure must
-        then account for.
+        The top is two `Panel`s (`logo`, `info`) in one `Horizontal` on the
+        theme's own background — chrome, never a control. Each border spends
+        one row top and bottom from the same row budget the widgets below
+        share, and brings only border tokens the closure already accounts for.
         """
         from textual.containers import Horizontal
 
@@ -1399,7 +1409,9 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             rows = list(app.query(Horizontal))
             self.assertEqual(len(rows), 2)
             top, _ = rows
-            self.assertEqual(list(top.query(huebox_app.Panel)), [])
+            panels = list(top.query(huebox_app.Panel))
+            self.assertEqual([p.border_title for p in panels],
+                             ["logo", "info"])
             left, right = list(top.query(huebox_app.Frame))
             self.assertEqual((left.name, right.name), ("header", "selected"))
 
@@ -1434,7 +1446,7 @@ class CollapsibleExamples(unittest.TestCase):
     `HUEBOX_PANELS=0` pins the bare stack, where the assertions below read
     the bare rows; the panelled layouts mount the same `Live` blocks
     (pinned by `CollapsiblePanels`). `HUEBOX_COLLAPSIBLE=0` opts out to
-    the bare rows I1 pins; I2 runs product and proves no new colour
+    the bare rows; I2 runs product and proves no new colour
     leaked in.
     """
 
@@ -1642,9 +1654,10 @@ class CollapsiblePanels(unittest.TestCase):
         """Shutting the strip must not move the swatches above it."""
         editor, _ = self._editor(collapsed=("examples",))
         hit = next(hit for hit in editor.hits if hit.slot == 5)
-        # Panels offset content by one border column left and one border
-        # row above the controls; the collapsed strip is below both.
-        self._click(editor, hit.x0 + 1 + 1, hit.y + 1)
+        # Panels offset content by one border column left and three border
+        # rows above the controls (the `logo`/`info` top plus the controls'
+        # own); the collapsed strip is below both.
+        self._click(editor, hit.x0 + 1 + 1, hit.y + 3)
         self.assertEqual(editor.state.sel, 5,
                          "a click below a collapse selected the wrong slot")
 

@@ -1,8 +1,6 @@
-"""Capture the candidate editor's real bytes from a pty (migration phase 2).
+"""Capture the candidate editor's real bytes from a pty.
 
-`harness.candidate_bytes` returns the *reference's* bytes through phase 1, so I1
-was green by construction. This replaces it with the thing I1 is for: the app
-under `huebox/app.py`, launched as a subprocess in a real pty, its output read
+The app under `huebox/app.py`, launched as a subprocess in a real pty, its output read
 back as bytes and parsed with `pyte`.
 
 Two things here are not incidental.
@@ -12,7 +10,7 @@ reads eight environment variables at *import* time and several of them rewrite
 cells — `TEXTUAL_COLOR_SYSTEM` picks the colour depth, `NO_COLOR` installs a
 monochrome filter, `TEXTUAL_FILTERS` can add a `dim` filter, `TEXTUAL_THEME`
 moves every token. None can be corrected inside the running app. Leaving any of
-them to the developer's shell would make I1 pass or fail depending on whose
+them to the developer's shell would make the closure checks pass or fail depending on whose
 machine ran it.
 
 **The whole stream is replayed, not a window cut out of it.** An earlier
@@ -21,7 +19,7 @@ theory that setup chatter and half-drawn repaints had to be excluded. That was
 re-implementing a terminal badly: Textual positions with `CSI row;col H`, not
 bare `CSI H`, so the split never matched and the entire stream came out as one
 region. `pyte` is a real emulator — handed everything the app wrote, it replays
-it and lands on the settled screen, which is the whole of what I1 wants. No
+it and lands on the settled screen. No
 regex, no region picking, nothing to keep in step with Textual's output format.
 """
 
@@ -81,7 +79,7 @@ DRAIN = 0.5                     # seconds more to read whatever is left
 
 #: Captured runs, keyed by everything that can change one. A capture is
 #: deterministic — same slots, same size, same pinned environment, same bytes —
-#: and the suite asks for the same twelve a dozen times over between I1, I2 and
+#: and the suite asks for the same twelve a dozen times over between closure and
 #: the backdrop check. Without this the suite spends 45 seconds launching
 #: ~34 processes to answer ~22 distinct questions.
 #:
@@ -101,8 +99,8 @@ def capture_picker(fixture, cols, rows, picker="long", depth="truecolor",
     screen with the picker up rather than a keypress timed against a race.
     """
     # `HUEBOX_PANELS` and `HUEBOX_COLLAPSIBLE` both change the bytes
-    # (borders / collapsible headers): same key without them would hand I1's
-    # bare capture to I2's product check, or the reverse.
+    # (borders / collapsible headers): same key without them would hand a
+    # bare capture to a product check, or the reverse.
     panels = os.environ.get("HUEBOX_PANELS", "1")
     collapsible = os.environ.get("HUEBOX_COLLAPSIBLE", "1")
     key = ("picker", fixture, cols, rows, picker, depth, status, panels,
@@ -121,7 +119,7 @@ def capture(fixture, cols, rows, sel=0, depth="truecolor"):
     a new process.
     """
     # `HUEBOX_PANELS` and `HUEBOX_COLLAPSIBLE` both change the bytes
-    # (borders / headers): I1 pins bare (`0`) while I2 runs product, so the
+    # (borders / headers): bare and product captures differ, so the
     # key must tell them apart.
     panels = os.environ.get("HUEBOX_PANELS", "1")
     collapsible = os.environ.get("HUEBOX_COLLAPSIBLE", "1")
@@ -148,7 +146,7 @@ def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None
     `term_size()` and Textual both read, so setting `HUEBOX_COLS` here would be
     a variable nobody reads and a second source of truth for the same number.
     `HUEBOX_MULT` and `HUEBOX_STATUS` carry the reference's own values, from
-    `harness`, so the two sides of I1 differ in the compositor and nothing else.
+    `harness`, so the reference and the candidate differ in the compositor and nothing else.
     """
     env = {key: value for key, value in os.environ.items()
            if key not in NEUTRALISE and key not in DETECTION}
@@ -159,7 +157,7 @@ def candidate_env(fixture, cols, rows, sel=0, depth="truecolor", slots_path=None
     # `draw_editor`'s `head` replaces the format label in the header. The
     # reference is captured with `head=None`, so "" pins the candidate to the
     # same argument; the app reads "" as "no head" and an absent variable as
-    # "derive it from the session". Both sides of I1 have to be given the same
+    # "derive it from the session". Reference and candidate have to be given the same
     # arguments, or the header differs by a word and the diff reads as a colour
     # change rather than as the label it is.
     env["HUEBOX_HEAD"] = ""

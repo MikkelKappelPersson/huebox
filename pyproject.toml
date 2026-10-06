@@ -8,7 +8,9 @@ version = "0.2.0"
 description = "A terminal theme editor with live preview"
 readme = "README.md"
 requires-python = ">=3.9"
+authors = [{ name = "Mikkel Kappel Persson", email = "mikkel@kappelpersson.dk" }]
 license = { text = "MIT" }
+urls = { Homepage = "https://github.com/MikkelKappelPersson/huebox", Repository = "https://github.com/MikkelKappelPersson/huebox", Issues = "https://github.com/MikkelKappelPersson/huebox/issues" }
 keywords = ["terminal", "theme", "color", "colour", "tui", "ghostty", "kitty", "alacritty"]
 classifiers = [
     "Environment :: Console",

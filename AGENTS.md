@@ -41,8 +41,7 @@ everything. No cycles. Every module header cites its spec section.
 **`app.py` reuses `draw_editor`'s rows, it does not re-render them.** It
 captures what the writer produced and hands it to Textual as a `Strip`. A
 second copy of the frame's construction would be a second chance to get it
-wrong, and the equivalence harness could then only say the two copies agreed —
-not that either matched what huebox used to do. Take the buffer as a file
+wrong, and two copies agreeing would prove nothing. Take the buffer as a file
 (`HUEBOX_SLOTS`): product code is handed its slots, and the fixtures stay in
 `tests/`.
 
@@ -113,7 +112,7 @@ editor it will never use.
   the window the user just left. Both want `call_after_refresh`.
 - **One size, one number.** The frame is laid out from the compositor's size,
   passed down as `draw_editor`'s `size=`. Asking the terminal as well gives two
-  numbers for one quantity, and the harness cannot see the disagreement: it sets
+  numbers for one quantity, and a pty capture cannot see the disagreement: it sets
   the pty size before launching, so they only diverge on a resize.
 - **A widget that answers to the user says so.** `Frame.ALLOW_SELECT` is off
   and only the sample and the diff turn it on: Textual makes every widget
@@ -140,19 +139,12 @@ editor it will never use.
   a new format needs round-trip plus byte-identical no-op cases. Run it with
   `-W always` before calling a phase done — the warning count is part of the
   contract.
-- **The colour promise is a test, not a review habit.** Moving anything onto
-  Textual's compositor is gated on I1: the frame after the change must equal
-  the committed golden cell for cell, parsed through `pyte` from a real pty
-  (`tests/candidate.py`, `docs/001-spec/textual-migration.md` §4). Two
-  consequences: pin the whole environment when launching the app (Textual reads
-  eight variables at import time, §6.4), and never let a golden regenerate to
-  make a failure go away — the golden diff *is* the review artefact.
 - **One optional group, not two.** `pyproject` keeps two runtime dependencies
   (Pygments, Textual); `pyte` is the `test` group. An install whose main
   command fails on open is not a smaller install (decision 32), so Textual
   stopped being the `editor` extra — and the missing-extra guard went with it,
   rather than guarding a configuration that can no longer be produced. The
-  equivalence tests still skip without `pyte` rather than comparing the
+  closure tests still skip without `pyte` rather than comparing the
   reference with itself. The `app` import stays late in `cli`, but that was
   always about cold-start time for the commands that never open the editor,
   never about installability.

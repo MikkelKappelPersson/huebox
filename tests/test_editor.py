@@ -513,8 +513,8 @@ class TopSidePanels(unittest.TestCase):
 
     The compositor's top, not the bare frame's: the header logo left, the
     theme subject plus the selected readout right, each asked at its own
-    panel width through the same painters the frame uses. The bare rows I1
-    pins never move — this is product chrome beside them, padded to the
+    panel width through the same painters the frame uses. The bare rows
+    never move — this is product chrome beside them, padded to the
     height the frame laid out so everything below rides where it did.
     """
 
@@ -836,7 +836,7 @@ class NormalFrame(unittest.TestCase):
 
     def test_the_header_walks_the_ladder_out_of_leftover(self):
         # decision 33 — the header draws out of the rows below the frame,
-        # never out of a widget: the golden sizes, and tall sizes whose
+        # never out of a widget: the four sizes, and tall sizes whose
         # diff is whole, keep the wordmark; a taller terminal stands the
         # mini banner up; a tall one the raster banner — and the diff is
         # whole throughout, so no rung ever costs a widget a row.
@@ -1422,7 +1422,7 @@ class VerticalArrows(unittest.TestCase):
 
     def test_the_bare_grid_is_untouched(self):
         # `vertical` defaults off: every existing GridArrows walk reads the
-        # same grid it always did, and I1's goldens still pin it.
+        # same grid it always did.
         grid = editor.grid_geometry(80)
         self.assertFalse(grid.vertical)
         self.assertEqual(editor.move_slot(0, "right", grid), 1)

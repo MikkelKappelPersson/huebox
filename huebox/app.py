@@ -3,7 +3,7 @@
 §4.3, §13.7, §14, and `docs/001-spec/textual-migration.md` §5.5. Textual owns
 the screen; `render.py` still owns the frame. The rows here are the ones
 `draw_editor` wrote, captured rather than re-rendered, so "the frame is
-unchanged" is true by construction and I1 measures the compositor underneath
+unchanged" is true by construction: the compositor underneath is measured
 rather than a rewrite beside it.
 
 **The key surface is not reimplemented.** `apply_key` and `EditorState` already
@@ -51,7 +51,7 @@ from textual.containers import Horizontal, Vertical
 from textual.strip import Strip
 from textual.style import Style
 from textual.widget import Widget
-from textual.widgets import Collapsible
+from textual.widgets import Button, Collapsible
 
 from .color import MISSING, SLOTS
 from .editor import (BANNER_LEFT_W, MINI_LEFT_W, MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, TOP_LEFT_W, EditorState,
@@ -87,9 +87,9 @@ def _mult_step(raw) -> int:
 
     The harness did not catch it because `REFERENCE_MULT` was `False`, so
     `HUEBOX_MULT` was the string `"False"` — a *different* wrong type that
-    rendered as `f xFalse` in the golden and `f xFalse` in the candidate, and
+    rendered as `f xFalse` in the reference and `f xFalse` in the candidate, and
     the two wrongs matched. §6.2's lesson in a new place: pinning an argument
-    no real session passes buys an I1 that cannot fail.
+    no real session passes buys a check that cannot fail.
     """
     if raw is not None:
         for step in MULT_STEPS:
@@ -344,7 +344,7 @@ class Selectable(Frame):
 
     `ALLOW_SELECT` is the entire mechanism. Textual composites the selection on
     the *screen*, in a `.screen--selection` overlay, so `Frame.render_line` is
-    untouched and I1 does not move: a capture never has a selection down, and a
+    untouched and the frame does not move: a capture never has a selection down, and a
     frame with one down is the same frame plus an overlay.
 
     Which is also the risk. The overlay's two colours are design tokens like any
@@ -386,8 +386,7 @@ class Picker(Frame):
 
     Its first version is exactly `theme_lines`' output through the same
     compositor as everything else — the rows are `render.py`'s, parsed the same
-    way — so extraction is a rearrangement with no visible consequence, and I1
-    says so cell for cell.
+    way — so extraction is a rearrangement with no visible consequence.
 
     What it buys is the thing phase 5 is for. The picker used to be a parameter
     of the editor frame (`draw_editor(overlay=...)`), which meant it could never
@@ -399,7 +398,7 @@ class Picker(Frame):
     **It scrolls by selection, and that is not a simplification.** The window is
     a function of `overlay_index` — `theme_lines` centres it — and the footer
     prints `8-26 of 34` from it, so a viewport that scrolled on its own would
-    move that counter and I1 would see it. What a `ScrollView` would add here
+    move that counter. What a `ScrollView` would add here
     is a scrollbar: seven of Textual's 168 design tokens exist only for it, and
     I2's whole job is to reject exactly that. The wheel moves the selection,
     which moves the window, which is what a user pressing a wheel key means.
@@ -432,7 +431,8 @@ BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
 #: (§15.4).
 PANEL_CONTROLS = ("palette", "interface", "selected")
 PANEL_EXAMPLES = ("examples", "diff", "sample")
-PANEL_TITLES = {"controls": "palette / interface", "examples": "examples"}
+PANEL_TITLES = {"logo": "logo", "info": "info",
+                "controls": "palette / interface", "examples": "examples"}
 
 #: The side-by-side layout: `selected` full-width above, the controls and
 #: the live blocks in two panels next to each other below. The left panel
@@ -467,11 +467,13 @@ EDITOR_PAD_X = 1
 def editor_panel_enabled() -> bool:
     """Whether the HSV selectors ride in their own bordered panel.
 
-    Default off. `HUEBOX_EDITOR_PANEL=1` splits the top into header +
-    metadata (bare chrome) beside one bordered `Panel("editor")` holding
-    only the three HSV bars. Prototype for trying; tests pin the bare top.
+    Default on: the top is header + metadata (bare chrome) beside one
+    bordered `Panel("editor")` holding only the three HSV bars.
+    `HUEBOX_EDITOR_PANEL=0` opts back out to the logo/info top, and
+    `HUEBOX_TOP=0` pins the stacked header past both; tests pin whichever
+    top they assert.
     """
-    return os.environ.get("HUEBOX_EDITOR_PANEL", "0") == "1"
+    return os.environ.get("HUEBOX_EDITOR_PANEL", "1") != "0"
 
 
 def top_bordered_enabled() -> bool:
@@ -480,8 +482,7 @@ def top_bordered_enabled() -> bool:
     Default off: header + selected stay two unbordered columns (decision 37).
     `HUEBOX_TOP_BORDER=1` merges them into a single bordered `Panel` so the
     selected readout shares the same chrome as the controls/examples below.
-    Tests and goldens pin the unbordered top, so this stays opt-in while
-    the layout is tried out.
+    Tests.
     """
     return os.environ.get("HUEBOX_TOP_BORDER", "0") == "1"
 
@@ -516,6 +517,71 @@ class Panel(Vertical):
         self.border_title = title
 
 
+class ThemesButton(Button):
+    """The `themes` button in the info panel: a mouse mirror of `t` (§4.3.2).
+
+    A flat `Button` labelled `themes`, and the one control the top owns —
+    everything else up there is chrome and answers to no click. Pressing it
+    does exactly what `t` does, through the same `apply_key` call the
+    keyboard takes, so the two cannot disagree about what the picker is or
+    about what happens to a dirty buffer. Never focusable: focus follows the
+    selection between the two grids (or takes the picker while it is up), and
+    a button that kept focus would leave the arrows talking to a control
+    with no arrows. `ALLOW_SELECT` stays off (inherited), so a drag across it
+    can never begin a text selection the way the sample and the diff invite.
+
+    Theme-closed by construction: the CSS below names only `$background` and
+    `$foreground` — the tokens `TOKEN_SLOTS` already binds — with no `auto`
+    ink, no derived wash and no tint, so a button never captured
+    still paints nothing I2 can object to. The hover is an underline, not a
+    colour: an attribute says "clickable" where a wash would spend a slot.
+    """
+
+    can_focus = False
+
+    DEFAULT_CSS = """
+    ThemesButton {
+        background: $background !important;
+        color: $foreground !important;
+        border: none !important;
+        text-style: bold;
+        width: auto;
+        height: 1;
+        min-width: 16;
+        margin: 0;
+        padding: 0;
+        content-align: center middle;
+    }
+    ThemesButton:hover {
+        background: $background !important;
+        color: $foreground !important;
+        border: none !important;
+        text-style: bold underline;
+    }
+    ThemesButton:focus {
+        background: $background !important;
+        color: $foreground !important;
+        border: none !important;
+        text-style: bold underline;
+    }
+    ThemesButton.-active {
+        background: $background !important;
+        color: $foreground !important;
+        border: none !important;
+        tint: transparent !important;
+    }
+    ThemesButton:disabled {
+        background: $background !important;
+        color: $foreground !important;
+        border: none !important;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__("themes", flat=True, id="themes-button",
+                         name="themes", **kwargs)
+
+
 #: The live blocks, each collapsible on its own (§14.1): the strip, the
 #: hunk and the code sample. Three blocks, three toggles — a collapsed strip
 #: never takes the diff and the sample with it.
@@ -524,7 +590,6 @@ LIVE_BLOCKS = ("examples", "diff", "sample")
 #: What the compositor calls the live blocks. The strip demonstrates the
 #: interface text pairs (background, selection, cursor), so that is what its
 #: header says; the bare rows keep `draw_editor`'s own "examples" title, and
-#: I1 pins those — the header already differs by its toggle mark, so the
 #: label is product chrome of the same kind.
 LIVE_TITLES = {"examples": "interface text", "diff": "live diff",
                 "sample": "live code"}
@@ -542,8 +607,7 @@ def collapsible_enabled() -> bool:
     Default on: each live block rides in an open `Live` rather than as bare
     rows. `HUEBOX_COLLAPSIBLE=0` opts out back to the frameless stack (tests
     and the harness use it where they assert the bare rows, never as
-    product). I1 pins bare (`0`) while I2 runs product, so the key must tell
-    them apart — the same rule as the panels prototype that came before it.
+    product). The key must tell bare (`0`) from product — the same rule as the panels prototype that came before it.
     """
     return os.environ.get("HUEBOX_COLLAPSIBLE", "1") != "0"
 
@@ -619,8 +683,7 @@ class Editor(App):
     # Nothing in huebox's frame should ever scroll: §15 lays the blocks out to
     # fill the window exactly, and the picker scrolls by *selection* — the
     # window in `theme_lines` is a function of `overlay_index`, because a
-    # viewport that moved on its own would move the `8-26 of 34` counter and I1
-    # would see it.
+    # viewport that moved on its own would move the `8-26 of 34` counter.
     #
     # So the screen is told so explicitly. "Fits exactly" is a property of the
     # layout; "therefore cannot scroll" is a consequence, and a consequence the
@@ -681,8 +744,8 @@ class Editor(App):
         # The live collapsibles, all open by default (§14.1): the set of
         # block names standing collapsed. Compositor state, not buffer state
         # — the frame is always drawn whole and the collapsed rows are hidden,
-        # never unpainted, so a headless session never collapses and I1 pins
-        # the bare rows it always did.
+        # never unpainted, so a headless session never collapses and
+        # the bare rows are what a capture always sees.
         self._collapsed: set = set()
         super().__init__(**kwargs)
         # After `super()`, and in the constructor rather than `on_mount`: Textual
@@ -735,7 +798,7 @@ class Editor(App):
     def compose(self) -> ComposeResult:
         # Nothing here: the frame's width comes from the size Textual hands us
         # at mount, and a `ScrollView` would bring a border and a scrollbar the
-        # frame has no room for. Scrolling is phase 4, gated on I1 like
+        # frame has no room for. Scrolling is phase 4, like
         # everything else that changes what reaches the screen.
         return iter(())
 
@@ -789,38 +852,40 @@ class Editor(App):
             named = list(self.regions)
             rows_text = self.rows_text
         elif (panels_enabled()
-                and width >= MIN_COLS + 2 and height >= MIN_ROWS + 2):
-            # Prototype panels: the same rows, laid out for the inner width.
+                and width >= MIN_COLS + 2 and height >= MIN_ROWS + 5):
+            # Bordered panels: the same rows, laid out for the inner width.
             # `header` / `hints` are laid out narrow too and padded on display
             # — the pad is the theme's own background, so it reads as fill.
-            # Two passes, so a frame with no examples only pays for one panel:
-            # first at H-2, and only when live blocks showed up re-lay at H-4
-            # for both borders. Always reserving four would trim the hints
-            # into the controls at small sizes (60x16), where they belong
-            # outside the panel, not in it.
+            # Two passes, so a frame with no examples only pays for top +
+            # controls (+5: the top's two borders plus its button row, and the
+            # controls' two): first at H-5, and only when live blocks showed
+            # up re-lay at H-7 for top + both borders. Always reserving seven
+            # would trim the hints into the controls at small sizes (60x16),
+            # where they belong outside the panel, not in it — below what fits
+            # the borders the frame falls back to the bare stack instead.
             inner_w = width - 2
             state.grid = grid_geometry(inner_w)
             trial_hits, trial_regions = [], []
             trial = frame_rows(self.fmt, session_path(state), state,
-                               inner_w, height - 2,
+                               inner_w, height - 5,
                                head=self.head_for(state),
                                hits=trial_hits, regions=trial_regions)
             names = {name for name, _, _ in trial_regions}
             two = bool(names & set(PANEL_EXAMPLES))
-            inner_h = height - 4 if two else height - 2
-            if two and height < MIN_ROWS + 4:
-                # Room for one panel but not two: fall back to the bare frame
+            inner_h = height - 7 if two else height - 5
+            if inner_h < MIN_ROWS:
+                # Room for one panel but not all: fall back to the bare frame
                 # rather than trimming widgets to buy borders.
                 rows_text = frame_rows(self.fmt, session_path(state), state,
                                        width, height,
                                        head=self.head_for(state),
                                        hits=self.hits, regions=self.regions)
             else:
-                rows_text = (trial if (inner_h == height - 2) else frame_rows(
+                rows_text = (trial if (inner_h == height - 5) else frame_rows(
                     self.fmt, session_path(state), state, inner_w, inner_h,
                     head=self.head_for(state),
                     hits=self.hits, regions=self.regions))
-                if inner_h == height - 2:
+                if inner_h == height - 5:
                     self.hits = trial_hits
                     self.regions = trial_regions
                 self.rows_text = rows_text
@@ -881,7 +946,7 @@ class Editor(App):
     def _top_editor_row(self, width: int, state, top_h: int):
         """Header + metadata beside one bordered `editor` panel, or `None`.
 
-        Prototype (`HUEBOX_EDITOR_PANEL=1`): the hue selectors alone get the
+        The hue selectors alone get the
         border — header logo and theme metadata stay bare chrome, while the
         chip row plus the three equal HSV bars ride in `Panel("editor")`
         with one cell of inner padding on each side (`EDITOR_PAD_X`). The
@@ -971,9 +1036,10 @@ class Editor(App):
         """Screen rows the top will occupy, without building it.
 
         Mirrors `_top_side_row`'s viability ladder so `_try_side` can size
-        the middle before mounting anything. Prototype helper.
+        the middle before mounting anything.
         """
-        if editor_panel_enabled():
+        if (editor_panel_enabled()
+                and os.environ.get("HUEBOX_TOP", "1") != "0"):
             try:
                 label = self.head_for(state) or self.fmt
                 _meta, head, meta_w = top_editor_meta(label, session_path(state),
@@ -1012,31 +1078,45 @@ class Editor(App):
                 viable = None
             if viable is not None:
                 return top_h + 2
+        try:
+            viable = top_side_panels(state.slots,
+                                     self.head_for(state) or self.fmt,
+                                     session_path(state), state.sel,
+                                     width - 4)
+        except Exception:
+            viable = None
+        if viable is not None:
+            return top_h + 3
         return top_h
 
     def _top_side_row(self, width: int, state, top_h: int):
-        """The top as two unbordered panels side by side, or `None` (§8.1).
+        """The top as two bordered panels side by side, or `None` (§8.1).
 
-        Left is the header logo, right the theme subject plus the selected
-        readout — the same rows `draw_editor` paints, asked at the panels'
-        own widths through `top_side_panels` rather than re-rendered, so a
-        click and a swatch cannot disagree and I1 keeps pinning the bare
-        rows. Both panels are padded in the buffer's own background to
-        `top_h` (the height the frame laid out), so the chrome below rides
-        exactly where it did and the click geometry never moves. Unbordered:
-        two `Frame`s in a `Horizontal` with no border, no title, only the
-        theme's own background — chrome, never a control (§4.3.2).
+        Logo left, theme subject plus the selected readout right (`info`) —
+        the same rows `draw_editor` paints, asked at the panels' own widths
+        through `top_side_panels` rather than re-rendered, so a click and a
+        swatch cannot disagree. Both panels
+        are padded in the buffer's own background to `top_h` (the height the
+        frame laid out). Bordered: two `Panel`s in a `Horizontal` — `logo`
+        and `info` — chrome, never controls (§4.3.2), except the one control
+        the top owns: a flat `themes` button riding under the readout in the
+        info panel, a mouse mirror of `t` through the same `apply_key` call.
+        Asked at `width - 4` so the pair fits inside both borders; the pair
+        costs three rows (two borders, one button).
 
         Prototype (`HUEBOX_TOP_BORDER=1`): the same `Horizontal` wrapped in
         one bordered `Panel(TOP_TITLE)`, so header + selected share the
         same chrome as the controls/examples below. Asked at `width - 2`
         so the pair fits inside the border; the panel costs two rows.
 
-        Prototype (`HUEBOX_EDITOR_PANEL=1`): header + metadata stay bare and
+        Default (see `editor_panel_enabled`): header + metadata stay bare and
         only the three HSV bars ride in `Panel("editor")` beside them.
+        `HUEBOX_TOP=0` pins the stacked header past it. Falls back to the
+        logo/info pair below where the columns do not fit.
         Returns `(widget, screen_h)`; `(None, top_h)` where no top fits.
         """
-        if editor_panel_enabled():
+        if (editor_panel_enabled()
+                and os.environ.get("HUEBOX_TOP", "1") != "0"):
             built = self._top_editor_row(width, state, top_h)
             if built is not None:
                 return built
@@ -1076,7 +1156,7 @@ class Editor(App):
             panel.styles.margin = 0
             return panel, top_h + 2
         top = top_side_panels(state.slots, self.head_for(state) or self.fmt,
-                              session_path(state), state.sel, width)
+                              session_path(state), state.sel, width - 4)
         if top is None:
             return None, top_h
         left_w, right_w, left_raw, right_raw = top
@@ -1086,9 +1166,13 @@ class Editor(App):
         left += [backdrop("", slots, left_w)] * max(0, top_h - len(left))
         right += [backdrop("", slots, right_w)] * max(0, top_h - len(right))
         left, right = left[:top_h], right[:top_h]
-        left_frame = Frame(left, left_w, name="header")
+        # The button's row: one blank of the buffer's own background under the
+        # logo, so both panels stand the same height and the pair below rides
+        # where the frame laid it out.
+        left_full = left + [backdrop("", slots, left_w)]
+        left_frame = Frame(left_full, left_w, name="header")
         left_frame.styles.width = left_w
-        left_frame.styles.height = top_h
+        left_frame.styles.height = top_h + 1
         left_frame.styles.padding = 0
         left_frame.styles.margin = 0
         right_frame = Frame(right, right_w, name="selected")
@@ -1096,24 +1180,39 @@ class Editor(App):
         right_frame.styles.height = top_h
         right_frame.styles.padding = 0
         right_frame.styles.margin = 0
-        row = Horizontal(left_frame, right_frame)
+        button = ThemesButton()
+        button.styles.height = 1
+        button.styles.margin = 0
+        button.styles.padding = 0
+        logo_panel = Panel(PANEL_TITLES["logo"], left_frame, name="logo")
+        logo_panel.styles.width = left_w + 2
+        logo_panel.styles.height = top_h + 3
+        logo_panel.styles.padding = 0
+        logo_panel.styles.margin = 0
+        info_panel = Panel(PANEL_TITLES["info"], right_frame, button,
+                           name="info")
+        info_panel.styles.width = right_w + 2
+        info_panel.styles.height = top_h + 3
+        info_panel.styles.padding = 0
+        info_panel.styles.margin = 0
+        row = Horizontal(logo_panel, info_panel)
         row.styles.width = width
-        row.styles.height = top_h
+        row.styles.height = top_h + 3
         row.styles.padding = 0
         row.styles.margin = 0
-        return row, top_h
+        return row, top_h + 3
 
     def _mount_panels(self, width: int, rows_text: list, named: list) -> None:
-        """Stack the frame's blocks into two bordered panels.
+        """Stack the frame's blocks into bordered panels.
 
         `named` is `draw_editor`'s own `(name, first, count)` map at the inner
         size, so the groups cannot drift from what the frame painted: the
-        same rule as `hits`. Chrome (the top block, then `hints` / `status`)
-        stays full-width outside; controls and examples each get a `Panel`
-        with a themed border and title. Inner blocks keep the inner width; chrome
-        blocks are re-backed to the full width, because a row backed to the
-        inner width and padded by the widget would leave two columns on the
-        terminal's own background (§8.2) — the pad has no style of its own.
+        same rule as `hits`. The top rides as `logo` + `info` side by side;
+        controls and examples each get a `Panel` with a themed border and
+        title. Inner blocks keep the inner width; chrome blocks are re-backed
+        to the full width, because a row backed to the inner width and padded
+        by the widget would leave two columns on the terminal's own background
+        (§8.2) — the pad has no style of its own.
         """
         for child in list(self.query(Panel)):
             child.remove()
@@ -1206,8 +1305,10 @@ class Editor(App):
         example_inners = [mount_inner(n, f, c) for n, f, c in examples]
         controls_h = sum(h for _, h in control_inners)
         examples_h = sum(h for _, h in example_inners)
-        # Screen geometry for clicks: borders are single rows. Header is
-        # bare; each panel adds a top and a bottom border row.
+        # Screen geometry for clicks: borders are single rows. The top is two
+        # bordered panels sharing one row budget (`top_screen`: two borders
+        # plus the `themes` button's row); each panel below adds a top and a
+        # bottom border row.
         top_row, top_screen = self._top_side_row(width, self.state,
                                                  header_h)
         self._panel_geom = {
@@ -1220,11 +1321,12 @@ class Editor(App):
             "top_screen": top_screen if top_row is not None else header_h,
         }
         if top_row is not None:
-            # §8.1 (decision 37) — the header and the theme plus selected
-            # readout stand side by side in two unbordered panels, not one
-            # full-width stack: the logo left, the readout right, padded to
-            # the height the frame laid out so everything below rides where
-            # it did and the click map never moves.
+            # §8.1 (decision 38) — the logo and the theme plus selected
+            # readout stand side by side in two bordered panels: `logo`
+            # left, `info` right, padded to the height the frame laid out so
+            # everything below rides where it did and the click map never
+            # moves. A click in the top selects nothing, because the top
+            # names no slot (§4.3.2).
             self.mount(top_row)
         else:
             for name, first, count in header:
@@ -1255,10 +1357,10 @@ class Editor(App):
     def _try_side(self, width: int, height: int, state) -> bool:
         """The side-by-side layout, or `False` to keep the stacked one.
 
-        The top stands side by side in two unbordered panels (header left,
-        theme plus `selected` right, §8.1 decision 37); the controls (palette
-        pairs over interface pairs) and the live blocks in two bordered
-        panels next to each other below. The chrome rows come from a
+        The top stands side by side in two bordered panels (`logo` left,
+        theme plus `selected` right as `info`, §8.1 decision 38); the controls
+        (palette pairs over interface pairs) and the live blocks in two
+        bordered panels next to each other below. The chrome rows come from a
         full-width `draw_editor` run — captured, like everywhere — while the
         panels' contents are `side_left_rows` / `side_live_rows` at their own
         widths. Anything that does not fit (trimmed chrome, a short middle)
@@ -1629,6 +1731,23 @@ class Editor(App):
             self.redraw()
             return
         apply_key(translate(event.key), self.state)
+        if self.state.quit:
+            self.exit()
+        else:
+            self.redraw()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """The `themes` button: exactly what `t` does, through the same call.
+
+        A click is a keypress (§4.3.2): the button resolves to the key surface
+        rather than re-implementing the picker — open, blocked-while-dirty,
+        or the no-library status — and `redraw` hands focus to the picker
+        when one opened, the same as `on_key` does after `apply_key`.
+        """
+        if getattr(event.button, "id", None) != "themes-button":
+            return
+        event.stop()
+        apply_key("t", self.state)
         if self.state.quit:
             self.exit()
         else:

@@ -7,7 +7,7 @@ the raw-mode half removed because a key *list* needs no terminal to read from.
 
 What this covers and what it does not is worth being exact about. It exercises
 `EditorState`, `apply_key` and `draw_editor` — which is where all of huebox's
-editing behaviour lives, and which I1's goldens pin cell for cell. It does not
+editing behaviour lives. It does not
 exercise the compositor, and it is not meant to: `tests/candidate.py` launches
 the real app in a pty for that. Together they cover "the session is wired" and
 "the shell is faithful", which neither covers alone.

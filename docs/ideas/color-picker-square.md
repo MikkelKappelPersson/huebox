@@ -46,7 +46,7 @@ click via existing `hits=` mechanism) to move *within* the square.
 - Higher density options if 2x is not enough: quadrants `▘▚▞▟` (2x2 per cell),
   sextants, braille `⠁-⣿` (2x4). Same fg+bg trick, smaller "pixels", worse
   font support.
-- Equivalence harness: golden diff (I1) would pin it cell-for-cell like any
+- Closure harness: I2 holds it to the reference closure like any
   other frame change; keep it behind an env/flag until stable.
 
 ## Minimal next probe (if ever)

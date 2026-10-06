@@ -10,8 +10,7 @@ colour model or the file contract changes in a way that breaks existing configs.
 editing with live examples, and a responsive layout.
 
 `textual-migration.md` was the proposal to replace the hand-rolled terminal
-I/O and draw loop with Textual, under a cell-for-cell colour equivalence
-harness. It **landed** (merged to `main` as the editor under Textual's
+I/O and draw loop with Textual, under a colour-closure harness. It **landed** (merged to `main` as the editor under Textual's
 compositor), and it is still not a format change, so this document stays at
 `docs/001-spec/`. It is cited from here for the rendering guarantees it
 preserves (§8.2, §14.1) and for §4.3.2, which it made possible.
@@ -383,7 +382,7 @@ config path is ambiguous between formats?
   implementation detail**: every colour the editor paints must be a slot, and
   a cell must never show the terminal's background. Both are enforced against
   a recorded reference rather than asserted from the code that produces them
-  (§10, I1 and I2). The code sample and the live diff are the two blocks whose
+  (§10, I2). The code sample and the live diff are the two blocks whose
   text can be selected (§4.3.2), and a selection is painted in the theme's own
   `selection-background` / `selection-foreground` — the same pair the picker
   marks a theme with.
@@ -489,21 +488,23 @@ room for a banner it stands above the block and the wordmark stands back to
 air, so the banner is still the only huebox on screen; the right column
 stays where it was, one banner lower.
 
-**Under the compositor the top is two panels, unbordered, side by side.**
-`[header] [theme/path, selected]` (decision 37): the left panel holds only
+**Under the compositor the top is two bordered panels, side by side.**
+`[logo] [info]` (decision 38): the left panel holds only
 the logo — the raster banner where it fits, else the mini banner, else the
 one-line wordmark, the same ladder the frame stands up — and the right
 panel the theme subject plus the selected readout, the same three rows the
-bare block paints, measured against the panel's own width. No border, no
-title: two `Frame`s in one `Horizontal` on the buffer's own background, so
-the top reads as two columns of chrome rather than as two boxes. The panels
-are padded to the height the frame laid out, so everything below rides
-where it did and the click map never moves — and a click anywhere in the
-top selects nothing, because the top names no slot (§4.3.2). The price is
-stated plainly, the same price decision 36 already paid: the bars are
-measured against the right panel now, so a banner beside a readout shows
-fewer bars than the same readout stacked under it, and the exact numbers
-beneath carry those frames instead. Below `TOP_MIN_COLS` the right panel
+bare block paints, measured against the panel's own width. Two `Panel`s in
+one `Horizontal`, titled `logo` and `info`, on the buffer's own background,
+so the top reads as two boxes sharing one row budget rather than as two
+columns of chrome. The panels are padded to the height the frame laid out,
+so everything below rides where it did and the click map never moves — and
+a click anywhere in the top selects nothing, because the top names no slot
+(§4.3.2). The price is stated plainly, the same price decisions 36 and 37
+already paid, one rung further: the pair is asked at `width - 4` so both
+borders fit, the bars are measured against the right panel, and the row
+budget grows from two panel-rows to three (top + controls + examples),
+so a frame that cannot spare six rows keeps the bare stack instead.
+Below `TOP_MIN_COLS` the right panel
 cannot hold even a bare readout, so the compositor keeps the stacked chrome
 it always did; `HUEBOX_TOP=0` pins that stack at any width, the same opt-out
 the bare frame keeps for the tests that assert it.
@@ -654,7 +655,7 @@ harness stays optional:
 
 | Group | Holds | Cost to install it |
 | --- | --- | --- |
-| `test` | pyte, for the colour-equivalence harness (§10) | never, for a user |
+| `test` | pyte, for the colour-closure harness (§10) | never, for a user |
 
 `show`, `list`, `use`, `new`, `import` and `--dump` never import Textual, so
 they never pay its import — but they no longer need to be installable without
@@ -691,23 +692,25 @@ just work.
   does, the wheel moving the picker and nothing else, and a selection over the
   sample or diff yielding text and painting only theme colours (§4.3.2)
 
-**Colour equivalence (the migration's harness, and why it stays).** The
+**Colour closure and compositor fidelity (the migration's harness, and why it stays).** The
 editor runs under a compositor that huebox does not control, so "the frame is
 unchanged" is not something the unit tests above can say. Two checks say it,
 and both are part of `discover` rather than an optional extra:
 
-- **I1 — the frame is the golden frame, cell for cell.** Goldens are captured
-  from the pre-migration editor and compared against the running application
-  launched in a pty, read back through a VT emulator. Every glyph, every
-  foreground, every background and every attribute, at every size and fixture.
+- **Fidelity.** The running app, held bare and parsed through a VT emulator,
+  paints cell for cell what the editor wrote — char, foreground, background
+  and attrs, at every size and fixture. The reference is captured live on
+  every run: nothing is recorded, nothing can rot. This is what catches a
+  swapped pair of slots or a widget reaching for the wrong slot.
+
 - **I2 — closure.** Every colour on screen must be one the reference painted,
   and no cell may show the terminal's background. This is what catches a
   widget reaching for a framework default instead of a theme slot, which is the
   failure mode a compositor swap actually has.
 
-Both are recorded before the migration and never regenerate themselves: a
-missing golden is a test failure, not a silent re-record. Re-recording one is a
-reviewed change, and two have been — a picker's trailing-newline defect and a
+The reference is captured live on every run — there is nothing recorded to
+re-record. Two defects the harness found rather than accepted are still worth
+naming: a picker's trailing-newline defect and a
 harness value no real session could produce — each one a defect the harness
 found rather than a change it accepted.
 
@@ -792,7 +795,8 @@ Append-only. Newest last. One line per decision, with the reason.
 | 34 | The header is a three-rung ladder — raster banner, mini banner, wordmark — drawn only out of leftover, forced only to the raster one | The middle rung fills the gap between a six-row banner that needs a wide tall terminal and a one-line wordmark whose thin strokes hide the colours. Forcing still means the raster banner; the middle rung is auto-only, because a flag per rung is chrome around decoration |
 | 35 | The middle rung is a pasted three-row block font (23 columns) instead of four-row line art | The author's own art reads better and costs one row less (three spare rows instead of four), so the rung reaches frames the line art never did. The price is stated plainly: the narrow preview is no longer pure ascii wherever the mini stands in — still no wide glyphs, still holding its width, and ascii again below it |
 | 36 | The header and the selected readout share one side-by-side top block: `[huebox] [theme/path, selected]` | The scattered header and readout cost five rows for what is one glance — which theme, which slot, where its colour sits. Side by side they cost four (three content rows plus air) and the palette grid moves up a row. The price is stated plainly: the bars are measured against the right column now, so an 80-column terminal shows no bars where it used to show the tight rung, and 100 columns show compact where they showed full — the exact numbers below carry those frames instead. Below 60 columns the column cannot hold a bare readout, so the frame stacks again rather than clipping one. A banner still stands above the block and the wordmark stands back to air, so the banner stays the only huebox on screen |
-| 37 | The compositor's top is two unbordered panels side by side: `[header] [theme/path, selected]` | The bare block already reads side by side in text; under the compositor sharing one full-width `Frame` for both halves makes the header and the readout one widget, and every future top affordance has to go through a function whose job is to be both. Two unbordered panels — the logo left, the readout right, no border, no title, only the theme's own background — keep one implementation of what each half says (`top_left_rows` / `top_right_panel_rows`, the same hoist as the side pairs) and put a themed border nowhere near them. The panels are padded to the height the frame laid out, so everything below rides where it did and the click map never moves; a click in the top selects nothing, because the top names no slot. The price is the same price decision 36 paid, one rung further: the bars are measured against the right panel now, so a banner beside a readout shows fewer bars than the same readout stacked under it |
+| 37 | ~~The compositor's top is two unbordered panels side by side: `[header] [theme/path, selected]`~~ — **superseded by decision 38** | The bare block already reads side by side in text; under the compositor sharing one full-width `Frame` for both halves makes the header and the readout one widget, and every future top affordance has to go through a function whose job is to be both. Two unbordered panels kept one implementation of what each half says and put a themed border nowhere near them. The borderlessness was the price of saving two rows the widgets below needed; once the frame could spare them, the top wanted the same chrome as the panels below it |
+| 38 | The compositor's top is two bordered panels side by side: `[logo] [info]` | The logo is its own panel and the theme/path subject is its own `info` panel — the same two halves decision 37 split, now with the same themed border and title as `controls` and `examples`. One implementation of what each half says stays (`top_left_rows` / `top_right_panel_rows`), the pair is asked at `width - 4` so both borders fit, and the click map treats the whole top zone as chrome. The price is two rows: the row budget grows from two panel-rows to three, so small frames fall back to the bare stack instead of trimming widgets to buy borders |
 
 ---
 
@@ -1194,8 +1198,7 @@ live blocks ride inside the examples panel (stacked) or the right-hand panel
 (side-by-side) rather than the bare stack, and the toggles work the same
 there: a shut block hides its rows behind its header, the stacked panel
 shrinks around what remains, and the controls above never move.
-`HUEBOX_COLLAPSIBLE=0` opts out to the bare stack the equivalence
-goldens pin.
+`HUEBOX_COLLAPSIBLE=0` opts out to the bare stack.
 
 ### 14.2 Save, quit, undo
 
