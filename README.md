@@ -16,66 +16,31 @@ no restarting.
   huebox list         list your themes, current one marked
   huebox use <name>   make a theme current and push it to your terminal
   huebox import <name>  snapshot the detected terminal into a theme
-
-Flags on top of the v1 set: `--to ghostty,kitty` chooses push targets,
-`--no-push` writes the theme file only, `--no-reload` leaves the terminal's
-own reload to you, `--ghostty-in-place` keeps a Ghostty
-push in the file the colours already live in, `--force` replaces a theme
-`new` / `import` would not overwrite, `--from <fmt>` names the terminal to
-read from.
 ```
+
+Modifiers: `--to ghostty,kitty` picks push targets, `--no-push` writes the
+theme file only, `--no-reload` skips the terminal reload,
+`--ghostty-in-place` edits a Ghostty config instead of exporting a theme,
+`--force` overwrites on `new` / `import`, `--from <fmt>` and `--config` /
+`--format` override detection.
 
 ## Install
 
 ```sh
-git clone https://github.com/MikkelKappelPersson/huebox
-cd huebox
-uv tool install .     # or: pipx install . / pip install --user .
+uv tool install huebox   # or: pip install --user huebox
 ```
 
-Two dependencies beyond the stdlib, both installed automatically: [Pygments](https://pygments.org),
-which powers the editor's live code sample, and [Textual](https://textual.textualize.io/),
-which the interactive editor runs on. Every colour in the sample comes from
-the theme's own palette.
+The command lands in `~/.local/bin`. If your shell cannot find `huebox`
+afterwards, add that directory to your `PATH` (e.g. at the end of
+`~/.bashrc` or `~/.zshrc`) and reload the shell:
 
-## What's new in 0.2
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
 
-**Your themes live in one place, not in three configs.** `~/.config/huebox` is
-the truth: `huebox import dusk` snapshots a terminal into a theme,
-`huebox edit dusk` works on it, and every save or `huebox use dusk` pushes it
-back to the terminal you are in. `t` inside the editor switches themes, `N`
-turns a direct-config session into a library one, and a Ghostty config that
-keeps its colours in a theme file is pushed there rather than into whatever
-file it happens to point at. Editing is staged too: keystrokes live in a
-buffer, `Ctrl+S` is the only write.
-
-Five changes you might notice on upgrade:
-
-- A push now ends with your terminal reloading its config, so the colours
-  are live when the command finishes, and opening a theme in the picker
-  (`t`, `Enter`) saves and pushes it instead of only loading it into the
-  buffer. `--no-reload` turns the reload off.
-- If your Ghostty config has a `theme =` line, saving a huebox theme now
-  writes that theme's own file under `~/.config/ghostty/themes/` and swaps
-  that one line, where before it spliced the colours into whichever theme
-  file the config pointed at — so saving a theme named `test` used to
-  rewrite `Nightspice`. A `theme =` naming a file that is missing is now
-  repaired by the save rather than refused. Configs with inline colours are
-  edited in place as before; `--ghostty-in-place` restores the old
-  behaviour where it is safe to, and refuses it where it is not.
-- kitty's config-path override is `KITTY_CONFIG_DIRECTORY`, which is what
-  kitty itself reads. The old `KITTY_CONFIG_DIR` spelling still works for one
-  more release, and is probed second.
-- `ALACRITTY_CONFIG_DIR` and `ALACRITTY_CONFIG` are gone — Alacritty documents
-  no such variable, so they never pointed at anything Alacritty read. Use
-  `--config`.
-- Alacritty configs are now also looked for at
-  `$XDG_CONFIG_HOME/alacritty.toml`, which is the second path Alacritty's own
-  search order checks. The legacy `alacritty.yml` still counts.
-
-Nothing above changes what huebox writes to a config: colours only, line by
-line — and a save that changes nothing no longer even touches the file, so its
-mtime survives too.
+Beyond the stdlib it needs [Pygments](https://pygments.org) (the code
+sample) and [Textual](https://textual.textualize.io/) (the editor), both
+installed automatically.
 
 ## Themes
 
@@ -93,8 +58,7 @@ huebox use dusk --no-push             # switch without touching a config
 
 `huebox edit` with no name opens the current theme; `huebox show <name>` and
 `huebox --dump <name>` read a theme file instead of a config. With no theme
-library at all, `huebox edit` is what it always was: editing the terminal
-config in place.
+library at all, `huebox edit` edits the terminal config in place.
 
 ## Editing
 
@@ -102,10 +66,10 @@ Run `huebox edit` and drive it with the keyboard.
 
 | Key | Action |
 | --- | --- |
-| arrows | move between slots — along a row, or up/down a row, in the grid on screen |
-| `q` / `w` | hue −/+ |
-| `a` / `s` | saturation −/+ |
-| `z` / `x` | lightness −/+ |
+| arrows | move between slots |
+| `w` / `e` | hue −/+ |
+| `s` / `d` | saturation −/+ |
+| `x` / `c` | lightness −/+ |
 | `f` | cycle step size ×1 → ×5 → ×20 |
 | `i` | type a hex value |
 | `Ctrl+S` | save — the session's only write: the theme file, then a push |
@@ -114,121 +78,32 @@ Run `huebox edit` and drive it with the keyboard.
 | `N` | save the buffer as a new theme (and then save it) |
 | `Esc` | quit — twice if there are unsaved changes |
 
-The mouse works too: click a swatch or interface cell to select it, click a
-picker row to open it, wheel through a long picker list, and drag across the
-code sample or diff to select text for copying. Clicking anywhere else — the
-header, the hints, the empty air — does nothing, and the wheel does nothing
-outside the picker.
+The mouse works too: click a swatch to select it, a picker row to open it,
+wheel through long picker lists. Clicking anything else does nothing.
 
-Edits live in an in-memory buffer: nothing is written until you press
-`Ctrl+S`. The editor *renders* from that buffer, so everything on screen —
-palette, interface, code sample, and the background / selection / cursor
-examples — is live and truecolor before the file changes (a frame with room to
-spare also shows a git diff of the sample). The frame's own text is drawn
-from the buffer too: the `huebox` wordmark at the top wears the six bright
-hues one letter each, a key in the hint line is bright (`arrows`), the label
-beside it is teal (**move**), the furniture — a path, a hex, a count — is
-muted, and a section header is the theme's own foreground in bold. Edit
-`palette-11` and both the escape in the sample and the keys change colour on
-the same frame. The floor is the buffer's too: every row of the editor —
-the ground under the palette grid, the air between the widgets, the column
-after the last hint — is painted in `background`, so the frame is a sample
-of the theme rather than a preview beside it.
+Edits live in an in-memory buffer — nothing is written until `Ctrl+S` — and
+the whole frame renders from that buffer, so palette, code sample and
+examples are live before the file changes (a tall frame also shows a git
+diff of the sample). The header names what you are editing (`ember ●` for a
+theme, `●` marks unsaved changes); `t` opens the picker without leaving the
+editor, and opening a theme with unsaved edits is refused rather than losing
+them. `Ctrl+S` writes the theme file first, then pushes to your terminal and
+asks it to re-read its config (`--no-reload` turns that off), so the colours
+are live when the command finishes.
 
-The `selected` row ends in a reading of the slot's own colour: for each axis a
-number and a bar — `hue 120° [the whole wheel] sat  48% [grey → colour] val
- 48% [black → colour]`. Each reading sits in a fixed-width field, so the bars
-start in the same columns whatever the slot says and the row does not jump when
-a number grows a digit. The bar is a sweep of its whole axis at the slot's own
-other two readings — press `a`/`s` or `z`/`x` and the entire hue wheel repaints
-— the number says what the reading is, and a hairline one eighth of a cell
-wide, set into the cell the reading falls nearest, says where it sits on the
-bar. The exact reading — `hue 120.0  sat 48.4%  val 47.8%` — sits on the row
-below beside the specimen: the bars and the numbers are the glance, the exact
-numbers are the truth, and neither gives up a row for the other.
-
-Quit with unsaved changes and huebox asks for a second `Esc`
-first; `r` throws the
-buffer away and goes back to your last save.
-
-The header names what you are editing: `ember ● ghostty` for a theme (the `●`
-marks unsaved buffer changes) or `direct:/path/to/config` in a legacy
-direct-config session. `t` opens the theme picker without leaving the editor:
-arrows and `Enter` to use a theme, `n` to make one from the buffer you are
-looking at, `Esc` to go back. `Enter` is a save, not a peek — it writes the
-theme, pushes it and reloads your terminal, so the theme you pick is the one
-on screen; `Ctrl+S` stays for the buffer's own edits. Opening a theme while
-the buffer has unsaved edits is refused with
-`save (Ctrl+S) or revert (r) first` rather than losing them. `N` is the way
-out of a direct-config session: it asks for a name, makes the theme, makes it
-current, and saves it through the same pipeline. If a name is already taken,
-huebox says so and waits for `y` (overwrite) or another name — no modal, and
-nothing is written until you answer.
-
-`Ctrl+S` is two writes: the theme file first, then a push into the terminal
-config that holds your colours — the status bar says which
-(`saved dusk → ghostty`). The theme file is the truth and is never rolled
-back: if a push fails, the save still stands, huebox says why on stderr, and
-the session ends with exit 1. Editing a terminal config directly (no themes
-yet) takes a `<config>.huebox.bak` on its first save; theme files get none.
-
-A push that lands asks the terminal to re-read its config, so the new colours
-are live when the command finishes: ghostty is signalled the way `Ctrl+Shift+,`
-signals it and kitty is asked over its own remote control. A terminal that
-cannot be told keeps the advice line in the report — `Ctrl+Shift+,` for
-ghostty, `Ctrl+Shift+F5` for kitty, and alacritty picks changes up by itself.
-`--no-reload` turns the whole step off. The code sample inside the editor is
-rendered in truecolor from the values you are editing, so it updates *before*
-the reload. A tall enough frame also draws a
-git diff of that sample — `+` lines wear palette 2, `-` lines palette 1 — so a
-theme whose red and green are wrong says so before you reload; the hunk is
-drawn only out of rows the sample did not need, so it never costs it a line.
-
-A config is only ever edited line by line, so a colour the config does not
-define is reported (`not carried by this config: cursor-text, …`) and left
-alone — huebox will not invent a line in your terminal's config. A Ghostty
-theme file is the one file huebox writes whole, and only because it is
-named after the theme it holds.
+A config is only ever edited line by line: a colour it does not define is
+reported (`not carried by this config: …`) and left alone — huebox never
+invents a line in your terminal's config.
 
 ### Ghostty themes
 
-Ghostty keeps its colours in theme files, and a save joins it there whenever
-your config is already organised that way — when it has a `theme =` line,
-huebox writes the theme under *its own* name and repoints your config at
-it:
-
-```sh
-huebox use dusk --to ghostty          # or edit dusk + Ctrl+S
-```
-
-That writes `~/.config/ghostty/themes/dusk` — 22 colours, in Ghostty's own
-`palette = 0=#…` spelling, read back by huebox without drift — and points
-your main config at it with a single `theme =` line: an existing one keeps
-its spacing, its quotes and its comment and only the value changes, a config
-without one gets the line appended, and every other byte of the file is left
-exactly as it was. **Your previous theme file is not touched.** A theme's
-colours never land in a file that belongs to another theme, which is the
-whole reason the save goes through a file at all: saving `dusk` while your
-config is on `Nightspice` gives you a `dusk` file and moves one line, where
-before it would have rewritten `Nightspice` under a name that was no longer
-true. The themes directory is shared with Ghostty's built-ins, so an export
-overwrites a same-name file there (the report tells you when it did).
-
-If your config holds its colours inline — or in a `config-file` include —
-there is no theme name in play, so huebox edits the file the colours are
-already in and leaves your layout alone. Two flags say it out loud:
-`--ghostty-native` forces the export even there (adding the `theme =` line
-for you), `--ghostty-in-place` forces the edit; asking for both is refused.
-The forced export is the one case that can leave a colour behind a theme
-file, and the report says so when it does. Both apply to the ghostty target
-only — `--to ghostty,kitty` exports for Ghostty and pushes kitty the
-ordinary way — and `--no-push` wins over either.
-
-A `theme =` line pointing at a file that is not there (Ghostty calls that
-a configuration error on reload) is treated as a broken config, not a
-colourless one: `huebox use <name>` writes the file, fixes the pointer, and
-tells you the file was missing. Nothing is overwritten to do it — the file
-did not exist.
+When your Ghostty config is organised by theme (a `theme =` line), a save
+writes the theme under *its own* name to `~/.config/ghostty/themes/` and
+moves that one line — saving `dusk` never rewrites another theme's file.
+With inline colours (or a `config-file` include) huebox edits the file in
+place instead. `--ghostty-native` forces the export, `--ghostty-in-place`
+forces the edit; a `theme =` line pointing at a missing file is repaired by
+writing it.
 
 ## Supported terminals
 
@@ -236,49 +111,31 @@ did not exist.
 | --- | --- |
 | Ghostty | `$XDG_CONFIG_HOME/ghostty/config.ghostty`, including `config-file` includes and `theme = Name` indirection |
 | kitty | `$XDG_CONFIG_HOME/kitty/kitty.conf`, `~/.kitty.conf`, or `KITTY_CONFIG_DIRECTORY` |
-| Alacritty | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.alacritty.toml` (and the legacy `alacritty.yml`), dotted keys, `[section]` tables and inline tables |
+| Alacritty | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.alacritty.toml` (and the legacy `alacritty.yml`) |
 
-The search order is each terminal's own (upstream docs, checked October
-2026). `~/.config/...` paths follow `XDG_CONFIG_HOME` when you set it. Alacritty
-documents no environment variable for its config path, so `--config` is the
-only override there; for kitty, `KITTY_CONFIG_DIRECTORY` is upstream's
-spelling (the old `KITTY_CONFIG_DIR` still works, deprecated, for one
-release).
-
-huebox only offers a terminal whose config actually contains colours, so a
-leftover `ALACRITTY_SOCKET` from a session last week will not hijack your
-Ghostty config — and it will not push into one either. Override the guess with
-`--format`:
+Paths follow `XDG_CONFIG_HOME` when set; the search order is each
+terminal's own. huebox only offers a terminal whose config actually holds
+colours. Override detection with `--format`, or point at a file with
+`--config` (one push target only):
 
 ```sh
 huebox edit --format kitty
-huebox show --config ~/dotfiles/alacritty.toml
 huebox use ember --to ghostty --config ~/dotfiles/ghostty/config
 ```
-
-`--config` pushes one format only: with a single `--to` it names the file,
-with several `--to` targets it is refused (ambiguity, not a guess).
 
 ## Safety
 
 Writes are line-level: only the colour tokens are replaced, so comments,
-ordering, alignment and every unrelated setting survive untouched. A save that
-changes nothing is not just byte-identical, it does not write the file at all —
-its mtime is untouched too, so a backup job or a config manager never notices a
-save that saved nothing. Pushing a theme uses that same writer, so a push is no
-more invasive than the v1 in-place edit. The only file huebox writes outside
-your terminal config is its own `~/.config/huebox` library.
+ordering, alignment and every unrelated setting survive untouched. A save
+that changes nothing does not write the file at all — its mtime is untouched
+too. The only file huebox writes outside your terminal config is its own
+`~/.config/huebox` library.
 
 ## Development
 
 ```sh
 python3 -m unittest discover -s tests
 ```
-
-The tests cover reading every slot, round-tripping without drift, changing
-only the intended lines, leaving a config untouched (bytes *and* mtime) when
-nothing changed, following Ghostty includes and `theme =` pointers, pushing
-without inventing keys, and keeping the layout inside narrow terminals.
 
 ## License
 
