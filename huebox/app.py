@@ -612,8 +612,9 @@ LIVE_TITLES = {"examples": "interface text", "diff": "live diff",
 #: One key per live block. All three are free in `apply_key`, so the toggles
 #: never steal a colour key; the picker owns the surface while it is up, so
 #: behind it they stay editor keys (no-ops) rather than collapsing the frame
-#: the user is reading.
-COLLAPSE_KEYS = {"e": "examples", "d": "diff", "c": "sample"}
+#: the user is reading. Shifted, because the bare letters colour: `w/e`,
+#: `s/d` and `x/c` adjust hue, saturation and value.
+COLLAPSE_KEYS = {"E": "examples", "D": "diff", "C": "sample"}
 
 
 def collapsible_enabled() -> bool:

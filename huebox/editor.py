@@ -36,9 +36,9 @@ from .render import (BOLD, CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, RESET, b
 from .tui import term_size
 
 ADJUST = {
-    "q": ("h", -1), "w": ("h", +1),
-    "a": ("s", -1), "s": ("s", +1),
-    "z": ("v", -1), "x": ("v", +1),
+    "w": ("h", -1), "e": ("h", +1),
+    "s": ("s", -1), "d": ("s", +1),
+    "x": ("v", -1), "c": ("v", +1),
     "h": ("h", -1), "l": ("h", +1),
     "j": ("v", -1), "k": ("v", +1),
     "H": ("s", -1), "L": ("s", +1),
@@ -837,7 +837,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # the whole frame — body, widgets and `tail` — before it can know
     # whether the rows below leave room.
     tail = ["  " + line for line in hint_line(slots, [
-        ("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"), ("z/x", "light"),
+        ("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"), ("x/c", "light"),
         ("f", f"x{mult}"), ("i", "hex"), ("^S", "save"),
         ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"),
         ("N", "as new"), ("Esc", "quit")],

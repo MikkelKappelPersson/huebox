@@ -463,8 +463,8 @@ class HsvReadout(unittest.TestCase):
 class Typography(unittest.TestCase):
     """The frame's own vocabulary: keys, labels, muted furniture (§8.1)."""
 
-    HINTS = [("arrows", "move"), ("q/w", "hue"), ("a/s", "sat"),
-             ("z/x", "light"), ("f", "x5"), ("i", "hex"), ("^S", "save"),
+    HINTS = [("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"),
+             ("x/c", "light"), ("f", "x5"), ("i", "hex"), ("^S", "save"),
              ("u", "undo(1)"), ("r", "revert"), ("t", "themes"),
              ("N", "as new"), ("Esc", "quit")]
     AMBER, TEAL, GREY = "#e0c06c", "#6cc0c0", "#d0d0d8"

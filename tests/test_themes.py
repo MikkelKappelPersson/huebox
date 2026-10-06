@@ -986,7 +986,7 @@ class EditorWiring(LibraryHome):
     def test_ctrl_s_writes_the_theme_file(self):
         themes.create("ember", FULL)
         # palette-0 starts black: a hue nudge would not show on a grey
-        self.session(["x", editor.SAVE_KEY, "esc"])
+        self.session(["c", editor.SAVE_KEY, "esc"])
         saved = themes.load("ember")
         self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
         self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
@@ -997,7 +997,7 @@ class EditorWiring(LibraryHome):
     def test_quitting_without_saving_leaves_the_file_alone(self):
         themes.create("ember", FULL)
         original = self.read(self.theme_file("ember"))
-        self.session(["x", "esc", "esc"])
+        self.session(["c", "esc", "esc"])
         self.assertEqual(self.read(self.theme_file("ember")), original)
 
 
@@ -1035,7 +1035,7 @@ class PushOnSave(_PushSession):
 
     def test_ctrl_s_writes_truth_then_pushes(self):
         spec = cli.PushSpec(("kitty",), None, self.kitty, False)
-        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
         saved = themes.load("ember")
         self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
@@ -1066,7 +1066,7 @@ class PushOnSave(_PushSession):
         spec = cli.PushSpec(("ghostty", "kitty"), None, None, False)
         with mock.patch.dict(os.environ, {"HOME": self.root}), \
                 mock.patch.object(themes, "resolve", side_effect=fake):
-            status, out, _ = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+            status, out, _ = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
         self.assertIn("saved ember → ghostty, kitty", out)
         saved = themes.load("ember")
@@ -1078,7 +1078,7 @@ class PushOnSave(_PushSession):
     def test_no_push_leaves_the_config_bytes_and_mtime_alone(self):
         stamp = os.path.getmtime(self.kitty)
         spec = cli.PushSpec((), None, self.kitty, True)
-        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
         self.assertNotEqual(themes.load("ember")["palette-0"],
                             FULL["palette-0"])
@@ -1092,7 +1092,7 @@ class PushOnSave(_PushSession):
         blank = self.write(os.path.join(self.root, "blank.ghostty"),
                            "font-size = 12\n")
         spec = cli.PushSpec(("ghostty",), None, blank, False)
-        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 1)
         saved = themes.load("ember")
         self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
@@ -1105,7 +1105,7 @@ class PushOnSave(_PushSession):
     def test_a_session_with_no_spec_pushes_nothing(self):
         # the programmatic default: `edit()` without a command line writes
         # truth only, and never reaches for a terminal nobody named
-        status, out, _ = self.session(["x", editor.SAVE_KEY, "esc"], None)
+        status, out, _ = self.session(["c", editor.SAVE_KEY, "esc"], None)
         self.assertEqual(status, 0)
         self.assertEqual(self.read(self.kitty), self.before)
         self.assertIn("saved ember (truth only)", out)
@@ -1125,7 +1125,7 @@ class GhosttyNativeOnSave(_PushSession):
         return cli.PushSpec(("ghostty",), None, self.config, False, True)
 
     def test_ctrl_s_exports_a_theme_file_and_points_the_config(self):
-        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"],
                                         self.native_spec())
         self.assertEqual(status, 0)
         saved = themes.load("ember")             # truth first, always
@@ -1145,7 +1145,7 @@ class GhosttyNativeOnSave(_PushSession):
     def test_the_report_never_lands_inside_the_frame(self):
         # §13.7: the report is printed after the session, never from the
         # draw loop - so the frame cannot contain it
-        _status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+        _status, out, err = self.session(["c", editor.SAVE_KEY, "esc"],
                                          self.native_spec())
         self.assertNotIn("exported", out.replace("saved ember → ghostty", ""))
         self.assertIn("exported", err)
@@ -1153,7 +1153,7 @@ class GhosttyNativeOnSave(_PushSession):
     def test_no_push_beats_the_flag_in_a_session_too(self):
         spec = cli.PushSpec(("ghostty",), None, self.config, True, True)
         before = self.read(self.config)
-        status, out, err = self.session(["x", editor.SAVE_KEY, "esc"], spec)
+        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
         self.assertEqual(self.read(self.config), before)
         self.assertFalse(os.path.exists(self.native))
@@ -1173,7 +1173,7 @@ class GhosttyNativeOnSave(_PushSession):
         spec = cli.PushSpec(("ghostty",), None, config, False)
         with mock.patch.dict(themes.FORMATS["ghostty"],
                              {"defaults": [config]}):
-            status, out, err = self.session(["x", editor.SAVE_KEY, "esc"],
+            status, out, err = self.session(["c", editor.SAVE_KEY, "esc"],
                                             spec)
         self.assertEqual(status, 0)
         saved = themes.load("ember")          # truth first, still
@@ -1250,7 +1250,7 @@ class Picker(LibraryHome):
         # name - so the config is written and the note says so once
         spec = cli.PushSpec(("ghostty",), None, self.config, False, True)
         status, _drawn, _out, err = self.session(
-            ["x", editor.SAVE_KEY, "esc"], self.direct_target(), spec)
+            ["c", editor.SAVE_KEY, "esc"], self.direct_target(), spec)
         self.assertEqual(status, 0)
         self.assertEqual(err.count("--ghostty-native needs a theme"), 1)
         self.assertIn("background = ", self.read(self.config))
@@ -1278,7 +1278,7 @@ class Picker(LibraryHome):
     def test_opening_another_theme_switches_the_buffer_and_the_save(self):
         # the whole point: the subject can change mid-session, so Ctrl+S
         # writes the new truth file and pushes that (§13.6, §13.7)
-        status, drawn, out, err = self.session(["t", "down", "\r", "x",
+        status, drawn, out, err = self.session(["t", "down", "\r", "c",
                                                 editor.SAVE_KEY, "esc"])
         self.assertEqual(status, 0)
         self.assertEqual(themes.current(), "frost")
@@ -1295,7 +1295,7 @@ class Picker(LibraryHome):
 
     def test_a_dirty_switch_is_blocked_and_says_exactly_why(self):
         before = self.read(self.theme_file("frost"))
-        status, drawn, _, err = self.session(["x", "t", "down", "\r",
+        status, drawn, _, err = self.session(["c", "t", "down", "\r",
                                               "esc", "r", "esc"])
         self.assertEqual(status, 0)
         self.assertEqual(themes.current(), "ember")       # decision 12
@@ -1307,7 +1307,7 @@ class Picker(LibraryHome):
 
     def test_n_makes_a_theme_from_the_buffer_and_the_next_save_pushes_it(self):
         status, drawn, _, err = self.session(
-            ["x", "t", "n", "esc", editor.SAVE_KEY, "esc"], answers=["dusk"])
+            ["c", "t", "n", "esc", editor.SAVE_KEY, "esc"], answers=["dusk"])
         self.assertEqual(status, 0)
         self.assertTrue(os.path.isfile(self.theme_file("dusk")))
         self.assertEqual(themes.current(), "dusk")
@@ -1321,7 +1321,7 @@ class Picker(LibraryHome):
     def test_save_as_new_migrates_a_direct_session_onto_the_library(self):
         # §13.4 — `N` is the documented way out of a v1 direct-mode session
         status, drawn, out, err = self.session(
-            ["x", "N", "esc"], target=self.direct_target(), answers=["dusk"])
+            ["c", "N", "esc"], target=self.direct_target(), answers=["dusk"])
         self.assertEqual(status, 0)
         self.assertEqual(themes.current(), "dusk")
         expected = themes.load("dusk")
@@ -1335,7 +1335,7 @@ class Picker(LibraryHome):
 
     def test_save_as_new_asks_before_replacing_a_taken_name(self):
         original = self.read(self.theme_file("ember"))
-        status, drawn, _, err = self.session(["x", "N", "esc"],
+        status, drawn, _, err = self.session(["c", "N", "esc"],
                                              answers=["ember", "y"])
         self.assertEqual(status, 0)
         self.assertNotEqual(self.read(self.theme_file("ember")), original)
@@ -1346,7 +1346,7 @@ class Picker(LibraryHome):
     def test_cancelling_the_confirm_leaves_the_taken_theme_alone(self):
         original = self.read(self.theme_file("ember"))
         config_before = self.read(self.config)
-        status, drawn, out, err = self.session(["x", "N", "esc", "esc"],
+        status, drawn, out, err = self.session(["c", "N", "esc", "esc"],
                                                answers=["ember", ""])
         self.assertEqual(status, 0)
         self.assertEqual(self.read(self.theme_file("ember")), original)

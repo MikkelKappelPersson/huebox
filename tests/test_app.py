@@ -942,11 +942,11 @@ class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
             return huebox_app.Editor()
 
     async def test_every_adjust_key_survives_a_session_the_app_built(self):
-        # Smoke by default: `q` was the crash (mult as string), and every
+        # Smoke by default: `w` was the crash (mult as string), and every
         # adjust key shares the same step path; `HUEBOX_ALL=1` walks all six.
-        keys = ("q", "w", "a", "s", "z", "x")
+        keys = ("w", "e", "s", "d", "x", "c")
         if not os.environ.get("HUEBOX_ALL"):
-            keys = ("q",)
+            keys = ("w",)
         for key in keys:
             with self.subTest(key=key):
                 app = await self._app()
@@ -2036,21 +2036,21 @@ class CollapsibleExamplesRunning(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(live)
             self.assertEqual(len(list(app.query(huebox_app.Live))),
                              len(live))
-            await self._press(app, pilot, "d")
+            await self._press(app, pilot, "D")
             self.assertEqual(app._collapsed, {"diff"},
-                             "`d` did not collapse the diff alone")
+                             "`D` did not collapse the diff alone")
             self.assertEqual(len(list(app.query(huebox_app.Live))),
                              len(live),
                              "collapsing unmounted a sibling")
-            await self._press(app, pilot, "e")
+            await self._press(app, pilot, "E")
             self.assertEqual(app._collapsed, {"diff", "examples"})
-            await self._press(app, pilot, "d")
+            await self._press(app, pilot, "D")
             self.assertEqual(app._collapsed, {"examples"},
-                             "second `d` did not reopen the diff")
-            await self._press(app, pilot, "c")
+                             "second `D` did not reopen the diff")
+            await self._press(app, pilot, "C")
             self.assertEqual(app._collapsed, {"examples", "sample"})
-            await self._press(app, pilot, "e")
-            await self._press(app, pilot, "c")
+            await self._press(app, pilot, "E")
+            await self._press(app, pilot, "C")
             self.assertEqual(app._collapsed, set(),
                              "the blocks did not all reopen")
 
@@ -2067,7 +2067,7 @@ class CollapsibleExamplesRunning(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             self.assertIsNotNone(app.state.overlay)
-            for key in ("e", "d", "c"):
+            for key in ("E", "D", "C"):
                 await self._press(app, pilot, key)
             self.assertEqual(app._collapsed, set(),
                              "a toggle collapsed the frame behind the picker")
@@ -2114,9 +2114,9 @@ class CollapsiblePanelsRunning(unittest.IsolatedAsyncioTestCase):
             before = [widget for widget in lives
                       if widget.name == "sample"][0]
             self.assertFalse(before.collapsed)
-            await self._press(app, pilot, "c")
+            await self._press(app, pilot, "C")
             self.assertEqual(app._collapsed, {"sample"},
-                             "`c` recorded the collapse and changed nothing")
+                             "`C` recorded the collapse and changed nothing")
             shut = [widget for widget in app.query(huebox_app.Live)
                     if widget.name == "sample"][0]
             self.assertTrue(shut.collapsed,
@@ -2124,6 +2124,6 @@ class CollapsiblePanelsRunning(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(list(app.query(huebox_app.Live))),
                              len(lives),
                              "collapsing unmounted a sibling")
-            await self._press(app, pilot, "c")
+            await self._press(app, pilot, "C")
             self.assertEqual(app._collapsed, set(),
-                             "second `c` did not reopen the sample")
+                             "second `C` did not reopen the sample")

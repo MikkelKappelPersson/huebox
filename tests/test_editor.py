@@ -374,7 +374,7 @@ class Readout(unittest.TestCase):
         before = self.selected(120)
         st = editor.EditorState(dict(self.SLOTS), lambda values: None)
         st.sel, st.grid = 4, editor.grid_geometry(120)
-        for key in ("f", "f", "q"):
+        for key in ("f", "f", "w"):
             editor.apply_key(key, st)
         after = self.selected(120, slots=st.slots)
         self.assertNotEqual(before, after)
@@ -1006,7 +1006,7 @@ class NormalFrame(unittest.TestCase):
     def test_a_fold_never_splits_a_key_from_its_label(self):
         # the hint row is painted a token at a time; the fold lands between
         # whole hints, so no row ends with a key looking orphaned
-        whole = {"arrows move", "q/w hue", "a/s sat", "z/x light", "f x5",
+        whole = {"arrows move", "w/e hue", "s/d sat", "x/c light", "f x5",
                  "i hex", "^S save", "u undo(1)", "r revert", "t themes",
                  "N as new", "Esc quit"}
         for cols in (120, 100, 80, 60, 40):
@@ -1166,7 +1166,7 @@ class ApplyKey(unittest.TestCase):
 
     def test_every_buffer_edit_is_written_only_on_save(self):
         st, writes = self.background_state()
-        for key in ("w", "w", "a", "x"):
+        for key in ("e", "e", "d", "c"):
             editor.apply_key(key, st)
         self.assertEqual(writes, [])
         editor.apply_key(SAVE, st)
@@ -1673,7 +1673,7 @@ class Backup(unittest.TestCase):
 
     def test_edits_alone_never_create_a_backup(self):
         st, _ = self.state()
-        for key in ("w", "a", "x", "s"):
+        for key in ("e", "d", "c", "w"):
             editor.apply_key(key, st)
         editor.apply_key("esc", st)
         editor.apply_key("esc", st)
@@ -1923,7 +1923,7 @@ class PickerKeys(PickerCase):
         st = self.picker_state()
         before = dict(st.slots)
         editor.apply_key("t", st)
-        for key in ("w", "a", "x", "u", "r", "f", SAVE, "i", "N"):
+        for key in ("e", "d", "c", "u", "r", "f", SAVE, "i", "N"):
             editor.apply_key(key, st)
         self.assertEqual(st.slots, before)
         self.assertEqual(st.mult, 1)

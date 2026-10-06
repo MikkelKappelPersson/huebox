@@ -89,9 +89,9 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | Key | Action |
 | --- | --- |
 | arrows | move between slots — along a row, or up/down a row, in the grid as drawn (§4.3.1) |
-| `q` / `w` | hue −/+ |
-| `a` / `s` | saturation −/+ |
-| `z` / `x` | lightness −/+ |
+| `w` / `e` | hue −/+ |
+| `s` / `d` | saturation −/+ |
+| `x` / `c` | lightness −/+ |
 | `f` | cycle step multiplier ×1 → ×5 → ×20 |
 | `i` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
@@ -432,7 +432,7 @@ bright half is read twice in one frame — once as syntax, once as chrome:
 
 | role | slot | carries |
 | --- | --- | --- |
-| key | `palette-11` | `arrows`, `q/w`, `^S`, `Esc` — the half the reader is hunting for, so it wears the brightest thing in the line |
+| key | `palette-11` | `arrows`, `w/e`, `^S`, `Esc` — the half the reader is hunting for, so it wears the brightest thing in the line |
 | label | `palette-14` | the label beside a key: `arrows` **move** |
 | muted | `palette-8` | the furniture: a path, a hex, hue/sat/val, a counter, a parenthetical, the `0-7 base` legend |
 
@@ -1198,8 +1198,9 @@ span emphasised; that is the whole comparison.
 The three live widgets — the strip, the diff (§14.4) and the code sample —
 are each their own collapsible, all open by default. The strip's header calls
 it `interface text`, which is what it demonstrates: the background, selection
-and cursor pairs the interface is set in. `e` collapses the strip, `d` the
-diff, `c` the code, and each key again reopens it; clicking a header or
+and cursor pairs the interface is set in. `E` collapses the strip, `D` the
+diff, `C` the code, and each key again reopens it (shifted, because the bare
+letters adjust hue, saturation and value); clicking a header or
 pressing Enter on it does the same, through Textual's `Collapsible`. A
 collapsed block hides its rows behind its header while the frame stays drawn
 whole, so the hits above the live area never move and what rides up below it

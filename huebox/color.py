@@ -16,7 +16,7 @@ MISSING = "#808080"
 #: sat/val, times the session's step. Pure and named so the Textual shell
 #: (`app.py`, migration phase 2) and `editor._adjust` cannot drift apart on
 #: what a key press does to a colour — the shell had its own 0.01 steps, which
-#: would have made `q/w` feel different under Textual than under huebox.
+#: would have made `w/e` feel different under Textual than under huebox.
 HUE_STEP = 1 / 360
 CHANNEL_STEP = 0.02
 
