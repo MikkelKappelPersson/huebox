@@ -1350,7 +1350,10 @@ the small-size story and anything below that needs it.
    (`PANEL_LIMITS` in `app.py`, enforced through Textual's own `min-width` /
    `max-width` / `min-height` / `max-height`). Below a panel's minimum the
    frame falls back the way it always did — the bare stack, then the
-   too-small hint — instead of squeezing the panel below usable. Above a
+   too-small hint — instead of squeezing the panel below usable. The side
+   pair is the exception: each panel hugs its mounted width there, so the
+   floors follow the variant (13 / 31 / 52 left, the rest right) instead of
+   clamping the pair wider than the window. Above a
    panel's maximum the frame is laid out at `min(size, max)` and the extra
    columns and rows stay the buffer's own background fill: the grid, the
    hint folds and the row budget stop moving, so a very wide or tall window

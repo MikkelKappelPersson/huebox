@@ -1537,6 +1537,12 @@ class Editor(App):
         right_panel = Panel(PANEL_TITLES["examples"], *right_children,
                             name="examples")
         right_panel.styles.width = right_outer
+        if panel_limits_enabled() and right_outer < PANEL_MIN_W:
+            # The mirror of the left floor: below 55 columns the stacked
+            # minimum would hold the right panel at 42 while it asks for
+            # less, and the pair would overflow the window by the
+            # difference — the row's right border column cut off screen.
+            right_panel.styles.min_width = right_outer
         right_panel.styles.height = content_h + 2
         right_panel.styles.padding = 0
         right_panel.styles.margin = 0

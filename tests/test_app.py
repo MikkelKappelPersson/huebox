@@ -2033,6 +2033,11 @@ class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
                              huebox_app.LEFT_THIN_OUTER_W)
             self.assertEqual(left.outer_size.width,
                              huebox_app.LEFT_THIN_OUTER_W)
+            # wide enough that the stacked floor still holds the right.
+            self.assertEqual(right.styles.min_width.value,
+                             huebox_app.PANEL_MIN_W)
+            self.assertEqual(right.outer_size.width, 70
+                             - huebox_app.LEFT_THIN_OUTER_W)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_a_click_in_the_thin_left_panel_selects_the_pair(self):
@@ -2066,6 +2071,27 @@ class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
                                    delta_x=0, delta_y=0, button=1,
                                    shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
+
+    async def test_below_55_the_right_panel_hugs(self):
+        # Past 55 the right panel asks for less than the stacked 42:
+        # without the variant floor it would render 42, overflow the
+        # row, and lose its right border column off screen.
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(50, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            pairs = [row for row in app.query(Horizontal)
+                     if len(list(row.query(huebox_app.Panel))) == 2]
+            self.assertEqual(len(pairs), 1,
+                             "no controls | live pair mounted")
+            left, right = list(pairs[0].query(huebox_app.Panel))
+            self.assertEqual(right.styles.min_width.value,
+                             50 - huebox_app.LEFT_THIN_OUTER_W)
+            self.assertEqual(left.outer_size.width
+                             + right.outer_size.width, 50)
+            self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_past_the_floor_no_pair_runs(self):
         # Past MIN_COLS there is no room for even the thin pair: the
