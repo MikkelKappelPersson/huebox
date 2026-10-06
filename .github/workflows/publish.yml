@@ -1,8 +1,10 @@
 name: Publish
 
-# Release first, then PyPI: a version tag builds, tests, drafts the GitHub
-# Release with the sdist/wheel attached, and only then uploads to PyPI.
-# Tag shape: vX.Y.Z (e.g. v0.2.0) and it must match [project] version.
+# Release first, then PyPI, then AUR: a version tag builds, tests,
+# drafts the GitHub Release with the sdist/wheel attached, uploads to
+# PyPI, and finally bumps the AUR package (whose source *is* the PyPI
+# sdist, so it must go last). Tag shape: vX.Y.Z (e.g. v0.3.0) and it must
+# match [project] version.
 on:
   push:
     tags:
@@ -103,3 +105,63 @@ jobs:
       - name: Publish to PyPI
         if: github.event_name != 'workflow_dispatch' || !inputs.testpypi
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  aur:
+    name: Publish to AUR
+    # tags only: a manual run must never touch the real AUR, and the
+    # PKGBUILD's source *is* the PyPI sdist, so this goes after PyPI.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, github-release, pypi]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    environment:
+      name: aur
+      url: https://aur.archlinux.org/packages/huebox
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git openssh base-devel
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Clone the AUR repo as a non-root builder
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -e
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::error::AUR_SSH_PRIVATE_KEY secret is not set - add the AUR account's key under the 'aur' environment"
+            exit 1
+          fi
+          useradd -m builder
+          install -dm700 -o builder -g builder /home/builder/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > /home/builder/.ssh/id_ed25519
+          chmod 600 /home/builder/.ssh/id_ed25519
+          chown builder:builder /home/builder/.ssh/id_ed25519
+          printf 'Host aur.archlinux.org\n  IdentityFile /home/builder/.ssh/id_ed25519\n  IdentitiesOnly yes\n' > /home/builder/.ssh/config
+          chown builder:builder /home/builder/.ssh/config
+          ssh-keyscan -t ed25519 aur.archlinux.org > /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+          git config --global --add safe.directory /home/builder/huebox
+          su builder -c "git clone ssh://aur@aur.archlinux.org/huebox.git /home/builder/huebox"
+
+      - name: Bump pkgver + sums, regenerate .SRCINFO
+        run: |
+          set -e
+          VER="${GITHUB_REF#refs/tags/v}"
+          SUM="$(sha256sum "dist/huebox-$VER.tar.gz" | cut -d' ' -f1)"
+          echo "aur release $VER sha256 $SUM"
+          su builder -c "export VER='$VER' SUM='$SUM'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums=.*/sha256sums=('\$SUM')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)=' PKGBUILD"
+          su builder -c "cd /home/builder/huebox && makepkg --printsrcinfo > .SRCINFO"
+          # the sdist must actually be fetchable before the AUR points at
+          # it; the PyPI CDN can lag the upload by a minute or two.
+          su builder -c "cd /home/builder/huebox && for i in 1 2 3 4 5; do makepkg --verifysource && break || sleep 60; done"
+
+      - name: Commit + push to AUR
+        run: |
+          cd /home/builder/huebox
+          if git diff --quiet; then echo "AUR already at this version - nothing to do"; exit 0; fi
+          su builder -c "cd /home/builder/huebox && git -c user.name='huebox-release' -c user.email='huebox-release@users.noreply.github.com' commit -am \"huebox \$(grep '^pkgver=' PKGBUILD | cut -d= -f2)\" && git push origin master"
