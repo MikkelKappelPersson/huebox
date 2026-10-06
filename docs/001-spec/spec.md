@@ -489,35 +489,40 @@ room for a banner it stands above the block and the wordmark stands back to
 air, so the banner is still the only huebox on screen; the right column
 stays where it was, one banner lower.
 
-**Under the compositor the top is two bordered panels, side by side.**
-`[logo] [info]` (decision 38): the left panel holds only
-the logo — the raster banner where it fits, else the mini banner, else the
-one-line wordmark, the same ladder the frame stands up — and the right
-panel the theme subject plus the selected readout, the same three rows the
-bare block paints, measured against the panel's own width. Two `Panel`s in
-one `Horizontal`, titled `logo` and `info`, on the buffer's own background,
-so the top reads as two boxes sharing one row budget rather than as two
-columns of chrome. The `info` panel owns the top's one control: a flat
-`themes` button under the readout, a mouse mirror of `t` through the same
-`apply_key` call — so the button and the key cannot disagree about what the
-picker is — never focusable, so the arrows stay on the grids, and painted
-from the theme's own `selection-background` / `selection-foreground` — the
-same pair the picker marks a theme with — so it reads as part of the theme
-rather than as a colour of its own.
-The panels are padded to the height the frame laid out,
+**Under the compositor the top is one row: bare logo, info, one bordered panel.**
+`[logo] [info] [editor]` (decision 40): the logo is bare chrome at every
+width — the raster banner where it fits, else the mini banner, else the
+one-line wordmark, the same ladder the frame stands up, never a panel and
+never a border — the info column the theme subject only, and the bordered
+`Panel` titled `editor` the selected readout (chip, name, hex, specimen)
+plus the three HSV bars. One arrangement at every size it fits, so `info`
+and `editor` stay separate boxes and no fallback ever merges the editor's
+own controls into `info`: past the tightest share the compositor keeps
+the bare stack top `draw_editor` painted instead of a merged panel. The
+shares come from one allocator (`editor.top_layout`, asked by the mounter
+and the row budget alike, never re-derived): the logo steps down its
+ladder first, then info truncates its path (`…` keeps the tail) instead of
+holding air while the editor squeezes, then the head stacks its chip and
+specimen onto two rows instead of one — wide head before stacked, wider
+logo before narrower. The info column owns the top's one control: a flat
+`themes` button under the theme subject, a mouse mirror of `t` through the
+same `apply_key` call — so the button and the key cannot disagree about
+what the picker is — never focusable, so the arrows stay on the grids, and
+painted from the theme's own `selection-background` / `selection-foreground`
+— the same pair the picker marks a theme with — so it reads as part of the
+theme rather than as a colour of its own.
+The row is padded to the height the frame laid out,
 so everything below rides where it did and the click map never moves — and
 a click anywhere else in the top selects nothing, because the top names no slot
-(§4.3.2). Where the columns fit the bordered `editor` panel instead — header
-and theme bare beside one box holding only the HSV bars — the same flat
-`themes` button rides under the theme subject in the metadata column: that
-column's last row is blank fill, so the button costs no row and the row
-budget never moves. The price is stated plainly, the same price decisions 36 and 37
-already paid, one rung further: the pair is asked at `width - 4` so both
-borders fit, the bars are measured against the right panel, and the row
-budget grows from two panel-rows to three (top + controls + examples),
-so a frame that cannot spare six rows keeps the bare stack instead.
-Below `TOP_MIN_COLS` the right panel
-cannot hold even a bare readout, so the compositor keeps the stacked chrome
+(§4.3.2). That column's last row is blank fill, so the button costs no row
+and the row budget never moves. The price is stated plainly, the same price
+decisions 36 and 37 already paid, one rung further: the row budget grows
+from two panel-rows to three (top + controls + examples), and the redraw
+pays the top's actual height — the `editor` box holds one head row plus
+three bars behind two borders, six rows over the bare header it replaces —
+out of decoration rather than scrolling, so a frame that cannot spare six
+rows keeps the bare stack instead.
+Past the tightest share the compositor keeps the stacked chrome
 it always did; `HUEBOX_TOP=0` pins that stack at any width, the same opt-out
 the bare frame keeps for the tests that assert it.
 
@@ -808,7 +813,10 @@ Append-only. Newest last. One line per decision, with the reason.
 | 35 | The middle rung is a pasted three-row block font (23 columns) instead of four-row line art | The author's own art reads better and costs one row less (three spare rows instead of four), so the rung reaches frames the line art never did. The price is stated plainly: the narrow preview is no longer pure ascii wherever the mini stands in — still no wide glyphs, still holding its width, and ascii again below it |
 | 36 | The header and the selected readout share one side-by-side top block: `[huebox] [theme/path, selected]` | The scattered header and readout cost five rows for what is one glance — which theme, which slot, where its colour sits. Side by side they cost four (three content rows plus air) and the palette grid moves up a row. The price is stated plainly: the bars are measured against the right column now, so an 80-column terminal shows no bars where it used to show the tight rung, and 100 columns show compact where they showed full — the exact numbers below carry those frames instead. Below 60 columns the column cannot hold a bare readout, so the frame stacks again rather than clipping one. A banner still stands above the block and the wordmark stands back to air, so the banner stays the only huebox on screen |
 | 37 | ~~The compositor's top is two unbordered panels side by side: `[header] [theme/path, selected]`~~ — **superseded by decision 38** | The bare block already reads side by side in text; under the compositor sharing one full-width `Frame` for both halves makes the header and the readout one widget, and every future top affordance has to go through a function whose job is to be both. Two unbordered panels kept one implementation of what each half says and put a themed border nowhere near them. The borderlessness was the price of saving two rows the widgets below needed; once the frame could spare them, the top wanted the same chrome as the panels below it |
-| 38 | The compositor's top is two bordered panels side by side: `[logo] [info]` | The logo is its own panel and the theme/path subject is its own `info` panel — the same two halves decision 37 split, now with the same themed border and title as `controls` and `examples`. One implementation of what each half says stays (`top_left_rows` / `top_right_panel_rows`), the pair is asked at `width - 4` so both borders fit, and the click map treats the whole top zone as chrome. The price is two rows: the row budget grows from two panel-rows to three, so small frames fall back to the bare stack instead of trimming widgets to buy borders |
+| 38 | ~~The compositor's top is two bordered panels side by side: `[logo] [info]`~~ — **superseded by decision 39** | The logo is its own panel and the theme/path subject is its own `info` panel — the same two halves decision 37 split, now with the same themed border and title as `controls` and `examples`. One implementation of what each half says stays (`top_left_rows` / `top_right_panel_rows`), the pair is asked at `width - 4` so both borders fit, and the click map treats the whole top zone as chrome. The price is two rows: the row budget grows from two panel-rows to three, so small frames fall back to the bare stack instead of trimming widgets to buy borders |
+| 39 | ~~The logo is bare chrome at every width and `info` holds metadata only~~ — **superseded by decision 40** | Shrinking out of the `editor` panel traded bare logo for a bordered `logo` panel — a border appearing exactly when the window gets small — and the fallback shared `top_right_panel_rows` with the readout, so the HSV bars moved inside `info` where editor and subject could not be told apart. The fallback mounted the logo as a bare `Frame` and `info` from `top_info_rows` (theme, selected readout, specimen; never a bar). One step, not the destination: the fallback was still a second top that merged what the first kept apart |
+| 40 | The top is one row — logo, info, `editor` — at every size it fits, bare stack past it | `info` and `editor` stay separate boxes at all sizes: bare logo, the theme-only info column, the bordered `editor` panel with the readout plus the three bars — one arrangement, no merge step, and past the tightest share the bare stack stands instead of a merged panel. The shares come from one allocator (`editor.top_layout`): logo down its ladder first, then info truncates its path, then the head stacks — so info shrinks with the window instead of holding air while the editor squeezes. The price is stated plainly: the `editor` box costs six rows over the bare header (one head row plus three bars behind two borders — the blank breathing row was spent to hold that budget), the redraw pays the top's actual height out of decoration rather than scrolling, and the closure test allows the bars' own ramp cells, which the bare reference paints at a different length with disjoint hexes |
+| 41 | Narrow interface cells abbreviate before they stack: `BG FG CC CT SB SF` + hex below 68 columns, hexless past 30 | The palette already sheds its hex before its cells, and the interface does the same with its names: two full 32-wide cells need 68 columns, two abbreviated 13-wide ones 30, so below 68 the frame holds two abreast and only past 30 stacks them one to a row. The price is stated plainly: at 40–67 columns the interface costs three rows instead of six, which the widgets below spend — the strip survives at 60x20 where it used to go, and `selected` fits at 40x12 — and the hexless rung is a floor past what any frame at or above `MIN_COLS` reaches, the way the palette ladder keeps one. The arrows step through the same narrowing the frame shows, because both come out of the one grid computation (§4.3.1) |
 
 ---
 
@@ -1306,6 +1314,14 @@ the small-size story and anything below that needs it.
    selection and the layout are one calculation, not two that can drift. The
    frame also reports where its blocks landed, so each block is a widget
    placed where the frame decided rather than a layout computed a second time.
+   Both grids shed cell width before they shed columns: the palette prints
+   its hex where a full cell fits and the bare index where it does not, and
+   the interface prints `mark name hex` (32) where two fit, the two-letter
+   abbreviations `BG FG CC CT SB SF` with hex (13) below 68 columns, one
+   abbreviated cell to a row past 30, and the hex goes last — past what any
+   frame at or above `MIN_COLS` reaches. So the interface holds two cells
+   abreast at every size the editor draws, and the arrows step through the
+   same narrowing the frame shows.
 3. `pack()` / `clip()` remain the only width-sensitive primitives; every new
    widget (examples strip, theme overlay) must go through them. Both measure
    display columns with SGR escapes left out (`visible()`, §8.1), so a widget
@@ -1326,6 +1342,18 @@ the small-size story and anything below that needs it.
 5. Static `show` is unchanged: one-shot render at the current size.
 6. Tests: layout cases at several sizes including below-minimum (§10 grows
    one line: `pack`/`clip`/overlay rendering at 100x30, 80x24, 60x16, 40x10).
+7. Each bordered panel keeps a minimum and a maximum width and height
+   (`PANEL_LIMITS` in `app.py`, enforced through Textual's own `min-width` /
+   `max-width` / `min-height` / `max-height`). Below a panel's minimum the
+   frame falls back the way it always did — the bare stack, then the
+   too-small hint — instead of squeezing the panel below usable. Above a
+   panel's maximum the frame is laid out at `min(size, max)` and the extra
+   columns and rows stay the buffer's own background fill: the grid, the
+   hint folds and the row budget stop moving, so a very wide or tall window
+   no longer reflows the content, and a click out in the fill selects
+   nothing (§4.3.2). `HUEBOX_PANEL_LIMITS=0` opts out to the unbounded
+   layout. The bounds sit clear of the tested sizes, so capping is a no-op
+   there and the fill-window and no-scroll guarantees keep holding.
 
 **What a short frame spends, in order.** `rows` is a budget and the three live
 widgets of §§14.1/14.4 — the examples strip, the diff and the code sample —

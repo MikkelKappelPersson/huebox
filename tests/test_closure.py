@@ -131,6 +131,31 @@ class TestClosure(unittest.TestCase):
         raw, height = harness.capture_reference(fixture, cols, rows)
         return raw, height, set(harness.closure(raw, cols, rows, height))
 
+    def _bar_closure(self, fixture):
+        """Colours the compositor's own bars may paint past the reference.
+
+        Decision 40: the unified top's `editor` panel paints the three HSV
+        bars at the panel's own width; the bare reference paints its
+        side-block bars at the frame's. Same interpolation from the same
+        slot (`render.hsv_axis`), different lengths, disjoint hexes — so
+        exact closure against the bare frame cannot hold wherever the two
+        lengths differ. This allows every ramp cell the bars can paint at
+        any usable length, computed from the theme alone through the same
+        parser: a scrollbar thumb or a focus ring still lands nowhere in
+        it, because no chrome colour lies on the slot's own ramps.
+        """
+        from huebox import render as render_mod
+        from huebox.color import MISSING
+        from huebox.editor import SLOTS
+
+        spec = harness.FIXTURES[fixture]
+        value = spec["slots"].get(SLOTS[0], MISSING)
+        rows = [render_mod.hsv_axis(spec["slots"], value, axis, bar_w)
+                for axis in range(3)
+                for bar_w in range(7, 201)]
+        raw = ("\r\n".join(rows) + "\r\n").encode()
+        return set(harness.closure(raw, 160, len(rows), len(rows)))
+
     @needs_pyte
     @needs_candidate
     def test_the_candidate_stays_inside_the_reference_closure(self):
@@ -146,6 +171,7 @@ class TestClosure(unittest.TestCase):
         for cols, rows, fixture in cases:
             _, height, allowed = self._reference_closure(
                 fixture, cols, rows)
+            allowed |= self._bar_closure(fixture)
             raw = harness.candidate_bytes(fixture, cols, rows)
             with self.subTest(fixture=fixture, size=f"{cols}x{rows}"):
                 self._assert_closed(raw, cols, rows, height,

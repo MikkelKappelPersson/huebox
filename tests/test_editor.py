@@ -595,54 +595,90 @@ class TopBlock(unittest.TestCase):
         self.assertIn("palette-3", selected)
 
 
-class TopSidePanels(unittest.TestCase):
-    """The top as two unbordered panels side by side (§8.1, decision 37).
+class TopLayout(unittest.TestCase):
+    """The unified top's width shares (§8.1, decision 40).
 
-    The compositor's top, not the bare frame's: the header logo left, the
-    theme subject plus the selected readout right, each asked at its own
-    panel width through the same painters the frame uses. The bare rows
-    never move — this is product chrome beside them, padded to the
-    height the frame laid out so everything below rides where it did.
+    One arrangement at every size it fits — bare logo, the flexible info
+    column, the bordered `editor` box — so `info` never carries the
+    editor's controls and the two never merge. As the window narrows the
+    logo steps down its ladder first, then info truncates its path, then
+    the head stacks: past the tightest share the caller keeps the bare
+    stack rather than squeezing a panel below usable.
     """
 
     SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea")
+    LONG = "/tmp/some/deeply/nested/theme.toml"
 
-    def test_the_ladder_is_banner_mini_wordmark(self):
-        wide = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x", 0,
-                                      120)
-        self.assertEqual(wide[:2], (editor.BANNER_LEFT_W,
-                                    120 - editor.BANNER_LEFT_W))
-        self.assertEqual(len(wide[2]), 6)
-        mid = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x", 0,
-                                     80)
-        self.assertEqual(mid[:2], (editor.MINI_LEFT_W,
-                                   80 - editor.MINI_LEFT_W))
-        self.assertEqual(len(mid[2]), 3)
-        narrow = editor.top_side_panels(self.SLOTS, "ghostty", "/tmp/x",
-                                        0, 60)
-        self.assertEqual(narrow[:2], (editor.TOP_LEFT_W,
-                                      60 - editor.TOP_LEFT_W))
-        self.assertEqual(len(narrow[2]), 1)
-        self.assertIsNone(editor.top_side_panels(self.SLOTS, "ghostty",
-                                                 "/tmp/x", 0, 40))
+    def test_shares_tile_the_width(self):
+        # `(left, info, editor)`: three columns, no air, at every width
+        # the layout fits — short label or long.
+        for width in (200, 160, 120, 100, 80, 60):
+            for path in ("/tmp/x", self.LONG):
+                with self.subTest(width=width, path=path):
+                    lay = editor.top_layout(width, "ghostty", path,
+                                            self.SLOTS, 0)
+                    self.assertIsNotNone(lay)
+                    left_w, info_w, editor_outer, _stacked = lay
+                    self.assertEqual(left_w + info_w + editor_outer,
+                                     width)
+                    self.assertIn(left_w, (editor.BANNER_LEFT_W,
+                                           editor.MINI_LEFT_W,
+                                           editor.TOP_LEFT_W))
 
-    def test_the_right_panel_is_the_bare_readout(self):
-        _, right_w, _, right = editor.top_side_panels(
-            self.SLOTS, "ghostty", "/tmp/x", 4, 80)
-        self.assertIn("ghostty", right[0])
-        self.assertIn("selected", right[1])
-        self.assertIn("palette-4", right[1])
-        self.assertIn("AaBbCc", right[2])
-        # measured against the panel, not the frame: joining the two panels
-        # is the full width, no more.
-        left_w = 80 - right_w
-        self.assertGreaterEqual(right_w, editor.TOP_RIGHT_MIN)
-        self.assertEqual(left_w + right_w, 80)
+    def test_the_logo_steps_down_first(self):
+        # Banner while it fits, then mini, then the wordmark — the same
+        # ladder the frame stands up, walked widest first.
+        shorts = [editor.top_layout(w, "ghostty", "/tmp/x", self.SLOTS,
+                                    0)[0]
+                  for w in (160, 100, 80)]
+        self.assertEqual(shorts, [editor.BANNER_LEFT_W,
+                                  editor.MINI_LEFT_W,
+                                  editor.TOP_LEFT_W])
 
-    def test_the_pin_opts_out(self):
+    def test_info_shrinks_while_the_editor_stays_wide(self):
+        # The user's case: a long path truncates (`…` keeps the tail)
+        # instead of holding air while the editor squeezes — at 120 the
+        # banner still stands, info gives up 24 columns, and the head
+        # stays on one row.
+        lay = editor.top_layout(120, "ghostty", self.LONG, self.SLOTS,
+                                0)
+        self.assertEqual(lay[0], editor.BANNER_LEFT_W)
+        self.assertLess(lay[1], len("ghostty  " + self.LONG))
+        self.assertFalse(lay[3], "the head stacked before info shrank")
+        meta, head, meta_w = editor.top_editor_meta(
+            "ghostty", self.LONG, self.SLOTS, 0, meta_w=lay[1],
+            stacked=lay[3])
+        from huebox.render import visible as _visible
+        self.assertEqual(meta_w, lay[1])
+        self.assertLessEqual(_visible(meta[0]), lay[1])
+        self.assertIn("…", plain(meta[0]))
+        content = lay[2] - 2 - 2 * editor.EDITOR_PAD_X
+        self.assertLessEqual(max(_visible(row) for row in head), content)
+
+    def test_stacked_where_wide_cannot_fit(self):
+        # At 60 even the wordmark leaves no room for the one-row head,
+        # so the chip and the specimen stack instead of clipping.
+        lay = editor.top_layout(60, "ghostty", "/tmp/x", self.SLOTS, 0)
+        self.assertTrue(lay[3])
+        _meta, head, _w = editor.top_editor_meta(
+            "ghostty", "/tmp/x", self.SLOTS, 0, meta_w=lay[1],
+            stacked=True)
+        self.assertEqual(len(head), 2)
+        content = lay[2] - 2 - 2 * editor.EDITOR_PAD_X
+        from huebox.render import visible as _visible
+        self.assertLessEqual(max(_visible(row) for row in head), content)
+
+    def test_none_below_usable(self):
+        # Past the tightest share — wordmark, truncated label, stacked
+        # head — the caller keeps the bare stack, and `HUEBOX_TOP=0`
+        # pins that stack past the layout like the bare frame.
+        self.assertIsNone(editor.top_layout(50, "ghostty", "/tmp/x",
+                                            self.SLOTS, 0))
+        self.assertIsNone(editor.top_layout(40, "ghostty", "/tmp/x",
+                                            self.SLOTS, 0))
         with mock.patch.dict(os.environ, {"HUEBOX_TOP": "0"}):
-            self.assertIsNone(editor.top_side_panels(
-                self.SLOTS, "ghostty", "/tmp/x", 0, 120))
+            self.assertIsNone(editor.top_layout(160, "ghostty", "/tmp/x",
+                                                self.SLOTS, 0))
 
     def test_the_readout_does_not_move_with_the_selection(self):
         # `SELECTED_KEY_W` pins the slot-name field to the longest slot, so
@@ -822,7 +858,7 @@ class NormalFrame(unittest.TestCase):
         # before the block does, including at the sizes where the block
         # used to vanish entirely
         for cols, rows, strip, code in ((80, 20, 3, 3), (80, 18, 1, 3),
-                                        (80, 16, 0, 3), (60, 20, 0, 4)):
+                                        (80, 16, 0, 3), (60, 20, 3, 3)):
             with self.subTest(size=(cols, rows)):
                 body = lines(frame(cols, rows))
                 self.assertEqual(example_rows(body), strip)
@@ -1408,24 +1444,90 @@ class GridArrows(unittest.TestCase):
 
     def test_a_narrow_palette_row_is_one_key_not_two(self):
         # 40 columns puts four swatches to a row: down is the cell below
-        # the selection, not the cell two rows down
+        # the selection, not the cell two rows down (and the interface
+        # holds its two abbreviated columns there — §15.2)
         grid = editor.grid_geometry(40)
-        self.assertEqual((grid.palette_cols, grid.named_cols), (4, 1))
+        self.assertEqual((grid.palette_cols, grid.named_cols), (4, 2))
         self.assertEqual(self.land("palette-0", "down", cols=40), "palette-4")
         self.assertEqual(self.land("palette-3", "down", cols=40), "palette-7")
         self.assertEqual(self.land("palette-12", "down", cols=40), "background")
         self.assertEqual(self.land("background", "up", cols=40), "palette-12")
 
-    def test_a_one_column_interface_still_steps_a_row(self):
-        # two interface cells need 68 columns; below that there is one to a
-        # row — the list order — and down is the only way along it
+    def test_a_narrow_interface_holds_two_abbreviated_columns(self):
+        # two full interface cells need 68 columns; below that the frame
+        # holds two abreast by printing the abbreviations (§15.2) — the
+        # columns stay two, only the names narrow
         self.assertEqual(editor.grid_geometry(80).named_cols, 2)
-        self.assertEqual(editor.grid_geometry(60).named_cols, 1)
-        self.assertEqual(self.land("background", "down", cols=60), "foreground")
-        self.assertEqual(self.land("background", "down", "down", cols=60),
-                         "cursor-color")
+        self.assertEqual(editor.grid_geometry(60).named_cols, 2)
+        grid = editor.grid_geometry(60)
+        self.assertTrue(grid.named_abbrev)
+        self.assertTrue(grid.named_show_hex)
         self.assertEqual(self.land("background", "right", cols=60),
-                         "background")        # one cell to a row: no across
+                         "foreground")
+        self.assertEqual(self.land("foreground", "left", cols=60),
+                         "background")
+        self.assertEqual(self.land("background", "down", cols=60),
+                         "cursor-color")
+        self.assertEqual(self.land("cursor-text", "down", cols=60),
+                         "selection-foreground")
+        self.assertEqual(self.land("foreground", "right", cols=60),
+                         "foreground")      # a row's edge is the edge
+
+    def test_the_interface_ladder_sheds_names_before_columns(self):
+        # like the palette sheds its hex before its cells: full names
+        # two abreast where 68 columns allow, abbreviations below that,
+        # one to a row past 30, and the hex goes last — past what any
+        # frame at or above MIN_COLS reaches
+        wide = editor.grid_geometry(80)
+        self.assertEqual((wide.named_cols, wide.named_abbrev,
+                          wide.named_show_hex), (2, False, True))
+        for cols in (60, 40):
+            with self.subTest(cols=cols):
+                narrow = editor.grid_geometry(cols)
+                self.assertEqual((narrow.named_cols, narrow.named_abbrev,
+                                  narrow.named_show_hex), (2, True, True))
+        single = editor.grid_geometry(20)
+        self.assertEqual((single.named_cols, single.named_abbrev,
+                          single.named_show_hex), (1, True, True))
+        floor = editor.grid_geometry(10)
+        self.assertEqual((floor.named_cols, floor.named_abbrev,
+                          floor.named_show_hex), (1, True, False))
+
+    def test_abbreviated_interface_cells_keep_mark_and_hex(self):
+        slots = dict(FULL_SLOTS)
+        value = FULL_SLOTS["background"]
+        full = ANSI.sub("", editor.named_cell(slots, "background", 0))
+        self.assertEqual(full, "  %-21s %s " % ("background", value))
+        short = ANSI.sub("", editor.named_cell(slots, "background", 0,
+                                                 abbrev=True))
+        self.assertEqual(short, "  BG %s " % value)
+        bare = ANSI.sub("", editor.named_cell(slots, "background", 0,
+                                                abbrev=True,
+                                                show_hex=False))
+        self.assertEqual(bare, "  BG")
+        # the selected cell keeps its mark in every shape
+        sel = SLOTS.index("background")
+        for abbrev, show_hex in ((False, True), (True, True),
+                                 (True, False)):
+            marked = ANSI.sub("", editor.named_cell(
+                slots, "background", sel, abbrev, show_hex))
+            self.assertEqual(marked[1], ">", marked)
+        self.assertEqual((editor.named_cell_width(False, True),
+                          editor.named_cell_width(True, True),
+                          editor.named_cell_width(True, False)),
+                         (32, 13, 4))
+
+    def test_narrow_interface_hits_are_the_abbreviated_cell_wide(self):
+        # two abbreviated cells abreast: the hits are 13 wide, joined by
+        # two — the same rule as the full cells, at the narrow width
+        for cols in (60, 40):
+            with self.subTest(cols=cols):
+                hits = {hit.slot: hit
+                        for hit in editor.frame_hits(cols, 30)}
+                first, second = hits[16], hits[17]
+                self.assertEqual(first.x1 - first.x0 + 1, 13)
+                self.assertEqual(second.x0, first.x0 + 15)
+                self.assertEqual(first.y, second.y)
 
     def test_the_frame_and_the_keys_agree_on_the_grid(self):
         for cols in (80, 60, 40):
@@ -2386,7 +2488,10 @@ class Regions(unittest.TestCase):
         """§15 — the frame spends decoration before it spends a widget.
 
         At 40x12 there is no room for the code sample or the examples strip, so
-        the blocks stop after the grids. A map that reported them anyway would
-        be a map describing a frame that is not the one on screen."""
+        the blocks stop after the grids and the selected readout the narrowed
+        interface leaves room for (§15.2). A map that reported the widgets
+        anyway would be a map describing a frame that is not the one on
+        screen."""
         names = [name for name, _, _ in self._regions(40, 12)]
-        self.assertEqual(names, ["header", "palette", "interface"])
+        self.assertEqual(names, ["header", "palette", "interface",
+                                 "selected"])

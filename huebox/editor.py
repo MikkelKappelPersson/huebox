@@ -86,6 +86,19 @@ FALLBACK_COLS = 80
 CELL_FULL, CELL_MIN = 13, 6
 # the width of one interface cell: `mark name hex`, the name padded to 21
 NAMED_COL_W = 32
+#: Two-letter abbreviations for the interface slots, for the narrow rungs
+#: of the width ladder (§15.2): the full names are what make a bare cell 32
+#: wide, so below 68 columns the frame holds two cells abreast by printing
+#: these instead — `background` is back+ground, `foreground` fore+ground,
+#: the rest read off the words. The hex goes last, past what any frame at
+#: or above `MIN_COLS` reaches.
+NAMED_ABBR = {"background": "BG", "foreground": "FG",
+              "cursor-color": "CC", "cursor-text": "CT",
+              "selection-background": "SB",
+              "selection-foreground": "SF"}
+#: an abbreviated interface cell with its hex (`mark abbr hex`), and
+#: without: the floor rung, past the narrowest frame the editor draws.
+NAMED_ABBR_W, NAMED_MIN_W = 13, 4
 # the side-by-side top block (§8.1, decision 36): the wordmark stands in a
 # fixed left column and the theme subject plus the selected readout in the
 # right one. `TOP_LEFT_W` is the indent, the six letters and the gap between
@@ -94,16 +107,18 @@ NAMED_COL_W = 32
 # stacked header instead.
 TOP_LEFT_W = 12
 TOP_MIN_COLS = 60
-# the top as two unbordered panels side by side (§8.1, decision 37): the
-# header logo in the left panel, the theme subject plus the selected readout
-# in the right one. The left widths are the logo plus a two-column gap of air
-# (the banner and the mini keep their own seats, the wordmark keeps
-# `TOP_LEFT_W`); the right panel needs `TOP_RIGHT_MIN` to hold even a bare
-# readout, the same bare readout `TOP_MIN_COLS` guards.
-TOP_GAP = 2
-TOP_RIGHT_MIN = TOP_MIN_COLS - TOP_LEFT_W
+# the unified compositor top's logo ladder (§8.1, decision 40): the widths
+# are the logo plus a two-column gap of air (the banner and the mini keep
+# their own seats, the wordmark keeps `TOP_LEFT_W`). `top_layout` walks it
+# widest first; below the wordmark no share fits and the caller keeps the
+# bare stack.
 BANNER_LEFT_W = 52
 MINI_LEFT_W = 25
+# Horizontal breathing room inside the editor panel's border (§8.1,
+# decision 40): vertical stays 0 so the box costs no extra rows; the bars
+# give up two cells of sweep for one cell of air on each side. Geometry,
+# so it lives beside the allocator rather than the widgets.
+EDITOR_PAD_X = 1
 # the selected readout's slot-name field (§8.3): pinned to the longest slot
 # (`selection-foreground`), so switching the selection never moves the hex,
 # the bars or the specimen beside it — the eye stays on the colours, not on
@@ -148,7 +163,10 @@ class Grid(NamedTuple):
     show_hex: bool         # a swatch is wide enough to print its hex value
     vertical: bool = False  # column-major pairs (the side layout's left
                             # panel): rows are (i, i+8), not eight across.
-                            # Bare frames never set it.
+                            # Bare frames never set it. Stays fourth:
+                            # `side_grid` builds its grid positionally.
+    named_abbrev: bool = False  # an interface cell prints BG/FG/… (§15.2)
+    named_show_hex: bool = True  # an interface cell prints its hex value
 
 
 def grid_geometry(cols: int) -> Grid:
@@ -157,15 +175,29 @@ def grid_geometry(cols: int) -> Grid:
     One ladder for both (§15.2): the frame renders what this says and the
     keys step through what this says, so a selection can never walk a row
     the user cannot see — which is what a fixed slot stride did once the
-    palette dropped to four or two to a row.
+    palette dropped to four or two to a row. The interface sheds its name
+    width before it sheds a column, the way the palette sheds its hex
+    before its cells: two full cells need 68 columns, two abbreviated ones
+    30, so below 68 the frame holds two abreast by printing BG/FG/… and
+    only past 30 stacks them one to a row; the hex goes last, past what
+    any frame at or above `MIN_COLS` reaches.
     """
     cell_full, cell_min = CELL_FULL, CELL_MIN
+    if len("  ") + 2 * NAMED_COL_W + 2 <= cols:
+        named_cols, abbrev, nhex = 2, False, True
+    elif len("  ") + 2 * NAMED_ABBR_W + 2 <= cols:
+        named_cols, abbrev, nhex = 2, True, True
+    elif len("  ") + NAMED_ABBR_W <= cols:
+        named_cols, abbrev, nhex = 1, True, True
+    else:
+        named_cols, abbrev, nhex = 1, True, False
     for per_row, cellw in ((8, cell_full), (8, cell_min), (4, cell_full),
                            (4, cell_min), (2, cell_full), (1, cell_full)):
         if len("  ") + per_row * cellw <= cols:
-            named = 2 if len("  ") + 2 * NAMED_COL_W + 2 <= cols else 1
-            return Grid(per_row, named, cellw >= cell_full)
-    return Grid(1, 1, True)         # narrower than one cell: one of each
+            return Grid(per_row, named_cols, cellw >= cell_full,
+                        named_abbrev=abbrev, named_show_hex=nhex)
+    return Grid(1, 1, True, named_abbrev=abbrev,
+                named_show_hex=nhex)  # narrower than one cell: one of each
 
 
 def _bottom_row(base: int, size: int, cols: int, column: int) -> int:
@@ -456,18 +488,30 @@ def swatch_cell(slots, index, sel, show_hex, width=None):
             f"{BOLD if sel == index else ''}{label.ljust(cellw)}{RESET}")
 
 
-def named_cell(slots, key, sel):
+def named_cell_width(abbrev=False, show_hex=True):
+    """The painted width of one interface cell (§15.2)."""
+    if not abbrev:
+        return NAMED_COL_W
+    return NAMED_ABBR_W if show_hex else NAMED_MIN_W
+
+
+def named_cell(slots, key, sel, abbrev=False, show_hex=True):
     """One interface cell: `mark name hex`, the name padded to 21.
 
     Same hoist as `swatch_cell`: the side layout's `background/foreground`
-    rows are these cells, not a second rendering of them.
+    rows are these cells, not a second rendering of them. `abbrev` prints
+    the two-letter `NAMED_ABBR` form and `show_hex` the value — the narrow
+    rungs of the width ladder, asked from the grid, never re-derived here.
     """
     index = SLOTS.index(key)
     value = slots.get(key, MISSING)
     mark = ">" if sel == index else " "
     style = BOLD if sel == index else ""
+    name = NAMED_ABBR[key] if abbrev else f"{key:<21}"
+    label = (f" {mark}{name} {value} " if show_hex
+             else f" {mark}{name}")
     return (f"{bg(value)}{fg(readable_fg(value))}{style}"
-            f" {mark}{key:<21} {value} {RESET}")
+            f"{label.ljust(named_cell_width(abbrev, show_hex))}{RESET}")
 
 
 #: One side-layout interface cell: `mark name` over the hex, both rows
@@ -648,22 +692,31 @@ def top_meta_rows(label, path, slots, sel):
     return rows, meta_w
 
 
-def top_editor_meta(label, path, slots, sel):
+def top_editor_meta(label, path, slots, sel, meta_w=None, stacked=False):
     """Helper for the bordered `editor` panel (default; see `editor_panel_enabled`).
 
     The selected subject, its hex and the specimen all live in the editor
     box; metadata keeps only the theme. Returns `(meta_rows, head, meta_w)`
-    where `meta_rows` is `[theme]` and `head` is `[combined, ""]` — chip +
-    name + hex + specimen on one line, then a blank breathing line before
-    the HSV bars. `meta_w` stays pinned to the core width so the columns
-    never jump per selection. Pure.
+    where `meta_rows` is `[theme]` and `head` is `[combined]` — chip +
+    name + hex + specimen on one line, directly above the HSV bars. One
+    row, not two: the head used to carry a blank breathing line, and that
+    blank priced the `editor` panel at seven rows where the layout's row
+    budget pays six — at 80x24 the seventh row came out of the interface
+    grid (slots past 15 lost their hits). With `stacked` the head is
+    `[chip-row, specimen-row]` instead, so a narrow box keeps the readout
+    whole rather than clipping it. `meta_w` defaults to
+    the old pinned core width; pass the allocator's share and the theme
+    truncates its path (`…` keeps the tail) instead of holding air — the
+    info column shrinks with the window rather than staying frozen while
+    the editor squeezes. Pure.
     """
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     core = selected_core(slots, key, value)
     swatch = selected_swatch(slots, key, value)
     specimen = f"  {fg(value)}AaBbCc 0123 {RESET}"
-    meta_w = max(visible(core), visible(specimen))
+    if meta_w is None:
+        meta_w = max(visible(core), visible(specimen))
     if path and len(label) + 2 + len(path) <= meta_w:
         theme = (chrome(label, "foreground", slots, bold=True) + "  "
                  + chrome(path, CHROME_MUTED, slots))
@@ -676,9 +729,56 @@ def top_editor_meta(label, path, slots, sel):
     else:
         theme = chrome(label, "foreground", slots, bold=True)
     rows = [_pad_visible(clip(theme, meta_w), meta_w)]
+    if stacked:
+        return rows, [swatch, specimen], meta_w
     combined = (swatch + "   "
                 + f"{fg(value)}AaBbCc 0123{RESET}")
-    return rows, [combined, ""], meta_w
+    return rows, [combined], meta_w
+
+
+def top_layout(width, label, path, slots, sel):
+    """The unified top's width shares, or `None` for the bare stack (§8.1).
+
+    `(left_w, info_w, editor_outer, stacked)`: logo art, info column,
+    editor box. One arrangement at every size where it fits — logo bare,
+    info metadata only, the selected readout and the HSV bars in `editor`
+    — so `info` never carries the editor's own controls and the two never
+    merge. As the window narrows the logo steps down its ladder first,
+    then `info` truncates its path, then the head stacks its two rows
+    instead of one: wide head before stacked, wider logo before narrower,
+    and past the tightest share the caller keeps the bare stack rather
+    than squeezing a panel below usable. `HUEBOX_TOP=0` pins that stack
+    past the layout, the same opt-out the bare frame keeps. `app.py`
+    mounts from this and never re-derives it — one implementation of the
+    shares, asked from `_top_editor_row`, `_top_screen_height` and the
+    tests alike.
+    """
+    if os.environ.get("HUEBOX_TOP", "1") == "0":
+        return None
+    info_need = visible(label + ("  " + path if path else ""))
+    info_min = visible(label) or 1
+    _, wide_head, _ = top_editor_meta(label, path, slots, sel)
+    _, stacked_head, _ = top_editor_meta(label, path, slots, sel,
+                                         stacked=True)
+    wide_need = max(visible(row) for row in wide_head)
+    stacked_need = max(visible(row) for row in stacked_head)
+    for stacked, content_need in ((False, wide_need),
+                                  (True, stacked_need)):
+        outer_min = content_need + 2 + 2 * EDITOR_PAD_X
+        for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
+            rem = width - left_w
+            if rem < info_min + outer_min:
+                continue
+            info_w = min(info_need, rem - outer_min)
+            left = top_left_rows(slots, left_w)
+            if visible(left[0]) > left_w and len(left) > 1:
+                continue
+            if left_w == TOP_LEFT_W and len(left) != 1:
+                continue
+            if left_w != TOP_LEFT_W and len(left) == 1:
+                continue
+            return (left_w, info_w, rem - info_w, stacked)
+    return None
 
 
 def top_split_enabled() -> bool:
@@ -767,41 +867,6 @@ def top_left_rows(slots, left_w):
     if mark:
         return mark
     return ["  " + wordmark(slots)]
-
-
-def top_side_panels(slots, label, path, sel, width):
-    """The top as two unbordered panels side by side, or `None` (§8.1).
-
-    `(left_w, right_w, left, right)`: the header logo in the left panel,
-    the theme subject plus the selected readout in the right one, each
-    row unbacked (the caller backs to its own panel width, §8.2). The
-    ladder is banner, mini, wordmark — the same logos the frame stands up
-    — tried widest first where the right panel still holds a bare readout
-    (`TOP_RIGHT_MIN`). `None` where even the wordmark leaves the right
-    too narrow, and under `HUEBOX_TOP=0`, which pins the stacked header
-    the bare frame keeps for the tests that assert it.
-    """
-    if os.environ.get("HUEBOX_TOP", "1") == "0":
-        return None
-    for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
-        right_w = width - left_w
-        if right_w < TOP_RIGHT_MIN:
-            continue
-        left = top_left_rows(slots, left_w)
-        # the logo must actually fit the panel it was asked for: a banner
-        # in a wordmark-wide panel is a clipped banner, which reads as a
-        # rendering bug rather than a logo (the same rule `banner_lines`
-        # keeps for the frame).
-        if visible(left[0]) > left_w and len(left) > 1:
-            continue
-        if left_w == TOP_LEFT_W and len(left) != 1:
-            continue
-        if left_w != TOP_LEFT_W and len(left) == 1:
-            continue
-        right = list(top_right_panel_rows(label, path, slots, sel,
-                                          right_w))
-        return left_w, right_w, left, right
-    return None
 
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
@@ -911,16 +976,18 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     marks.append(("interface", at_body()))
     per = grid.named_cols
+    ncellw = named_cell_width(grid.named_abbrev, grid.named_show_hex)
     body.append("  " + title("interface", slots))
     for start in range(0, len(NAMED), per):
         y = len(body)
-        cells = [named_cell(slots, key, sel)
+        cells = [named_cell(slots, key, sel,
+                            grid.named_abbrev, grid.named_show_hex)
                  for key in NAMED[start:start + per]]
         body.append(("  " + "  ".join(cells)).rstrip())
         if hits is not None:
             for column in range(len(cells)):
-                x0 = 2 + column * (NAMED_COL_W + 2)
-                hits.append(Hit(y, x0, x0 + NAMED_COL_W - 1,
+                x0 = 2 + column * (ncellw + 2)
+                hits.append(Hit(y, x0, x0 + ncellw - 1,
                                 len(PALETTE) + start + column))
     body.append("")
 
