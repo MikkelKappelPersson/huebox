@@ -157,8 +157,10 @@ jobs:
           su builder -c "export VER='$VER' SUM='$SUM'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums=.*/sha256sums=('\$SUM')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)=' PKGBUILD"
           su builder -c "cd /home/builder/huebox && makepkg --printsrcinfo > .SRCINFO"
           # the sdist must actually be fetchable before the AUR points at
-          # it; the PyPI CDN can lag the upload by a minute or two.
-          su builder -c "cd /home/builder/huebox && for i in 1 2 3 4 5; do makepkg --verifysource && break || sleep 60; done"
+          # it; the PyPI CDN can lag the upload by several minutes. The flag
+          # matters: a bare retry loop exits 0 even when every attempt
+          # fails, which would push a PKGBUILD whose source 404s.
+          su builder -c "cd /home/builder/huebox && ok=0; for i in $(seq 1 10); do makepkg --verifysource && { ok=1; break; }; sleep 60; done; test \$ok = 1"
 
       - name: Commit + push to AUR
         run: |
