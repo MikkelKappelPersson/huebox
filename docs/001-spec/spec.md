@@ -158,6 +158,7 @@ in one table instead of a section of its own semantics.
 | --- | --- |
 | click a palette swatch or an interface cell | select that slot — exactly what the arrows do, including §4.3.1's geometry |
 | click a picker row | move the selection there and open it — exactly what `↓` then `Enter` do |
+| click the `themes` button in the top | open the picker — exactly what `t` does |
 | wheel over the picker | move the selection up or down one row, so the window follows (§13.7) |
 | drag across the live code sample or the live diff | select that text, so it can be copied |
 
@@ -496,10 +497,21 @@ panel the theme subject plus the selected readout, the same three rows the
 bare block paints, measured against the panel's own width. Two `Panel`s in
 one `Horizontal`, titled `logo` and `info`, on the buffer's own background,
 so the top reads as two boxes sharing one row budget rather than as two
-columns of chrome. The panels are padded to the height the frame laid out,
+columns of chrome. The `info` panel owns the top's one control: a flat
+`themes` button under the readout, a mouse mirror of `t` through the same
+`apply_key` call — so the button and the key cannot disagree about what the
+picker is — never focusable, so the arrows stay on the grids, and painted
+from the theme's own `selection-background` / `selection-foreground` — the
+same pair the picker marks a theme with — so it reads as part of the theme
+rather than as a colour of its own.
+The panels are padded to the height the frame laid out,
 so everything below rides where it did and the click map never moves — and
-a click anywhere in the top selects nothing, because the top names no slot
-(§4.3.2). The price is stated plainly, the same price decisions 36 and 37
+a click anywhere else in the top selects nothing, because the top names no slot
+(§4.3.2). Where the columns fit the bordered `editor` panel instead — header
+and theme bare beside one box holding only the HSV bars — the same flat
+`themes` button rides under the theme subject in the metadata column: that
+column's last row is blank fill, so the button costs no row and the row
+budget never moves. The price is stated plainly, the same price decisions 36 and 37
 already paid, one rung further: the pair is asked at `width - 4` so both
 borders fit, the bars are measured against the right panel, and the row
 budget grows from two panel-rows to three (top + controls + examples),

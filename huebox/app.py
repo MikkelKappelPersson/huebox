@@ -518,10 +518,17 @@ class Panel(Vertical):
 
 
 class ThemesButton(Button):
-    """The `themes` button in the info panel: a mouse mirror of `t` (§4.3.2).
+    """The `themes` button: a mouse mirror of `t` (§4.3.2).
 
     A flat `Button` labelled `themes`, and the one control the top owns —
-    everything else up there is chrome and answers to no click. Pressing it
+    everything else up there is chrome and answers to no click. It rides
+    under the readout in the `info` panel, or under the theme subject in
+    the editor top's metadata column. The flat *look* is the CSS below
+    (no border, no wash); the variant stays default on purpose: the flat
+    variant's `color: auto 90%` reroutes the label through the auto contrast
+    *after* the explicit colour (`visual_style` applies it last), so the
+    label would paint white whatever the theme said — and `auto-color` is
+    not a CSS property, so no rule can switch it back. Pressing it
     does exactly what `t` does, through the same `apply_key` call the
     keyboard takes, so the two cannot disagree about what the picker is or
     about what happens to a dirty buffer. Never focusable: focus follows the
@@ -530,19 +537,23 @@ class ThemesButton(Button):
     with no arrows. `ALLOW_SELECT` stays off (inherited), so a drag across it
     can never begin a text selection the way the sample and the diff invite.
 
-    Theme-closed by construction: the CSS below names only `$background` and
-    `$foreground` — the tokens `TOKEN_SLOTS` already binds — with no `auto`
+    Theme-closed by construction: the CSS below names only the selection
+    pair — `$screen-selection-background` and `$screen-selection-foreground`,
+    the tokens `TOKEN_SLOTS` already binds to the theme's own
+    `selection-background` / `selection-foreground` — with no `auto`
     ink, no derived wash and no tint, so a button never captured
-    still paints nothing I2 can object to. The hover is an underline, not a
-    colour: an attribute says "clickable" where a wash would spend a slot.
+    still paints nothing I2 can object to. The pair is the picker's own mark
+    (the `>` row wears it), so the button reads as part of the theme rather
+    than as a colour of its own. The hover is an underline, not a colour:
+    an attribute says "clickable" where a wash would spend a slot.
     """
 
     can_focus = False
 
     DEFAULT_CSS = """
     ThemesButton {
-        background: $background !important;
-        color: $foreground !important;
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
         border: none !important;
         text-style: bold;
         width: auto;
@@ -553,32 +564,36 @@ class ThemesButton(Button):
         content-align: center middle;
     }
     ThemesButton:hover {
-        background: $background !important;
-        color: $foreground !important;
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
         border: none !important;
         text-style: bold underline;
     }
     ThemesButton:focus {
-        background: $background !important;
-        color: $foreground !important;
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
         border: none !important;
         text-style: bold underline;
     }
     ThemesButton.-active {
-        background: $background !important;
-        color: $foreground !important;
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
         border: none !important;
         tint: transparent !important;
     }
     ThemesButton:disabled {
-        background: $background !important;
-        color: $foreground !important;
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
         border: none !important;
     }
     """
 
     def __init__(self, **kwargs):
-        super().__init__("themes", flat=True, id="themes-button",
+        # Default variant, flat look from the CSS above: `flat=True` would
+        # take the `-style-flat` class whose `color: auto 90%` reroutes the
+        # label (see the class docstring), so the variant stays off and the
+        # borderlessness carries the flatness instead.
+        super().__init__("themes", id="themes-button",
                          name="themes", **kwargs)
 
 
@@ -950,7 +965,11 @@ class Editor(App):
         border — header logo and theme metadata stay bare chrome, while the
         chip row plus the three equal HSV bars ride in `Panel("editor")`
         with one cell of inner padding on each side (`EDITOR_PAD_X`). The
-        duplicated exact numbers are dropped. Returns `(widget, screen_h)`;
+        duplicated exact numbers are dropped. The metadata column owns the
+        top's one control: the flat `themes` button under the theme subject,
+        a mouse mirror of `t` through the same `apply_key` call — the
+        column's last row is blank fill anyway, so the button costs no row
+        and the row budget never moves. Returns `(widget, screen_h)`;
         `None` where the columns do not fit.
         """
         slots = state.slots
@@ -998,8 +1017,8 @@ class Editor(App):
             header += [backdrop("", slots, left_w)] * max(0, top_screen - len(header))
             header = header[:top_screen]
             meta = [backdrop(line, slots, meta_w) for line in meta_rows]
-            meta += [backdrop("", slots, meta_w)] * max(0, top_screen - len(meta))
-            meta = meta[:top_screen]
+            meta += [backdrop("", slots, meta_w)] * max(0, top_screen - 1 - len(meta))
+            meta = meta[:top_screen - 1]
             hsv = [backdrop(line, slots, content_w)
                    for line in editor_rows]
             hsv += [backdrop("", slots, content_w)] * max(0, inner_h - len(hsv))
@@ -1011,9 +1030,24 @@ class Editor(App):
             header_frame.styles.margin = 0
             meta_frame = Frame(meta, meta_w, name="selected")
             meta_frame.styles.width = meta_w
-            meta_frame.styles.height = top_screen
+            meta_frame.styles.height = top_screen - 1
             meta_frame.styles.padding = 0
             meta_frame.styles.margin = 0
+            # The top's one control in this arrangement: the same flat
+            # `themes` button the `info` panel owns, under the theme
+            # subject in the metadata column. Never focusable, theme-closed
+            # by the same CSS, and exactly what `t` does through the same
+            # `apply_key` call — see `ThemesButton` and `on_button_pressed`.
+            button = ThemesButton()
+            button.styles.width = meta_w
+            button.styles.height = 1
+            button.styles.margin = 0
+            button.styles.padding = 0
+            meta_col = Vertical(meta_frame, button)
+            meta_col.styles.width = meta_w
+            meta_col.styles.height = top_screen
+            meta_col.styles.padding = 0
+            meta_col.styles.margin = 0
             hsv_frame = Frame(hsv, content_w, name="editor-hsv")
             hsv_frame.styles.width = content_w
             hsv_frame.styles.height = inner_h
@@ -1024,7 +1058,7 @@ class Editor(App):
             editor_panel.styles.height = top_screen
             editor_panel.styles.padding = (0, EDITOR_PAD_X)
             editor_panel.styles.margin = 0
-            row = Horizontal(header_frame, meta_frame, editor_panel)
+            row = Horizontal(header_frame, meta_col, editor_panel)
             row.styles.width = width
             row.styles.height = top_screen
             row.styles.padding = 0

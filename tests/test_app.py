@@ -1248,6 +1248,225 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
 
 
 @needs_app
+class ThemesButton(unittest.TestCase):
+    """The `themes` button in the info panel: a mouse mirror of `t` (§4.3.2).
+
+    A flat `Button` labelled `themes`, riding under the selected readout in
+    the `info` panel — or under the theme subject in the editor top's
+    metadata column, where the columns fit that arrangement instead.
+    Pressing it goes through the same `apply_key("t")`
+    the keyboard takes, so the two cannot disagree about what the picker
+    is. Never focusable: focus follows the selection between the two grids,
+    and a button that kept focus would leave the arrows talking to a control
+    with no arrows.
+    """
+
+    def _editor(self, **kw):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock, return_value=Offset(80, 24))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Pin the logo/info top: the bordered `editor` panel wins where the
+        # columns fit it, and these guard the `info` panel's button.
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path,
+                                           "HUEBOX_EDITOR_PANEL": "0"}):
+            editor = huebox_app.Editor(**kw)
+        editor.query = lambda *a, **k: ()
+        editor.mount = lambda *a, **k: None
+        editor.redraw()
+        return editor
+
+    def _library(self, names):
+        from huebox.editor import Library
+        return Library(listing=lambda: list(names),
+                       loader=lambda name: None,
+                       creator=lambda name, slots, force=False: ("", ""))
+
+    def _press(self, editor, button):
+        event = mock.Mock()
+        event.button = button
+        editor.on_button_pressed(event)
+        event.stop.assert_called_once_with()
+        return event
+
+    def test_the_button_is_flat_labelled_themes_and_unfocusable(self):
+        button = huebox_app.ThemesButton()
+        self.assertEqual(str(button.label), "themes")
+        # Flat look, default variant: `flat=True` would take `-style-flat`,
+        # whose `color: auto 90%` reroutes the label past the theme's own
+        # selection foreground (see `ThemesButton`).
+        self.assertFalse(button.flat)
+        self.assertEqual(button.id, "themes-button")
+        self.assertFalse(button.can_focus,
+                         "a button that kept focus would steal the arrows")
+
+    def test_the_button_wears_the_selection_pair(self):
+        import re
+
+        css = huebox_app.ThemesButton.DEFAULT_CSS
+        tokens = set(re.findall(r"\$([a-z][a-z-]*)\b", css))
+        self.assertEqual(tokens,
+                         {"screen-selection-background",
+                          "screen-selection-foreground"},
+                         "the button must paint only the theme's selection "
+                         "pair (§6.2)")
+
+    def test_the_info_panel_mounts_the_button_under_the_readout(self):
+        from textual.containers import Horizontal
+
+        mounted = []
+        editor = self._editor()
+        editor.mount = mounted.append
+        editor.redraw()
+        tops = [w for w in mounted if isinstance(w, Horizontal)]
+        self.assertEqual(len(tops), 1, "the top is one side-by-side row")
+        panels = list(getattr(tops[0], "_pending_children", []))
+        infos = [p for p in panels
+                 if isinstance(p, huebox_app.Panel) and p.name == "info"]
+        self.assertEqual(len(infos), 1, "no `info` panel in the top row")
+        children = list(getattr(infos[0], "_pending_children", []))
+        buttons = [c for c in children
+                   if isinstance(c, huebox_app.ThemesButton)]
+        self.assertEqual(len(buttons), 1,
+                         "the `info` panel holds no `themes` button")
+
+    def test_the_editor_top_mounts_the_button_in_the_metadata_column(self):
+        from textual.containers import Horizontal, Vertical
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock, return_value=Offset(160, 40))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Default env: the bordered `editor` panel wins where it fits.
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            editor = huebox_app.Editor()
+        editor.query = lambda *a, **k: ()
+        editor.mount = lambda *a, **k: None
+        row, screen_h = editor._top_editor_row(160, editor.state, 4)
+        self.assertIsNotNone(row, "the editor top fits at 160 columns")
+        cols = [c for c in getattr(row, "_pending_children", [])
+                if isinstance(c, Vertical)
+                and not isinstance(c, huebox_app.Panel)]
+        self.assertEqual(len(cols), 1, "one metadata column beside `editor`")
+        children = list(getattr(cols[0], "_pending_children", []))
+        buttons = [c for c in children
+                   if isinstance(c, huebox_app.ThemesButton)]
+        self.assertEqual(len(buttons), 1,
+                         "the metadata column holds no `themes` button")
+        # The column's last row was blank fill, so the button costs no row:
+        # readout above, one-row button below, column exactly the row height.
+        self.assertEqual(buttons[0].styles.height.value, 1)
+        self.assertEqual(cols[0].styles.height.value, screen_h)
+
+    def test_pressing_the_button_opens_the_picker_like_t(self):
+        names = ["alpha", "beta"]
+        pressed = self._editor(library=self._library(names), theme="alpha")
+        self._press(pressed, huebox_app.ThemesButton())
+        keyed = self._editor(library=self._library(names), theme="alpha")
+        huebox_app.apply_key("t", keyed.state)
+        self.assertEqual(pressed.state.overlay, names)
+        self.assertEqual(pressed.state.overlay, keyed.state.overlay,
+                         "the button and `t` opened different pickers")
+
+    def test_pressing_the_button_opens_through_unsaved_changes(self):
+        # Opening is allowed while dirty — only Enter on a theme is
+        # blocked (decision 12) — and the button matches `t` there too.
+        names = ["alpha", "beta"]
+        for driver in ("button", "key"):
+            with self.subTest(driver=driver):
+                editor = self._editor(library=self._library(names),
+                                      theme="alpha")
+                editor.state.slots["palette-0"] = "#ffffff"
+                self.assertTrue(editor.state.dirty())
+                if driver == "button":
+                    self._press(editor, huebox_app.ThemesButton())
+                else:
+                    huebox_app.apply_key("t", editor.state)
+                self.assertEqual(editor.state.overlay, names)
+
+    def test_pressing_without_a_library_reports_instead(self):
+        editor = self._editor()
+        self._press(editor, huebox_app.ThemesButton())
+        self.assertIsNone(editor.state.overlay)
+        self.assertEqual(editor.state.status,
+                         "no theme library in this session")
+
+
+@needs_app
+class ThemesButtonRunning(unittest.IsolatedAsyncioTestCase):
+    """A real click on the button opens the picker in a running app.
+
+    `on_click` stops every click it sees, so only a running compositor
+    proves the press still reaches the button first — a unit call of
+    `on_button_pressed` cannot show that.
+    """
+
+    async def test_a_real_click_on_the_editor_top_button_opens_the_picker(self):
+        from huebox.color import hex_to_rgb
+        from huebox.editor import Library
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        lib = Library(listing=lambda: ["alpha", "beta"],
+                      loader=lambda name: None,
+                      creator=lambda name, slots, force=False: ("", ""))
+        # Default env at a wide size: the side-by-side layout with the
+        # bordered `editor` top, the arrangement that used to hide the button.
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            app = huebox_app.Editor(library=lib, theme="alpha")
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertEqual(len(list(app.query("#themes-button"))), 1)
+            # The painted pair, read off the composited row rather than the
+            # stylesheet: background *and* label in the selection slots.
+            button = app.query_one("#themes-button")
+            seen = [seg for seg in button.render_line(0)
+                    if "themes" in seg.text]
+            self.assertEqual(len(seen), 1)
+            painted = seen[0].style
+            for slot, channel in (("selection-background", "bgcolor"),
+                                  ("selection-foreground", "color")):
+                want = hex_to_rgb(app.state.slots[slot])
+                got = tuple(getattr(painted, channel).triplet)
+                self.assertEqual(got, want,
+                                 "the button's %s is not the theme's %s"
+                                 % (channel, slot))
+            await pilot.click("#themes-button")
+            await pilot.pause()
+            self.assertEqual(app.state.overlay, ["alpha", "beta"])
+
+    async def test_a_real_click_on_the_button_opens_the_picker(self):
+        from huebox.editor import Library
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        lib = Library(listing=lambda: ["alpha", "beta"],
+                      loader=lambda name: None,
+                      creator=lambda name, slots, force=False: ("", ""))
+        overlay = {"HUEBOX_SLOTS": path, "HUEBOX_EDITOR_PANEL": "0"}
+        patcher = mock.patch.dict(os.environ, overlay)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app = huebox_app.Editor(library=lib, theme="alpha")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertEqual(len(list(app.query("#themes-button"))), 1)
+            await pilot.click("#themes-button")
+            await pilot.pause()
+            self.assertEqual(app.state.overlay, ["alpha", "beta"])
+
+
+@needs_app
 class SideBySide(unittest.IsolatedAsyncioTestCase):
     """The wide layout: top pair above, controls | live side by side.
 
