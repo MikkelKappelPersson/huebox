@@ -1714,6 +1714,73 @@ class SidePanels(unittest.TestCase):
             self.assertEqual(hit.x0, 2 + column * (editor.SIDE_NAMED_W + 2))
             self.assertEqual(hit.x1, hit.x0 + editor.SIDE_NAMED_W - 1)
 
+    def test_the_narrow_panel_is_the_same_pairs_abbreviated(self):
+        # Decision 42: below `SIDE_MIN_W` the pair stays mounted in
+        # abbreviated cells — the same pairs, one row per interface pair,
+        # 30 columns and 14 rows instead of 50 and 17.
+        rows = editor.side_left_rows(dict(FULL_SLOTS), 0, narrow=True)
+        self.assertEqual(len(rows), editor.SIDE_LEFT_NARROW_ROWS)
+        text = [ANSI.sub("", row) for row in rows]
+        self.assertEqual(text[1].split(), [">", "0", "#3f7a3f",
+                                            "8", "#3f7a3f"])
+        self.assertEqual(text[8].split(), ["7", "#3f7a3f",
+                                            "15", "#3f7a3f"])
+        self.assertEqual(text[10].strip(), "interface")
+        self.assertEqual(text[11].split(), ["BG", "#3f7a3f",
+                                            "FG", "#3f7a3f"])
+        self.assertEqual(text[13].split(), ["SB", "#3f7a3f",
+                                            "SF", "#3f7a3f"])
+        for row in rows:
+            self.assertLessEqual(visible(row), editor.SIDE_LEFT_NARROW_W)
+
+    def test_the_narrow_hits_cover_every_slot_once(self):
+        # Single-row interface cells answer once, like the palette — there
+        # is no second row to answer on.
+        found = []
+        editor.side_left_rows(dict(FULL_SLOTS), 0, hits=found, y0=0,
+                              narrow=True)
+        self.assertEqual(sorted(hit.slot for hit in found), list(range(22)))
+        pairs = {(hit.y, hit.slot) for hit in found if hit.slot < 16}
+        for row in range(8):
+            slots = sorted(slot for y, slot in pairs if y == row + 1)
+            self.assertEqual(slots, [row, row + 8])
+        interface = {(hit.y, hit.slot) for hit in found if hit.slot >= 16}
+        self.assertEqual(sorted(interface),
+                         [(11, 16), (11, 17), (12, 18),
+                          (12, 19), (13, 20), (13, 21)])
+        for hit in found:
+            column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
+                else 1
+            self.assertEqual(hit.x0, 2 + column * (editor.NAMED_ABBR_W + 1))
+            self.assertEqual(hit.x1, hit.x0 + editor.NAMED_ABBR_W - 1)
+
+    def test_the_thin_panel_is_the_narrow_rows_without_hex(self):
+        # Decision 43: below `SIDE_NARROW_MIN_W` the values go — marks,
+        # numbers and abbreviations stay, so the pair fits 11 columns
+        # and stands down to 61 wide. Same rows as narrow, thinner cells.
+        rows = editor.side_left_rows(dict(FULL_SLOTS), 0, narrow=True,
+                                     show_hex=False)
+        self.assertEqual(len(rows), editor.SIDE_LEFT_NARROW_ROWS)
+        text = [ANSI.sub("", row) for row in rows]
+        self.assertEqual(text[1].split(), [">", "0", "8"])
+        self.assertEqual(text[8].split(), ["7", "15"])
+        self.assertEqual(text[10].strip(), "interface")
+        self.assertEqual(text[11].split(), ["BG", "FG"])
+        self.assertEqual(text[13].split(), ["SB", "SF"])
+        for row in rows:
+            self.assertLessEqual(visible(row), editor.SIDE_LEFT_THIN_W)
+
+    def test_the_thin_hits_cover_every_slot_once(self):
+        found = []
+        editor.side_left_rows(dict(FULL_SLOTS), 0, hits=found, y0=0,
+                              narrow=True, show_hex=False)
+        self.assertEqual(sorted(hit.slot for hit in found), list(range(22)))
+        for hit in found:
+            column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
+                else 1
+            self.assertEqual(hit.x0, 2 + column * (editor.NAMED_MIN_W + 1))
+            self.assertEqual(hit.x1, hit.x0 + editor.NAMED_MIN_W - 1)
+
     def test_the_right_panel_spends_a_fixed_budget(self):
         slots = dict(FULL_SLOTS)
         rows = editor.side_live_rows(slots, 48, 14)
@@ -1737,6 +1804,11 @@ class SidePanels(unittest.TestCase):
         slots = dict(FULL_SLOTS)
         for row in editor.side_left_rows(slots, 0):
             self.assertEqual(visible(row), editor.SIDE_LEFT_W)
+        for row in editor.side_left_rows(slots, 0, narrow=True):
+            self.assertEqual(visible(row), editor.SIDE_LEFT_NARROW_W)
+        for row in editor.side_left_rows(slots, 0, narrow=True,
+                                         show_hex=False):
+            self.assertEqual(visible(row), editor.SIDE_LEFT_THIN_W)
         for row in editor.side_live_rows(slots, 48, 14):
             self.assertEqual(visible(row), 48)
 

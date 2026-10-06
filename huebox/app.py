@@ -54,7 +54,9 @@ from textual.widget import Widget
 from textual.widgets import Button, Collapsible
 
 from .color import MISSING, SLOTS
-from .editor import (EDITOR_PAD_X, MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, EditorState,
+from .editor import (EDITOR_PAD_X, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
+                     SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
+                     SIDE_LEFT_W, EditorState,
                      apply_key, backdrop, draw_editor, grid_geometry,
                      head_label, report_session, session_path, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
@@ -431,16 +433,30 @@ BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
 #: (§15.4).
 PANEL_CONTROLS = ("palette", "interface", "selected")
 PANEL_EXAMPLES = ("examples", "diff", "sample")
-PANEL_TITLES = {"controls": "palette / interface", "examples": "examples"}
+PANEL_TITLES = {"controls": "theme", "examples": "examples"}
 
 #: The side-by-side layout: `selected` full-width above, the controls and
 #: the live blocks in two panels next to each other below. The left panel
-#: is a fixed content width (`SIDE_LEFT_W` + two border columns); the right
-#: takes the rest, so side-by-side starts where both stay usable (W>=100)
-#: and narrower windows keep the stacked panels. `selected` is bare chrome
-#: above the pair, not a third panel: a two-row readout needs no border.
+#: is `SIDE_LEFT_W` of content plus two border columns and the right takes
+#: the rest, so the full pair starts where both stay usable (W>=100). Past
+#: that the squeezed pair (§8.1, decision 42) keeps the layout mounted:
+#: the same pairs in abbreviated cells (`SIDE_LEFT_NARROW_W` + two border
+#: columns), and the right keeps the 48 columns it has at 100 — so the pair
+#: stands down to W>=80 and narrower windows keep the stacked panels.
+#: `selected` is bare chrome above the pair, not a third panel: a two-row
+#: readout needs no border.
 SIDE_MIN_W = 100
 LEFT_OUTER_W = SIDE_LEFT_W + 2
+#: The squeezed pair stands at 80 and up, where the narrow left still
+#: leaves the right past the 48 columns it must hold. The thin pair
+#: (decision 43: narrow rows, hex hidden) stands wherever the window
+#: itself stands: every right-panel row is clipped to its width by
+#: construction (`backdrop`, `pack`/`clip`), so the live blocks fold
+#: instead of overflowing and there is no width worth falling back for.
+SIDE_NARROW_MIN_W = 80
+LEFT_NARROW_OUTER_W = SIDE_LEFT_NARROW_W + 2
+SIDE_THIN_MIN_W = MIN_COLS
+LEFT_THIN_OUTER_W = SIDE_LEFT_THIN_W + 2
 
 #: Panel size bounds (§15.7). Each bordered panel keeps a minimum and a
 #: maximum width and height, so the frame stops reflowing once the window
@@ -935,7 +951,7 @@ class Editor(App):
                          for line in theme_lines(*picker, layout_w, layout_h,
                                                  state.status, state.slots,
                                                  hits=self.hits)]
-        elif (panels_enabled() and layout_w >= SIDE_MIN_W
+        elif (panels_enabled() and layout_w >= SIDE_THIN_MIN_W
                 and self._try_side(layout_w, layout_h, state)):
             # Side-by-side mounted everything: chrome above, two panels
             # below. Both locals are what the debug line counts.
@@ -1397,8 +1413,29 @@ class Editor(App):
         panels' contents are `side_left_rows` / `side_live_rows` at their own
         widths. Anything that does not fit (trimmed chrome, a short middle)
         returns `False` before mounting anything, and the stacked layout runs
-        instead.
+        instead. Below `SIDE_MIN_W` the left panel is the squeezed pair
+        (§8.1, decision 42) — the same pairs in abbreviated cells — down
+        to `SIDE_NARROW_MIN_W`, and past that the thin pair (decision 43:
+        narrow rows, hex hidden) down to `SIDE_THIN_MIN_W`, past which the
+        stacked layout runs too.
         """
+        if width >= SIDE_MIN_W:
+            narrow, hexes = False, True
+        elif width >= SIDE_NARROW_MIN_W:
+            narrow, hexes = True, True
+        elif width >= SIDE_THIN_MIN_W:
+            narrow, hexes = True, False
+        else:
+            return False
+        left_rows = SIDE_LEFT_NARROW_ROWS if narrow else SIDE_LEFT_ROWS
+        # The thin pair shares the narrow rows; only its cells narrow
+        # further, so the height bar above covers all three widths.
+        if not narrow:
+            left_w, left_outer = SIDE_LEFT_W, LEFT_OUTER_W
+        elif hexes:
+            left_w, left_outer = SIDE_LEFT_NARROW_W, LEFT_NARROW_OUTER_W
+        else:
+            left_w, left_outer = SIDE_LEFT_THIN_W, LEFT_THIN_OUTER_W
         full_hits: list = []
         full_regions: list = []
         full = frame_rows(self.fmt, session_path(state), state,
@@ -1417,9 +1454,12 @@ class Editor(App):
         top_h = header_h + sel_h
         top_screen = self._top_screen_height(width, state, top_h)
         content_h = height - top_screen - bottom_h - 2
+        # One height bar for both widths: short windows keep the stacked
+        # panels (full-width sample) whatever the width, and the narrower
+        # content pads like the full one does past it.
         if content_h < SIDE_LEFT_ROWS:
             return False
-        right_outer = width - LEFT_OUTER_W
+        right_outer = width - left_outer
         right_inner = right_outer - 2
         right_regions: list = []
         right = side_live_rows(state.slots, right_inner, content_h,
@@ -1427,7 +1467,8 @@ class Editor(App):
         if right is None:
             return False
         left_hits: list = []
-        left = side_left_rows(state.slots, state.sel, hits=left_hits)
+        left = side_left_rows(state.slots, state.sel, hits=left_hits,
+                              narrow=narrow, show_hex=hexes)
         # Success past this point: grid, mount, publish.
         state.grid = side_grid()
 
@@ -1458,17 +1499,24 @@ class Editor(App):
             for name in ("header", "selected"):
                 first, count = by_name[name]
                 self.mount(block(name, full[first:first + count], width))
-        left_children = [block("palette", left[0:9], SIDE_LEFT_W),
-                         block("interface", left[9:SIDE_LEFT_ROWS],
-                               SIDE_LEFT_W)]
-        pad = content_h - SIDE_LEFT_ROWS
+        # The palette is always the title plus its 8 pair-rows; the
+        # interface is whatever rows the variant draws after the blank.
+        left_children = [block("palette", left[0:9], left_w),
+                         block("interface", left[9:left_rows], left_w)]
+        pad = content_h - left_rows
         if pad:
             left_children.append(block(
-                "left-pad", [backdrop("", slots, SIDE_LEFT_W)] * pad,
-                SIDE_LEFT_W))
+                "left-pad", [backdrop("", slots, left_w)] * pad,
+                left_w))
         left_panel = Panel(PANEL_TITLES["controls"], *left_children,
                            name="controls")
-        left_panel.styles.width = LEFT_OUTER_W
+        left_panel.styles.width = left_outer
+        if panel_limits_enabled() and left_outer < PANEL_MIN_W:
+            # The stacked minimum would clamp the squeezed pair wider
+            # than its content and fill the rest with air: below it the
+            # floor follows the variant instead. The stacked panels never
+            # take this path, so §15.7 keeps holding them as pinned.
+            left_panel.styles.min_width = left_outer
         left_panel.styles.height = content_h + 2
         left_panel.styles.padding = 0
         left_panel.styles.margin = 0
@@ -1514,7 +1562,7 @@ class Editor(App):
         self.regions = [("header", 0, header_h),
                         ("selected", header_h, sel_h),
                         ("palette", 0, 9),
-                        ("interface", 9, SIDE_LEFT_ROWS - 9)]
+                        ("interface", 9, left_rows - 9)]
         self.regions.extend(right_regions)
         self.regions.append(("hints", bottom0, hints_h))
         if status_h:
@@ -1522,7 +1570,9 @@ class Editor(App):
         self._side_on = True
         self._side_geom = {"top": top_screen,
                            "content_h": content_h,
-                           "left_outer": LEFT_OUTER_W}
+                           "left_outer": left_outer,
+                           "left_w": left_w,
+                           "narrow": narrow}
         return True
 
     def _side_frame_coords(self, sx: int, sy: int):
@@ -1540,7 +1590,7 @@ class Editor(App):
             return None             # chrome above or below the pair
         if sx >= geom["left_outer"]:
             return None             # the examples panel
-        if sx == 0 or sx >= SIDE_LEFT_W + 1:
+        if sx == 0 or sx >= geom["left_w"] + 1:
             return None             # the controls panel's own borders
         return sx - 1, y - 1
 

@@ -526,6 +526,22 @@ SIDE_NAMED_W = 1 + 1 + max(len(key) for key in NAMED) + 1
 SIDE_LEFT_W = len("  ") + SIDE_NAMED_W + len("  ") + SIDE_NAMED_W
 #: title + 8 pairs, a blank, title + 3 pairs over two rows each.
 SIDE_LEFT_ROWS = 17
+#: The narrow side-by-side left panel (§8.1, decision 42): two abbreviated
+#: interface cells abreast (`NAMED_ABBR_W`) instead of two stacked full
+#: ones — palette pairs over single-row interface pairs, 14 rows instead
+#: of 17. Columns join with one space, not two: the full panel's join
+#: would read as a gap next to 13-wide cells (trailing + join + the next
+#: cell's mark indent is five columns of air), and the squeezed pair is
+#: narrow enough without spending two of them between columns.
+SIDE_LEFT_NARROW_W = (len("  ") + NAMED_ABBR_W + len(" ")
+                       + NAMED_ABBR_W)
+#: title + 8 pairs, a blank, title + 3 single-row pairs.
+SIDE_LEFT_NARROW_ROWS = 14
+#: The thin side-by-side left panel (decision 43): the narrow rows with
+#: the hex hidden (decision 41's floor rung), so the pair fits 11 columns
+#: and stands down to 61 wide. Marks and numbers/abbreviations stay — the
+#: selected slot's hex reads in the top readout — only the values go.
+SIDE_LEFT_THIN_W = (len("  ") + NAMED_MIN_W + len(" ") + NAMED_MIN_W)
 #: The right panel's fixed budget: examples title + 3 rows, diff title + 3.
 SIDE_EXAMPLES_ROWS = 4
 SIDE_DIFF_ROWS = 4
@@ -552,14 +568,30 @@ def side_named_cell(slots, key, sel):
     return [f"{paint}{first}{RESET}", f"{paint}{second}{RESET}"]
 
 
-def side_left_rows(slots, sel, hits=None, y0=0):
+def side_left_rows(slots, sel, hits=None, y0=0, narrow=False,
+                   show_hex=True):
     """The left panel's content: palette pairs, then interface pairs.
 
     Rows are `(0, 8)` down to `(7, 15)`, then `(background, foreground)` and
-    friends — two columns in total, hex always shown. Every row is backed
-    out to `SIDE_LEFT_W` (§8.2), and `hits` is announced in content coords
-    (`y0` = the content's first row), the same rule as `draw_editor`.
+    friends — two columns in total. Every row is backed out to the panel's
+    width (§8.2), and `hits` is announced in content coords (`y0` = the
+    content's first row), the same rule as `draw_editor`. `narrow` is the
+    squeezed pair (§8.1, decision 42): the same pairs in abbreviated
+    single-row cells, 14 rows instead of 17 — what keeps the pair mounted
+    below `SIDE_MIN_W`. `show_hex=False` is the thin pair (decision 43):
+    the narrow rows with the values hidden, for below `SIDE_NARROW_MIN_W`.
     """
+    if not narrow:
+        cellw, content_w = SIDE_NAMED_W, SIDE_LEFT_W
+    elif show_hex:
+        cellw, content_w = NAMED_ABBR_W, SIDE_LEFT_NARROW_W
+    else:
+        cellw, content_w = NAMED_MIN_W, SIDE_LEFT_THIN_W
+    content_h = SIDE_LEFT_NARROW_ROWS if narrow else SIDE_LEFT_ROWS
+    # One space between squeezed columns: the full panel's two would read
+    # as a gap next to 13-wide cells — trailing plus join plus the next
+    # cell's mark indent is five columns of air.
+    join = " " if narrow else "  "
     out = []
     out.append("  " + title("palette", slots))
     # Swatches at the interface cell width: the palette's two columns are
@@ -568,16 +600,29 @@ def side_left_rows(slots, sel, hits=None, y0=0):
     for row in range(8):
         y = y0 + len(out)
         cells = [row, row + 8]
-        out.append("  " + "  ".join(
-            swatch_cell(slots, i, sel, True, SIDE_NAMED_W) for i in cells))
+        out.append("  " + join.join(
+            swatch_cell(slots, i, sel, show_hex, cellw) for i in cells))
         if hits is not None:
             for column, index in enumerate(cells):
-                x0 = 2 + column * (SIDE_NAMED_W + 2)
-                hits.append(Hit(y, x0, x0 + SIDE_NAMED_W - 1, index))
+                x0 = 2 + column * (cellw + len(join))
+                hits.append(Hit(y, x0, x0 + cellw - 1, index))
     out.append("")
     out.append("  " + title("interface", slots))
     for row in range(3):
         keys = NAMED[2 * row:2 * row + 2]
+        if narrow:
+            # One row per pair, not two: the abbreviated bare cell says
+            # everything the stacked one does — mark, BG, hex — in one.
+            y = y0 + len(out)
+            out.append("  " + join.join(
+                named_cell(slots, key, sel, True, show_hex)
+                for key in keys))
+            if hits is not None:
+                for column, key in enumerate(keys):
+                    x0 = 2 + column * (cellw + len(join))
+                    hits.append(Hit(y, x0, x0 + cellw - 1,
+                                    SLOTS.index(key)))
+            continue
         pair = [side_named_cell(slots, key, sel) for key in keys]
         for line in range(2):
             y = y0 + len(out)
@@ -586,11 +631,11 @@ def side_left_rows(slots, sel, hits=None, y0=0):
                 # One hit per row of the cell: a two-row cell answers on
                 # both, and both carry the slot — `slot_at` never knows.
                 for column, key in enumerate(keys):
-                    x0 = 2 + column * (SIDE_NAMED_W + 2)
-                    hits.append(Hit(y, x0, x0 + SIDE_NAMED_W - 1,
+                    x0 = 2 + column * (cellw + 2)
+                    hits.append(Hit(y, x0, x0 + cellw - 1,
                                     SLOTS.index(key)))
-    assert len(out) == SIDE_LEFT_ROWS, out
-    return [backdrop(line, slots, SIDE_LEFT_W) for line in out]
+    assert len(out) == content_h, out
+    return [backdrop(line, slots, content_w) for line in out]
 
 
 def side_live_rows(slots, cols, height, regions=None):

@@ -501,7 +501,7 @@ class TheFrameIsWidgets(unittest.TestCase):
         panels = [w for w in mounted
                   if isinstance(w, huebox_app.Panel)]
         self.assertEqual([p.border_title for p in panels],
-                         ["palette / interface", "examples"])
+                         ["theme", "examples"])
         frames = self._frames(mounted)
         self.assertEqual(len(frames), len(regions))
         self.assertGreater(len(frames), 3,
@@ -742,7 +742,8 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            sizes = ((40, 12), (60, 16), (100, 30))
+            sizes = ((40, 12), (60, 16), (40, 30), (70, 30), (80, 30),
+                     (100, 30))
             if not os.environ.get("HUEBOX_ALL"):
                 sizes = ((40, 12),)
             for cols, rows in sizes:
@@ -760,7 +761,8 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
                         # never meet"), so no one tiling covers it. Its
                         # own exact-fill invariant instead: top plus pair
                         # plus bottom chrome is exactly the window, and
-                        # each panel's contents tile their own space.
+                        # each panel's contents tile their own space — 17
+                        # rows full, 14 squeezed (§8.1 decision 42).
                         geom = app._side_geom
                         top, content_h = geom["top"], geom["content_h"]
                         by_name = {name: (first, count)
@@ -775,10 +777,13 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
                                          top + content_h + 2,
                                          "the hints ride where the pair "
                                          "ends")
+                        left_rows = (huebox_app.SIDE_LEFT_NARROW_ROWS
+                                     if geom["narrow"]
+                                     else huebox_app.SIDE_LEFT_ROWS)
                         self.assertEqual(
                             sum(count for name, _, count in app.regions
                                 if name in huebox_app.GRID_BLOCKS),
-                            huebox_app.SIDE_LEFT_ROWS,
+                            left_rows,
                             "the left panel's contents do not tile it")
                         self.assertEqual(
                             sum(count for name, _, count in app.regions
@@ -1086,8 +1091,9 @@ class TheFrameNeverScrolls(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(150, 50)) as pilot:
             await pilot.pause()
-            sizes = ((150, 50), (120, 40), (100, 30), (80, 24),
-                               (200, 60), (60, 16), (40, 12))
+            sizes = ((150, 50), (120, 40), (100, 30), (80, 30), (80, 24),
+                               (200, 60), (70, 30), (60, 16), (40, 30),
+                               (40, 12))
             if not os.environ.get("HUEBOX_ALL"):
                 sizes = ((150, 50), (80, 24))
             for cols, rows in sizes:
@@ -1230,7 +1236,7 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             # 40). Just controls below examples.
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
-                             ["palette / interface", "examples"])
+                             ["theme", "examples"])
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_borders_are_theme_closed(self):
@@ -1534,9 +1540,11 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
     (two columns in total), the right the live blocks, and the top stands
     as bare logo plus the info column beside the bordered `editor` panel
     (theme only in `info`; the selected readout and the HSV bars in
-    `editor`, §8.1 decision 40). Below that width the stacked panels run
-    instead (`PrototypePanels`). Narrow `run_test` sizes elsewhere in this
-    file are that fallback, asserted on purpose.
+    `editor`, §8.1 decision 40). From `SIDE_NARROW_MIN_W` (80) the same
+    pair stays mounted squeezed (§8.1 decision 42, `NarrowSideBySide`),
+    and thin below that (`ThinSideBySide`); short windows keep the
+    stacked panels instead (`PrototypePanels`). Narrow `run_test` sizes
+    elsewhere in this file are that fallback, asserted on purpose.
     """
 
     async def _app(self):
@@ -1576,12 +1584,15 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             panels = list(pair.query(huebox_app.Panel))
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
-                             ["palette / interface", "examples"])
+                             ["theme", "examples"])
             left, right = panels
             self.assertEqual(left.styles.width.value,
                              huebox_app.LEFT_OUTER_W)
             self.assertEqual(left.styles.width.value
                              + right.styles.width.value, 120)
+            # full width clears the stacked floor, so the limit holds.
+            self.assertEqual(left.styles.min_width.value,
+                             huebox_app.PANEL_MIN_W)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     @mock.patch.dict(os.environ, {"HUEBOX_EDITOR_PANEL": "0"})
@@ -1677,6 +1688,8 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                                    delta_x=0, delta_y=0, button=1,
                                    shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
+
+
 
     async def test_the_top_has_a_border(self):
         """Bordered means bordered: the `editor` panel carries the border.
@@ -1854,6 +1867,214 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.state.sel, 16)  # background, same column
             await self._press(app, pilot, "up")
             self.assertEqual(app.state.sel, 7)
+
+
+@needs_app
+class NarrowSideBySide(unittest.IsolatedAsyncioTestCase):
+    """The squeezed pair: controls | live below `SIDE_MIN_W`.
+
+    From `SIDE_NARROW_MIN_W` (80) the same two panels stay mounted in
+    abbreviated cells (§8.1 decision 42) — palette pairs over single-row
+    `BG`/`FG`/… pairs, 29 columns and 14 rows instead of 50 and 17 —
+    and the right keeps past the 48 columns it must hold. Past 80 the
+    thin pair runs instead.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    async def _press(self, app, pilot, *keys):
+        from textual import events
+
+        for key in keys:
+            event = events.Key(key, None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+
+    def _screen_of(self, app, hit):
+        """Left-content hit → screen coords for a `Click`."""
+        top = app._side_geom["top"]
+        return hit.x0 + 1 + 1, top + 1 + hit.y
+
+    async def test_narrow_mounts_a_pair_beside_each_other(self):
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertFalse(app._panels_on)
+            self.assertTrue(app._side_geom["narrow"])
+            pairs = [row for row in app.query(Horizontal)
+                     if len(list(row.query(huebox_app.Panel))) == 2]
+            self.assertEqual(len(pairs), 1,
+                             "no controls | live pair mounted")
+            panels = list(pairs[0].query(huebox_app.Panel))
+            self.assertEqual(len(panels), 2)
+            self.assertEqual([p.border_title for p in panels],
+                             ["theme", "examples"])
+            left, right = panels
+            self.assertEqual(left.styles.width.value,
+                             huebox_app.LEFT_NARROW_OUTER_W)
+            self.assertEqual(left.styles.width.value
+                             + right.styles.width.value, 80)
+            # the floor follows the variant: a 42 minimum would clamp
+            # the 31-wide pair and fill the rest with air.
+            self.assertEqual(left.styles.min_width.value,
+                             huebox_app.LEFT_NARROW_OUTER_W)
+            self.assertEqual(left.outer_size.width,
+                             huebox_app.LEFT_NARROW_OUTER_W)
+            self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_a_click_in_the_narrow_left_panel_selects_the_pair(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            # a palette swatch and a single-row interface cell alike.
+            for slot in (8, 17):
+                with self.subTest(slot=slot):
+                    hit = next(h for h in app.hits if h.slot == slot)
+                    x, y = self._screen_of(app, hit)
+                    app.on_click(Click(widget=None, x=x, y=y,
+                                       delta_x=0, delta_y=0, button=1,
+                                       shift=False, meta=False, ctrl=False))
+                    self.assertEqual(app.state.sel, slot)
+
+    async def test_a_click_on_a_narrow_border_selects_nothing(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            geom = app._side_geom
+            # The pair's top border row, and the left panel's right
+            # border — one past its 30 content columns.
+            for x, y in ((10, geom["top"]),
+                         (huebox_app.SIDE_LEFT_NARROW_W + 1,
+                          geom["top"] + 1)):
+                app.on_click(Click(widget=None, x=x, y=y,
+                                   delta_x=0, delta_y=0, button=1,
+                                   shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_past_narrow_the_thin_pair_runs(self):
+        # Past 80 the hex goes: same narrow rows, thinner cells,
+        # down to the 40-column floor.
+        app = await self._app()
+        async with app.run_test(size=(79, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertTrue(app._side_geom["narrow"])
+            self.assertEqual(app._side_geom["left_outer"],
+                             huebox_app.LEFT_THIN_OUTER_W)
+
+    async def test_narrow_collapse_keeps_the_geometry(self):
+        # Shutting a live block keeps the row: the left panel fixes it.
+        app = await self._app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            geom = dict(app._side_geom)
+            await self._press(app, pilot, "E")
+            self.assertEqual(app._collapsed, {"examples"})
+            self.assertEqual(app._side_geom, geom)
+
+
+@needs_app
+class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
+    """The thin pair: controls | live below `SIDE_NARROW_MIN_W`.
+
+    Down to the 40-column floor the narrow rows stay mounted with the
+    hex hidden (decision 43) — marks, numbers and abbreviations only,
+    11 columns — and the right takes the rest: every live row folds to
+    its width by construction, so there is no width worth falling back
+    for. Past the floor, or short of the height bar, the stacked
+    panels (or the bare frame) run instead.
+    """
+
+    async def _app(self):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor()
+
+    def _screen_of(self, app, hit):
+        """Left-content hit → screen coords for a `Click`."""
+        top = app._side_geom["top"]
+        return hit.x0 + 1 + 1, top + 1 + hit.y
+
+    async def test_thin_mounts_a_pair_beside_each_other(self):
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(70, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertFalse(app._panels_on)
+            self.assertTrue(app._side_geom["narrow"])
+            pairs = [row for row in app.query(Horizontal)
+                     if len(list(row.query(huebox_app.Panel))) == 2]
+            self.assertEqual(len(pairs), 1,
+                             "no controls | live pair mounted")
+            left, right = list(pairs[0].query(huebox_app.Panel))
+            self.assertEqual([p.border_title for p in (left, right)],
+                             ["theme", "examples"])
+            self.assertEqual(left.styles.width.value,
+                             huebox_app.LEFT_THIN_OUTER_W)
+            self.assertEqual(left.styles.width.value
+                             + right.styles.width.value, 70)
+            self.assertEqual(left.styles.min_width.value,
+                             huebox_app.LEFT_THIN_OUTER_W)
+            self.assertEqual(left.outer_size.width,
+                             huebox_app.LEFT_THIN_OUTER_W)
+            self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_a_click_in_the_thin_left_panel_selects_the_pair(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(70, 30)) as pilot:
+            await pilot.pause()
+            # a hexless palette number and a hexless abbreviation alike.
+            for slot in (8, 17):
+                with self.subTest(slot=slot):
+                    hit = next(h for h in app.hits if h.slot == slot)
+                    x, y = self._screen_of(app, hit)
+                    app.on_click(Click(widget=None, x=x, y=y,
+                                       delta_x=0, delta_y=0, button=1,
+                                       shift=False, meta=False, ctrl=False))
+                    self.assertEqual(app.state.sel, slot)
+
+    async def test_a_click_on_a_thin_border_selects_nothing(self):
+        from textual.events import Click
+
+        app = await self._app()
+        async with app.run_test(size=(70, 30)) as pilot:
+            await pilot.pause()
+            before = app.state.sel
+            geom = app._side_geom
+            for x, y in ((10, geom["top"]),
+                         (huebox_app.SIDE_LEFT_THIN_W + 1,
+                          geom["top"] + 1)):
+                app.on_click(Click(widget=None, x=x, y=y,
+                                   delta_x=0, delta_y=0, button=1,
+                                   shift=False, meta=False, ctrl=False))
+            self.assertEqual(app.state.sel, before)
+
+    async def test_past_the_floor_no_pair_runs(self):
+        # Past MIN_COLS there is no room for even the thin pair: the
+        # bare frame (here the too-small hint) runs instead.
+        app = await self._app()
+        async with app.run_test(size=(39, 30)) as pilot:
+            await pilot.pause()
+            self.assertFalse(app._side_on)
+            self.assertFalse(app._panels_on)
 
 
 @needs_app
@@ -2065,15 +2286,15 @@ class CollapsiblePanels(unittest.TestCase):
         self.assertEqual(shut_editor._panel_geom, geom)
 
     def test_examples_shuts_where_it_fits(self):
-        """At 80x30 the strip fits, so `e` shuts it on its own."""
-        editor, _ = self._editor(cols=80, rows=30)
+        """At 60x24 the strip fits, so `e` shuts it on its own."""
+        editor, _ = self._editor(cols=60, rows=24)
         live = [name for name, _, _ in editor.regions
                 if name in huebox_app.LIVE_BLOCKS]
         self.assertIn("examples", live,
-                      "the strip did not mount at 80x30")
+                      "the strip did not mount at 60x24")
         regions = {name: (first, count)
                    for name, first, count in editor.regions}
-        shut_editor, shut_mounted = self._editor(cols=80, rows=30,
+        shut_editor, shut_mounted = self._editor(cols=60, rows=24,
                                                  collapsed=("examples",))
         lives = {widget.name: widget.collapsed
                  for widget in self._lives(shut_mounted)}
