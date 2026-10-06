@@ -1054,8 +1054,18 @@ class PushOnSave(_PushSession):
             return {"ghostty": ("ghostty", self.config, None),
                     "kitty": ("kitty", self.kitty, None)}[name]
 
+        # a hermetic `~`: the push asks `ghostty_main_config` for the
+        # config holding the `theme =` line, and ghostty has no env
+        # override — only `~/.config/...` defaults. Without this the test
+        # reads the machine's real home and passes only where a ghostty
+        # config happens to exist (and takes the export path where none
+        # does, which fails the save).
+        main = os.path.join(self.root, ".config", "ghostty", "config")
+        os.makedirs(os.path.dirname(main), exist_ok=True)
+        self.write(main, ghostty_text())
         spec = cli.PushSpec(("ghostty", "kitty"), None, None, False)
-        with mock.patch.object(themes, "resolve", side_effect=fake):
+        with mock.patch.dict(os.environ, {"HOME": self.root}), \
+                mock.patch.object(themes, "resolve", side_effect=fake):
             status, out, _ = self.session(["x", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
         self.assertIn("saved ember → ghostty, kitty", out)
