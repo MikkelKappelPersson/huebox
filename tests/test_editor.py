@@ -453,9 +453,10 @@ class ReadoutSplit(unittest.TestCase):
 
     def test_bars_share_one_width(self):
         # One width for all three axes, spending what the metadata left:
-        # 47 / 38 / 27 / 7 cells at 120 / 111 / 100 / 80, nothing at 60
-        # where even a minimal bar does not fit.
-        for cols, want in ((120, 47), (111, 38), (100, 27), (80, 7)):
+        # 48 / 39 / 28 / 8 cells at 120 / 111 / 100 / 80, nothing at 60
+        # where even a minimal bar does not fit. (Decision 46: the gauge
+        # spends the old trailing air cell, so each bar is one wider.)
+        for cols, want in ((120, 48), (111, 39), (100, 28), (80, 8)):
             with self.subTest(cols=cols):
                 painted = self.painted_top(cols)
                 counts = [len(self.bars_in(row)) for row in painted]
@@ -551,7 +552,7 @@ class TopBlock(unittest.TestCase):
         selected = next(i for i, line in enumerate(full)
                         if line.strip().startswith("selected "))
         interface = next(i for i, line in enumerate(full)
-                         if line.strip() == "interface")
+                         if line.strip() == "Interface")
         self.assertGreater(selected, interface)
 
     def test_the_pin_restores_the_stacked_header(self):
@@ -567,7 +568,7 @@ class TopBlock(unittest.TestCase):
         selected = next(i for i, line in enumerate(full)
                         if line.strip().startswith("selected "))
         interface = next(i for i, line in enumerate(full)
-                         if line.strip() == "interface")
+                         if line.strip() == "Interface")
         self.assertGreater(selected, interface)
 
     def test_the_top_names_both_of_its_blocks(self):
@@ -627,10 +628,12 @@ class TopLayout(unittest.TestCase):
 
     def test_the_logo_steps_down_first(self):
         # Banner while it fits, then mini, then the wordmark — the same
-        # ladder the frame stands up, walked widest first.
+        # ladder the frame stands up, walked widest first. (The steps
+        # moved two columns down when the editor box gave up its own
+        # inner air: the shares below hold the same rule.)
         shorts = [editor.top_layout(w, "ghostty", "/tmp/x", self.SLOTS,
                                     0)[0]
-                  for w in (160, 100, 80)]
+                  for w in (160, 100, 78)]
         self.assertEqual(shorts, [editor.BANNER_LEFT_W,
                                   editor.MINI_LEFT_W,
                                   editor.TOP_LEFT_W])
@@ -723,7 +726,7 @@ class TooSmall(unittest.TestCase):
     def test_at_the_minimum_the_editor_draws(self):
         out = frame(editor.MIN_COLS, editor.MIN_ROWS)
         self.assertNotIn("too small", out)
-        self.assertIn("palette", out)
+        self.assertIn("Palette", out)
 
 
 class NormalFrame(unittest.TestCase):
@@ -731,8 +734,8 @@ class NormalFrame(unittest.TestCase):
         out = frame(80, 24, status="saved")
         self.assertNotIn("too small", out)
         self.assertIn("huebox", out)
-        self.assertIn("palette", out)
-        self.assertIn("interface", out)
+        self.assertIn("Palette", out)
+        self.assertIn("Interface", out)
         self.assertIn("saved", out)
         self.assertLessEqual(len(lines(out)), 24)
 
@@ -882,7 +885,7 @@ class NormalFrame(unittest.TestCase):
         self.assertIn(legend, tall)
         tight = [line.strip() for line in plain_rows(frame(80, 24))]
         self.assertNotIn(legend, tight)
-        for keep in ("palette", "interface", "AaBbCc", "examples", "live code"):
+        for keep in ("Palette", "Interface", "AaBbCc", "examples", "live code"):
             self.assertTrue(any(keep in line for line in tight), keep)
 
     def test_the_widget_blocks_are_separated_by_a_row_of_air(self):
@@ -942,9 +945,9 @@ class NormalFrame(unittest.TestCase):
         def title_row(**slots):
             found = lines(frame(100, 30, slots=dict(base, **slots)))
             return next(line for line in found
-                        if ANSI.sub("", line).strip() == "palette")
+                        if ANSI.sub("", line).strip() == "Palette")
         head = title_row()
-        self.assertIn(f"{BOLD}{fg(base['foreground'])}palette{RESET}", head)
+        self.assertIn(f"{BOLD}{fg(base['foreground'])}Palette{RESET}", head)
         for slot in ("palette-11", "palette-14", "palette-8"):
             self.assertEqual(head, title_row(**{slot: "#ff00ff"}))
 
@@ -1384,7 +1387,7 @@ class GridArrows(unittest.TestCase):
         cells = r"[ #>\da-f]+" if grid.show_hex else r"[ #>\d]+"
         raw = lines(frame(cols, rows, sel=0))
         start = next(i for i, line in enumerate(raw)
-                     if plain(line).strip() == "palette")
+                     if plain(line).strip() == "Palette")
         out = []
         for line in raw[start + 1:]:
             count = line.count("38;2;")
@@ -1645,7 +1648,7 @@ class SidePanels(unittest.TestCase):
                                             "15", "#3f7a3f"])
         # then the interface, paired the same way but name over hex:
         # two rows per pair, the hex row carrying no name
-        self.assertEqual(text[10].strip(), "interface")
+        self.assertEqual(text[10].strip(), "Interface")
         self.assertIn("background", text[11])
         self.assertIn("foreground", text[11])
         self.assertNotIn("background", text[12])
@@ -1706,12 +1709,12 @@ class SidePanels(unittest.TestCase):
         found = []
         editor.side_left_rows(dict(FULL_SLOTS), 0, hits=found, y0=0)
         left = {hit.slot for hit in found
-                if hit.x0 == 2 and hit.slot in (0, 16)}
+                if hit.x0 == 0 and hit.slot in (0, 16)}
         self.assertEqual(left, {0, 16})
         for hit in found:
             column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
                 else 1
-            self.assertEqual(hit.x0, 2 + column * (editor.SIDE_NAMED_W + 2))
+            self.assertEqual(hit.x0, column * (editor.SIDE_NAMED_W + 2))
             self.assertEqual(hit.x1, hit.x0 + editor.SIDE_NAMED_W - 1)
 
     def test_the_narrow_panel_is_the_same_pairs_abbreviated(self):
@@ -1725,7 +1728,7 @@ class SidePanels(unittest.TestCase):
                                             "8", "#3f7a3f"])
         self.assertEqual(text[8].split(), ["7", "#3f7a3f",
                                             "15", "#3f7a3f"])
-        self.assertEqual(text[10].strip(), "interface")
+        self.assertEqual(text[10].strip(), "Interface")
         self.assertEqual(text[11].split(), ["BG", "#3f7a3f",
                                             "FG", "#3f7a3f"])
         self.assertEqual(text[13].split(), ["SB", "#3f7a3f",
@@ -1751,7 +1754,7 @@ class SidePanels(unittest.TestCase):
         for hit in found:
             column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
                 else 1
-            self.assertEqual(hit.x0, 2 + column * (editor.NAMED_ABBR_W + 1))
+            self.assertEqual(hit.x0, column * (editor.NAMED_ABBR_W + 1))
             self.assertEqual(hit.x1, hit.x0 + editor.NAMED_ABBR_W - 1)
 
     def test_the_thin_panel_is_the_narrow_rows_without_hex(self):
@@ -1764,7 +1767,7 @@ class SidePanels(unittest.TestCase):
         text = [ANSI.sub("", row) for row in rows]
         self.assertEqual(text[1].split(), [">", "0", "8"])
         self.assertEqual(text[8].split(), ["7", "15"])
-        self.assertEqual(text[10].strip(), "interface")
+        self.assertEqual(text[10].strip(), "Interface")
         self.assertEqual(text[11].split(), ["BG", "FG"])
         self.assertEqual(text[13].split(), ["SB", "SF"])
         for row in rows:
@@ -1778,7 +1781,7 @@ class SidePanels(unittest.TestCase):
         for hit in found:
             column = 0 if hit.slot in (0, 1, 2, 3, 4, 5, 6, 7, 16, 18, 20) \
                 else 1
-            self.assertEqual(hit.x0, 2 + column * (editor.NAMED_MIN_W + 1))
+            self.assertEqual(hit.x0, column * (editor.NAMED_MIN_W + 1))
             self.assertEqual(hit.x1, hit.x0 + editor.NAMED_MIN_W - 1)
 
     def test_the_right_panel_spends_a_fixed_budget(self):

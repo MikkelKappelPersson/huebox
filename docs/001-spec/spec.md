@@ -436,7 +436,7 @@ bright half is read twice in one frame — once as syntax, once as chrome:
 | label | `palette-14` | the label beside a key: `arrows` **move** |
 | muted | `palette-8` | the furniture: a path, a hex, hue/sat/val, a counter, a parenthetical, the `0-7 base` legend |
 
-**A header is not a role.** `palette`, `interface`, `selected`, `examples`,
+**A header is not a role.** `Palette`, `Interface`, `selected`, `examples`,
 `live diff`, `live code` and `themes` wear the theme's own `foreground` in
 bold, and no palette slot moves them: `foreground` is the one colour the user
 chose for text, and a header that took a colour of its own would compete with
@@ -490,11 +490,11 @@ air, so the banner is still the only huebox on screen; the right column
 stays where it was, one banner lower.
 
 **Under the compositor the top is one row: bare logo, info, one bordered panel.**
-`[logo] [info] [editor]` (decision 40): the logo is bare chrome at every
+`[logo] [info] [EDITOR]` (decision 40): the logo is bare chrome at every
 width — the raster banner where it fits, else the mini banner, else the
 one-line wordmark, the same ladder the frame stands up, never a panel and
 never a border — the info column the theme subject only, and the bordered
-`Panel` titled `editor` the selected readout (chip, name, hex, specimen)
+`Panel` titled `EDITOR` the selected readout (chip, name, hex, specimen)
 plus the three HSV bars. One arrangement at every size it fits, so `info`
 and `editor` stay separate boxes and no fallback ever merges the editor's
 own controls into `info`: past the tightest share the compositor keeps
@@ -819,7 +819,9 @@ Append-only. Newest last. One line per decision, with the reason.
 | 41 | Narrow interface cells abbreviate before they stack: `BG FG CC CT SB SF` + hex below 68 columns, hexless past 30 | The palette already sheds its hex before its cells, and the interface does the same with its names: two full 32-wide cells need 68 columns, two abbreviated 13-wide ones 30, so below 68 the frame holds two abreast and only past 30 stacks them one to a row. The price is stated plainly: at 40–67 columns the interface costs three rows instead of six, which the widgets below spend — the strip survives at 60x20 where it used to go, and `selected` fits at 40x12 — and the hexless rung is a floor past what any frame at or above `MIN_COLS` reaches, the way the palette ladder keeps one. The arrows step through the same narrowing the frame shows, because both come out of the one grid computation (§4.3.1) |
 | 42 | The side-by-side pair stays mounted squeezed below 100 columns: the same pairs in abbreviated cells down to 80 | The abbreviations of decision 41 buy a 29-column left panel — palette pairs over single-row `BG`/`FG`/… pairs, 14 rows instead of 17 — so the pair stands at 80 and up, where the narrow left still leaves the right past the 48 columns it must hold. Squeezed columns join with one space, not two: the full panel's join would read as a gap next to 13-wide cells — trailing plus join plus the next cell's mark indent is five columns of air, and the mark indent is alignment, not waste. The price is stated plainly: one height bar for both widths, so short windows keep the stacked panels (full-width sample) whatever the width, and 80x24 — the commonest terminal — never changed; the squeezed pair is the 80-and-up tall window's layout, and past 80 the stacked panels run. Clicks and focus read the same pairing through width-parameterised coordinates, so the narrow cells answer exactly where they are painted |
 | 43 | Past 80 the pair stays mounted thin down to the 40-column floor: narrow rows, hex hidden | Decision 41's floor rung in the panel — marks, numbers and abbreviations stay, only the values go, so the pair fits 11 columns — and it stands wherever the window itself stands: every right-panel row folds to its width by construction (`backdrop`, `pack`/`clip`), so the live blocks narrow instead of overflowing and there is no width worth falling back for. The selected slot's hex still reads in the top readout, so nothing the editor needs is off screen. The price is stated plainly: the stacked panels survive only for short windows now, and the strip needs its own room inside them — the collapsible-examples case moved down to sizes where it still mounts |
-| 44 | The controls panel is titled `theme`, not `palette / interface` | The box holds the theme's slots in every geometry — full, squeezed and thin — and `palette / interface` named its two grids, not the box. One title in `PANEL_TITLES`, so the stacked panels read the same |
+| 44 | The controls panel is titled `THEME`, not `palette / interface` | The box holds the theme's slots in every geometry — full, squeezed and thin — and `palette / interface` named its two grids, not the box. One title in `PANEL_TITLES`, so the stacked panels read the same |
+| 45 | Every bordered panel pads its content one cell left and right | The panel's padding is the only edge air — see decision 46. The air is horizontal only — vertical air would come 1:1 out of the widgets, so the row budget never moves for padding. Padding is the first thing spent when the window shrinks: panels pad iff the padded lay shows everything the unpadded one does (the same top, the same blocks, no block fewer rows), else they mount unpadded, else the bare stack stands. The `editor` box decides its own air independently: it pads iff the padded box mounts, else it keeps today's unpadded box rather than collapsing into a bare readout — and a tight readout never vetoes air in the panels below it. `HUEBOX_PANEL_PAD=0` opts out to touching borders |
+| 46 | Panel content carries no baked indent; the `editor` box no inner air; the `themes` button pads like a panel | Decision 45's air doubled the bare frame's two-column indent inside bordered panels (three columns left, one right) and the editor box's own inner cell (two right). The content rows now start at the content edge in every bordered panel — palette, interface, examples, diff, sample, the editor readout and its bars — and the one cell of panel padding is the only air on either side. The bare frame is untouched: it keeps its two-column indent (four for diff/sample), and the rungs that assume it take it as a parameter. The `editor` box's own inner air is 0 and its bars spend the old trailing space, so the gauges end one cell from the border one column wider; the `themes` button narrows by the same cell on each side so it reads as part of the same language. The box's air is reserved out of the info column's share by the allocator, so a padded box mounts wherever the unpadded one does and only the theme path truncates two columns sooner. The price is stated plainly: the panels stand two columns narrower than the indent era at every size, and the info column's path truncates two columns sooner wherever the `editor` box pads |
 
 ---
 
@@ -1208,7 +1210,7 @@ span emphasised; that is the whole comparison.
 
 The three live widgets — the strip, the diff (§14.4) and the code sample —
 are each their own collapsible, all open by default. The strip's header calls
-it `interface text`, which is what it demonstrates: the background, selection
+it `Interface text`, which is what it demonstrates: the background, selection
 and cursor pairs the interface is set in. `E` collapses the strip, `D` the
 diff, `C` the code, and each key again reopens it (shifted, because the bare
 letters adjust hue, saturation and value); clicking a header or
@@ -1361,6 +1363,20 @@ the small-size story and anything below that needs it.
    nothing (§4.3.2). `HUEBOX_PANEL_LIMITS=0` opts out to the unbounded
    layout. The bounds sit clear of the tested sizes, so capping is a no-op
    there and the fill-window and no-scroll guarantees keep holding.
+8. Each bordered panel pads its content one cell left and right (`PANEL_PAD`
+   in `app.py`, decisions 45/46). The panel's padding is the only edge air:
+   content rows carry no baked indent inside bordered panels (the bare frame
+   keeps its own), the `editor` box's inner air is 0, and the `themes`
+   button narrows by the same cell on each side. The air costs columns only:
+   the content width gives up two cells and the click map shifts past them,
+   while heights, budgets and row counts never move for padding. A padded
+   panel needs the draw floor plus its own air (`PANEL_PAD_MIN_W`), and the
+   padded lay must show everything the unpadded one does — the same top,
+   the same blocks, no block fewer rows — else the panels mount unpadded;
+   past that the bare stack stands. The `editor` box decides its own air
+   independently (it pads iff the padded box mounts), so a tight readout
+   never vetoes air elsewhere. `HUEBOX_PANEL_PAD=0` opts out to touching
+   borders.
 
 **What a short frame spends, in order.** `rows` is a budget and the three live
 widgets of §§14.1/14.4 — the examples strip, the diff and the code sample —

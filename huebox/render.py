@@ -724,9 +724,12 @@ def hsv_axis(slots, value: str, axis: int, bar_w: int) -> str:
             ("val", val, f"{val * 100:{HSV_FIELD - 1}.0f}%",
              lambda t: hsv_to_rgb(hue, sat, t)))
     label, reading, number, colour = axes[axis]
+    # Decision 46: no trailing air — the row ends with the bar and the
+    # panel's padding is the only edge air (the bare readout keeps its
+    # own trailing space in `hsv_readout`).
     return (chrome(label, "foreground", slots) + " "
             + chrome(number, "foreground", slots) + "  "
-            + _chip(slots, colour, bar_w, reading * (bar_w - 1)) + " ")
+            + _chip(slots, colour, bar_w, reading * (bar_w - 1)))
 
 
 # --------------------------------------------------------------------------
@@ -885,7 +888,7 @@ def pair_label(bg_slot, fg_slot):
     return f"{bg_slot}/{fg_slot}"
 
 
-def example_lines(slots, cols=None):
+def example_lines(slots, cols=None, indent="  "):
     """The three live example rows: background, selection, cursor (§14.1).
 
     Pure like `sample_lines`: every colour is read out of `slots` on each
@@ -902,7 +905,9 @@ def example_lines(slots, cols=None):
     not a slot name, so a missing slot paints MISSING *in place* and never
     by accident — and the demonstrated colour is exactly the span that
     demonstrates it: `selection-background` covers the selected words and
-    nothing past them.
+    nothing past them. `indent` is the row head's own air (decision 46):
+    the bare frame's two columns, empty inside bordered panels where the
+    panel's padding is the only edge air.
     """
     def value(name):
         return slots.get(name, MISSING)
@@ -941,7 +946,7 @@ def example_lines(slots, cols=None):
         # introduce stays the loudest thing on the row (§8.1). The padding
         # rides inside the painted run and the row's width is measured with
         # `visible`, escapes and all.
-        head = "  " + chrome(f"{label:<{label_width}} ", "foreground", slots)
+        head = indent + chrome(f"{label:<{label_width}} ", "foreground", slots)
         room = None if cols is None else cols - visible(head)
         plain = "".join(chunk for chunk, _, _ in segments)
         if room is not None:
@@ -986,7 +991,7 @@ DIFF_SIGNS = {"+": DIFF_ADDED, "-": DIFF_REMOVED, " ": DIFF_CONTEXT}
 DIFF_INDENT = "    "                # the block's own indent, as the sample has
 
 
-def diff_lines(slots, cols=None):
+def diff_lines(slots, cols=None, indent=DIFF_INDENT):
     """The live diff hunk: removed red, added green (§14.4).
 
     Pure like `sample_lines` and `example_lines`: every colour is read out
@@ -995,15 +1000,18 @@ def diff_lines(slots, cols=None):
     everything after it wear the comment slot, which is the reading git
     gives the same lines. The indent is painted here rather than by the
     editor's reset-splice so that the hunk header's two halves line up.
+    `indent` is the block's own air (decision 46): the bare frame's four
+    columns, empty inside bordered panels where the panel's padding is
+    the only edge air.
     """
     def paint(text, slot):
         return f"{fg(slots.get(slot, MISSING))}{text}{RESET}"
 
     marks, counts, context = DIFF_HUNK
-    rows = [DIFF_INDENT + paint(marks, DIFF_MARKS)
+    rows = [indent + paint(marks, DIFF_MARKS)
             + paint(f" {counts} {context}", DIFF_CONTEXT)]
     for sign, text in DIFF_BODY:
-        rows.append(DIFF_INDENT + paint(sign + text, DIFF_SIGNS[sign]))
+        rows.append(indent + paint(sign + text, DIFF_SIGNS[sign]))
     return [clip(row, cols) if cols is not None else row for row in rows]
 
 

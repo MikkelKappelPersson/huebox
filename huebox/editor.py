@@ -115,10 +115,15 @@ TOP_MIN_COLS = 60
 BANNER_LEFT_W = 52
 MINI_LEFT_W = 25
 # Horizontal breathing room inside the editor panel's border (§8.1,
-# decision 40): vertical stays 0 so the box costs no extra rows; the bars
-# give up two cells of sweep for one cell of air on each side. Geometry,
-# so it lives beside the allocator rather than the widgets.
-EDITOR_PAD_X = 1
+# decision 40/46): none of its own — vertical stays 0 so the box costs
+# no extra rows, and the inner horizontal air is 0 so the panel's
+# padding (decision 45) is the only edge air. Geometry, so it lives
+# beside the allocator rather than the widgets.
+#: The editor panel's own inner air, on top of decision 45's: zero — the
+#: box's content reaches its borders and the panel's padding is the only
+#: edge air (decision 46). It used to hold one column from the bare era;
+#: that doubled the gutter once bordered panels learned to pad.
+EDITOR_PAD_X = 0
 # the selected readout's slot-name field (§8.3): pinned to the longest slot
 # (`selection-foreground`), so switching the selection never moves the hex,
 # the bars or the specimen beside it — the eye stays on the colours, not on
@@ -169,7 +174,7 @@ class Grid(NamedTuple):
     named_show_hex: bool = True  # an interface cell prints its hex value
 
 
-def grid_geometry(cols: int) -> Grid:
+def grid_geometry(cols: int, indent="  ") -> Grid:
     """The `Grid` a frame `cols` wide draws, and the arrows move in (§4.3).
 
     One ladder for both (§15.2): the frame renders what this says and the
@@ -180,20 +185,22 @@ def grid_geometry(cols: int) -> Grid:
     before its cells: two full cells need 68 columns, two abbreviated ones
     30, so below 68 the frame holds two abreast by printing BG/FG/… and
     only past 30 stacks them one to a row; the hex goes last, past what
-    any frame at or above `MIN_COLS` reaches.
+    any frame at or above `MIN_COLS` reaches. `indent` is the content
+    rows' own air (decision 46): the rungs leave room for it, so bordered
+    panels ask with `""` and the grid fills the whole content width.
     """
     cell_full, cell_min = CELL_FULL, CELL_MIN
-    if len("  ") + 2 * NAMED_COL_W + 2 <= cols:
+    if len(indent) + 2 * NAMED_COL_W + 2 <= cols:
         named_cols, abbrev, nhex = 2, False, True
-    elif len("  ") + 2 * NAMED_ABBR_W + 2 <= cols:
+    elif len(indent) + 2 * NAMED_ABBR_W + 2 <= cols:
         named_cols, abbrev, nhex = 2, True, True
-    elif len("  ") + NAMED_ABBR_W <= cols:
+    elif len(indent) + NAMED_ABBR_W <= cols:
         named_cols, abbrev, nhex = 1, True, True
     else:
         named_cols, abbrev, nhex = 1, True, False
     for per_row, cellw in ((8, cell_full), (8, cell_min), (4, cell_full),
                            (4, cell_min), (2, cell_full), (1, cell_full)):
-        if len("  ") + per_row * cellw <= cols:
+        if len(indent) + per_row * cellw <= cols:
             return Grid(per_row, named_cols, cellw >= cell_full,
                         named_abbrev=abbrev, named_show_hex=nhex)
     return Grid(1, 1, True, named_abbrev=abbrev,
@@ -521,9 +528,10 @@ def named_cell(slots, key, sel, abbrev=False, show_hex=True):
 SIDE_NAMED_W = 1 + 1 + max(len(key) for key in NAMED) + 1
 #: The side-by-side layout's left panel: palette pairs over interface
 #: pairs, two columns throughout. Content width is two stacked cells plus
-#: the join and the indent — the one width every row of the panel fills
-#: (interface rows exactly, palette rows padded in `background`).
-SIDE_LEFT_W = len("  ") + SIDE_NAMED_W + len("  ") + SIDE_NAMED_W
+#: the join — the one width every row of the panel fills (interface rows
+#: exactly, palette rows padded in `background`). Decision 46: no baked
+#: indent; the panel's padding is the only edge air.
+SIDE_LEFT_W = SIDE_NAMED_W + len("  ") + SIDE_NAMED_W
 #: title + 8 pairs, a blank, title + 3 pairs over two rows each.
 SIDE_LEFT_ROWS = 17
 #: The narrow side-by-side left panel (§8.1, decision 42): two abbreviated
@@ -533,15 +541,14 @@ SIDE_LEFT_ROWS = 17
 #: would read as a gap next to 13-wide cells (trailing + join + the next
 #: cell's mark indent is five columns of air), and the squeezed pair is
 #: narrow enough without spending two of them between columns.
-SIDE_LEFT_NARROW_W = (len("  ") + NAMED_ABBR_W + len(" ")
-                       + NAMED_ABBR_W)
+SIDE_LEFT_NARROW_W = (NAMED_ABBR_W + len(" ") + NAMED_ABBR_W)
 #: title + 8 pairs, a blank, title + 3 single-row pairs.
 SIDE_LEFT_NARROW_ROWS = 14
 #: The thin side-by-side left panel (decision 43): the narrow rows with
 #: the hex hidden (decision 41's floor rung), so the pair fits 11 columns
 #: and stands down to 61 wide. Marks and numbers/abbreviations stay — the
 #: selected slot's hex reads in the top readout — only the values go.
-SIDE_LEFT_THIN_W = (len("  ") + NAMED_MIN_W + len(" ") + NAMED_MIN_W)
+SIDE_LEFT_THIN_W = (NAMED_MIN_W + len(" ") + NAMED_MIN_W)
 #: The right panel's fixed budget: examples title + 3 rows, diff title + 3.
 SIDE_EXAMPLES_ROWS = 4
 SIDE_DIFF_ROWS = 4
@@ -593,45 +600,45 @@ def side_left_rows(slots, sel, hits=None, y0=0, narrow=False,
     # cell's mark indent is five columns of air.
     join = " " if narrow else "  "
     out = []
-    out.append("  " + title("palette", slots))
+    out.append(title("Palette", slots))
     # Swatches at the interface cell width: the palette's two columns are
     # the interface's two columns, and neither the paint nor the hits
     # re-derive them (the `x0` below is the same expression both use).
     for row in range(8):
         y = y0 + len(out)
         cells = [row, row + 8]
-        out.append("  " + join.join(
+        out.append(join.join(
             swatch_cell(slots, i, sel, show_hex, cellw) for i in cells))
         if hits is not None:
             for column, index in enumerate(cells):
-                x0 = 2 + column * (cellw + len(join))
+                x0 = column * (cellw + len(join))
                 hits.append(Hit(y, x0, x0 + cellw - 1, index))
     out.append("")
-    out.append("  " + title("interface", slots))
+    out.append(title("Interface", slots))
     for row in range(3):
         keys = NAMED[2 * row:2 * row + 2]
         if narrow:
             # One row per pair, not two: the abbreviated bare cell says
             # everything the stacked one does — mark, BG, hex — in one.
             y = y0 + len(out)
-            out.append("  " + join.join(
+            out.append(join.join(
                 named_cell(slots, key, sel, True, show_hex)
                 for key in keys))
             if hits is not None:
                 for column, key in enumerate(keys):
-                    x0 = 2 + column * (cellw + len(join))
+                    x0 = column * (cellw + len(join))
                     hits.append(Hit(y, x0, x0 + cellw - 1,
                                     SLOTS.index(key)))
             continue
         pair = [side_named_cell(slots, key, sel) for key in keys]
         for line in range(2):
             y = y0 + len(out)
-            out.append("  " + "  ".join(cell[line] for cell in pair))
+            out.append("  ".join(cell[line] for cell in pair))
             if hits is not None:
                 # One hit per row of the cell: a two-row cell answers on
                 # both, and both carry the slot — `slot_at` never knows.
                 for column, key in enumerate(keys):
-                    x0 = 2 + column * (cellw + 2)
+                    x0 = column * (cellw + 2)
                     hits.append(Hit(y, x0, x0 + cellw - 1,
                                     SLOTS.index(key)))
     assert len(out) == content_h, out
@@ -650,21 +657,20 @@ def side_live_rows(slots, cols, height, regions=None):
     """
     if height < SIDE_EXAMPLES_ROWS + 2:
         return None
-    rows = ["  " + title("examples", slots)]
-    rows.extend(example_lines(slots, cols - 2)[:3])
+    rows = [title("examples", slots)]
+    rows.extend(example_lines(slots, cols, indent="")[:3])
     rest = height - len(rows)
     diff_here = rest >= SIDE_DIFF_ROWS + 3
     if diff_here:
-        rows.append("  " + title("live diff", slots))
-        rows.extend(diff_lines(slots, cols - 2)[:SIDE_DIFF_ROWS - 1])
+        rows.append(title("live diff", slots))
+        rows.extend(diff_lines(slots, cols, indent="")[:SIDE_DIFF_ROWS - 1])
         rest = height - len(rows)
     code = [line for line, _ in sample_lines(slots)]
     if code and not code[-1].strip():
         code.pop()               # the lex's trailing newline, not a line
     take = max(1, rest - 1)
-    rows.append("  " + title("live code", slots))
-    rows.extend("    " + line.replace(RESET, RESET + "    ")
-                for line in code[:take])
+    rows.append(title("live code", slots))
+    rows.extend(line for line in code[:take])
     sample_first = len(rows)
     rows.extend([""] * (height - len(rows)))
     assert len(rows) == height, (len(rows), height)
@@ -781,7 +787,7 @@ def top_editor_meta(label, path, slots, sel, meta_w=None, stacked=False):
     return rows, [combined], meta_w
 
 
-def top_layout(width, label, path, slots, sel):
+def top_layout(width, label, path, slots, sel, pad=0):
     """The unified top's width shares, or `None` for the bare stack (§8.1).
 
     `(left_w, info_w, editor_outer, stacked)`: logo art, info column,
@@ -796,7 +802,10 @@ def top_layout(width, label, path, slots, sel):
     past the layout, the same opt-out the bare frame keeps. `app.py`
     mounts from this and never re-derives it — one implementation of the
     shares, asked from `_top_editor_row`, `_top_screen_height` and the
-    tests alike.
+    tests alike. `pad` is the editor box's own air per side (decision
+    46): it is reserved out of the info column's share, so a padded box
+    mounts wherever the unpadded one does and only the theme path
+    truncates two columns sooner — info was already the flexible share.
     """
     if os.environ.get("HUEBOX_TOP", "1") == "0":
         return None
@@ -809,7 +818,7 @@ def top_layout(width, label, path, slots, sel):
     stacked_need = max(visible(row) for row in stacked_head)
     for stacked, content_need in ((False, wide_need),
                                   (True, stacked_need)):
-        outer_min = content_need + 2 + 2 * EDITOR_PAD_X
+        outer_min = content_need + 2 + 2 * EDITOR_PAD_X + 2 * pad
         for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
             rem = width - left_w
             if rem < info_min + outer_min:
@@ -849,8 +858,9 @@ def top_right_panel_rows_split(label, path, slots, sel, right_w):
     value = slots.get(key, MISSING)
     (left0, left1, left2), meta_w = top_meta_rows(label, path, slots, sel)
     gap = 2
-    # label + number + two spaces + bar + one trailing space of air.
-    single_chrome = len("hue") + 1 + HSV_FIELD + 2 + 1
+    # label + number + two spaces + bar: the gauge fills its share to
+    # the content edge (decision 46 — no trailing air).
+    single_chrome = len("hue") + 1 + HSV_FIELD + 2
     bar_w = right_w - meta_w - gap - single_chrome
     if bar_w < 7:
         return None
@@ -916,8 +926,14 @@ def top_left_rows(slots, left_w):
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 grid=None, hits=None, size=None, regions=None,
-                use_banner=None):
+                use_banner=None, indent="  "):
     """The frame, written to stdout.
+
+    `indent` is the content rows' own air (decision 46): the bare frame's
+    two columns, empty (`""`) where the rows mount inside bordered
+    panels — the panel's padding is the only edge air there. Header, tail
+    and banner rows keep their own indent: they mount as bare chrome even
+    in panels mode.
 
     `size` overrides the terminal query. Textual knows the size it was given —
     the pty's — and passing it is both cheaper and more honest than asking the
@@ -934,8 +950,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         sys.stdout.flush()
         return
     if grid is None:
-        grid = grid_geometry(cols)      # §4.3 — what this frame draws, and
-                                        # what the arrows step through
+        grid = grid_geometry(cols, indent)  # §4.3 — what this frame draws,
+                                        # and what the arrows step through
     # §13.7 — the picker is no longer a second mode of this function. It was
     # `overlay=` for the whole migration, and phase 5 gave it a widget; the
     # frame it used to be handed on the side is now `theme_lines`, which is
@@ -1001,7 +1017,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     cellw = CELL_FULL if show_hex else CELL_MIN
 
     marks.append(("palette", at_body()))
-    body.append("  " + title("palette", slots))
+    body.append(indent + title("Palette", slots))
     for start in range(0, len(PALETTE), per_row):
         # `len(body)` is this row's index in the frame: `out` is `body` plus
         # whatever follows, so the index holds. Announcing the cell here rather
@@ -1009,11 +1025,11 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # disagreeing about where one is.
         y = len(body)
         cells = [i for i in range(start, start + per_row) if i < len(PALETTE)]
-        body.append(("  " + "".join(
+        body.append((indent + "".join(
             swatch_cell(slots, i, sel, show_hex) for i in cells)).rstrip())
         if hits is not None:
             for column, index in enumerate(cells):
-                x0 = 2 + column * cellw
+                x0 = len(indent) + column * cellw
                 hits.append(Hit(y, x0, x0 + cellw - 1, index))
     legend = chrome(PALETTE_LEGEND, CHROME_MUTED, slots)
     body.append(legend)
@@ -1022,16 +1038,16 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     marks.append(("interface", at_body()))
     per = grid.named_cols
     ncellw = named_cell_width(grid.named_abbrev, grid.named_show_hex)
-    body.append("  " + title("interface", slots))
+    body.append(indent + title("Interface", slots))
     for start in range(0, len(NAMED), per):
         y = len(body)
         cells = [named_cell(slots, key, sel,
                             grid.named_abbrev, grid.named_show_hex)
                  for key in NAMED[start:start + per]]
-        body.append(("  " + "  ".join(cells)).rstrip())
+        body.append((indent + "  ".join(cells)).rstrip())
         if hits is not None:
             for column in range(len(cells)):
-                x0 = 2 + column * (ncellw + 2)
+                x0 = len(indent) + column * (ncellw + 2)
                 hits.append(Hit(y, x0, x0 + ncellw - 1,
                                 len(PALETTE) + start + column))
     body.append("")
@@ -1044,7 +1060,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # the row has room for them and the numbers they replace where it
         # does not, so `room` is whatever the subject leaves — the row
         # itself never grows and §15's budget does not move
-        subject = selected_core(slots, key, value, indent="  ")
+        subject = selected_core(slots, key, value, indent=indent)
         # §8.3 — the reading of the slot's own colour comes in two parts:
         # the bars, which are the glance, on this row, and the exact
         # numbers — `hue 207.0  sat 59.4%  val 93.7%`, which are the truth
@@ -1052,7 +1068,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         # below. Neither part costs a row, and neither gives up a row for
         # the other.
         exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
-        specimen = f"    {fg(value)}AaBbCc 0123 {RESET}"
+        specimen = f"{indent * 2}{fg(value)}AaBbCc 0123 {RESET}"
         bars = hsv_readout(slots, value, cols - visible(subject) - 3)
         body.append(subject + ("   " + bars if bars else ""))
         body.append(specimen + ("   " + chrome(exact, CHROME_MUTED, slots)
@@ -1096,9 +1112,10 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     examples = min(EXAMPLES_ROWS, room_left() - SAMPLE_FLOOR)
     if examples >= EXAMPLES_FLOOR:
         marks.append(("examples", at_extra()))
-        extra.append("  " + title("examples", slots,
+        extra.append(indent + title("examples", slots,
                              "(live buffer: background / selection / cursor)"))
-        extra.extend(example_lines(slots, cols - 2)[:examples - 1])
+        extra.extend(example_lines(slots, cols - len(indent),
+                                   indent=indent)[:examples - 1])
     # §15 — the diff is the last widget to get a row and the first to give
     # one back: it grows out of what the sample did not need, so where the
     # two compete the sample stays whole and the hunk does not appear
@@ -1130,16 +1147,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 marks.append(("diff", at_extra() + (1 if lead else 0)))
                 if lead:
                     extra.append("")
-                diff = ["  " + title("live diff", slots,
+                diff = [indent + title("live diff", slots,
                            "(git-style: + added, - removed)")]
-                diff.extend(diff_lines(slots, cols - 2)[:rows_left])
+                diff.extend(diff_lines(slots, cols - len(indent),
+                                       indent=indent * 2)[:rows_left])
                 if spare_rows - lead - rows_left - 1 >= 1:   # a row to spare
                     diff.append("")   # the separator is a row of its own
             extra.extend(diff)      # the hunk draws above the sample
             marks.append(("sample", at_extra()))
-            extra.append("  " + title("live code", slots,
+            extra.append(indent + title("live code", slots,
                                   "(truecolor, no reload needed)"))
-            extra.extend("    " + line.replace(RESET, RESET + "    ")
+            extra.extend(indent * 2 + line.replace(RESET, RESET + indent * 2)
                          for line in code[:take])
             if room_left() - take >= 2:  # rows to spare: the separator
                 extra.append("")

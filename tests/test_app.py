@@ -299,17 +299,19 @@ class TheMouse(unittest.TestCase):
     def _screen_point(self, editor, hit):
         """Inner hit → screen coords for `_click`.
 
-        Panels offset content by one border column left and the top's
-        growth plus the controls' own border row above (`_panel_geom`
-        says both: the unified logo-plus-info beside `editor` top, or
-        nothing where the bare header stayed). The bare frame is
-        identity. All clickable hits live in the controls panel.
+        Panels offset content by one border column left plus decision 45's
+        horizontal air, and the top's growth plus the controls' own border
+        row above (`_panel_geom` says all three: the unified logo-plus-info
+        beside `editor` top, or nothing where the bare header stayed). Rows
+        map straight past the border — the air is horizontal only. The bare
+        frame is identity. All clickable hits live in the controls panel.
         """
         if getattr(editor, "_panels_on", False):
             geom = editor._panel_geom
+            pad = geom.get("pad", 0)
             dy = ((geom.get("top_screen", geom.get("header_h", 0))
                     - geom.get("header_h", 0)) + 1)
-            return hit.x0 + 1 + 1, hit.y + dy
+            return hit.x0 + 1 + 1 + pad, hit.y + dy
         return hit.x0 + 1, hit.y
 
     def test_a_click_selects_the_slot_whose_cell_it_was(self):
@@ -501,7 +503,7 @@ class TheFrameIsWidgets(unittest.TestCase):
         panels = [w for w in mounted
                   if isinstance(w, huebox_app.Panel)]
         self.assertEqual([p.border_title for p in panels],
-                         ["theme", "examples"])
+                         ["THEME", "EXAMPLES"])
         frames = self._frames(mounted)
         self.assertEqual(len(frames), len(regions))
         self.assertGreater(len(frames), 3,
@@ -1236,7 +1238,7 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             # 40). Just controls below examples.
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
-                             ["theme", "examples"])
+                             ["THEME", "EXAMPLES"])
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_borders_are_theme_closed(self):
@@ -1267,6 +1269,73 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
                                shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
 
+    async def test_padded_panels_carry_air_on_both_sides(self):
+        # Decision 45: at 80x24 the padded lay shows everything the
+        # unpadded one does, so the panels pad — one cell left and right.
+        app = await self._app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._panels_on)
+            self.assertEqual(app._panel_geom.get("pad"),
+                             huebox_app.PANEL_PAD)
+            panels = list(app.query(huebox_app.Panel))
+            self.assertTrue(panels)
+            air = (0, huebox_app.PANEL_PAD, 0, huebox_app.PANEL_PAD)
+            for panel in panels:
+                self.assertEqual(tuple(panel.styles.padding), air)
+
+    async def test_narrow_panels_drop_the_air_first(self):
+        # Decision 45: padding is the first thing spent — at 44x24 the
+        # padded lay would trim the sample to buy air, and at 42x24 the
+        # padded content would not even hold the draw floor, so both mount
+        # unpadded rather than trimming widgets (or dropping the panels).
+        for size in ((44, 24), (42, 24)):
+            with self.subTest(size=size):
+                app = await self._app()
+                async with app.run_test(size=size) as pilot:
+                    await pilot.pause()
+                    self.assertTrue(app._panels_on)
+                    self.assertEqual(app._panel_geom.get("pad"), 0)
+
+    def test_pad_opt_out_defaults_on(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HUEBOX_PANEL_PAD", None)
+            self.assertTrue(huebox_app.panel_pad_enabled())
+
+    async def test_zero_pad_opts_out_to_touching_borders(self):
+        app = await self._app()
+        with mock.patch.dict(os.environ, {"HUEBOX_PANEL_PAD": "0"}):
+            async with app.run_test(size=(80, 24)) as pilot:
+                await pilot.pause()
+                self.assertTrue(app._panels_on)
+                self.assertEqual(app._panel_geom.get("pad"), 0)
+                for panel in app.query(huebox_app.Panel):
+                    self.assertEqual(tuple(panel.styles.padding),
+                                     (0, 0, 0, 0))
+
+    def test_pad_keeps_content_rejects_a_changed_top(self):
+        # An editor box that collapses into a bare readout is lost
+        # function, however identical the blocks below it are.
+        ref = (None, None, [("a", 0, 2)], 6, 4, 0, 0)
+        cand = (None, None, [("a", 0, 2)], 4, 4, 0, 0)
+        self.assertFalse(huebox_app.Editor._pad_keeps_content(ref, cand))
+
+    def test_pad_keeps_content_rejects_a_trimmed_block(self):
+        ref = (None, None, [("a", 0, 3)], 6, 4, 0, 0)
+        cand = (None, None, [("a", 0, 2)], 6, 4, 0, 0)
+        self.assertFalse(huebox_app.Editor._pad_keeps_content(ref, cand))
+        # ... and a block that came or went.
+        gone = (None, None, [], 6, 4, 0, 0)
+        self.assertFalse(huebox_app.Editor._pad_keeps_content(ref, gone))
+
+    def test_pad_keeps_content_accepts_same_or_folded(self):
+        ref = (None, None, [("a", 0, 3)], 6, 4, 0, 0)
+        same = (None, None, [("a", 0, 3)], 6, 4, 0, 0)
+        folded = (None, None, [("a", 0, 4)], 6, 4, 0, 0)
+        self.assertTrue(huebox_app.Editor._pad_keeps_content(ref, same))
+        # Narrower folds may show *more* rows for the same widgets.
+        self.assertTrue(huebox_app.Editor._pad_keeps_content(ref, folded))
+
     async def test_a_click_through_a_panel_selects_the_swatch(self):
         from textual.events import Click
 
@@ -1274,12 +1343,14 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             hit = next(h for h in app.hits if h.slot == 1)
-            # Inner → screen: one border column left, the top's growth
-            # plus the controls' own border row above (read off the
-            # geometry — the top is bare chrome at 80x24, so one row).
+            # Inner → screen: one border column left plus decision 45's
+            # horizontal air, the top's growth plus the controls' own border
+            # row above (read off the geometry — the top is bare chrome at
+            # 80x24, so no growth row). Rows map straight past the border.
             geom = app._panel_geom
+            pad = geom.get("pad", 0)
             dy = (geom["top_screen"] - geom["header_h"]) + 1
-            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + dy,
+            app.on_click(Click(widget=None, x=hit.x0 + 1 + pad, y=hit.y + dy,
                                delta_x=0, delta_y=0, button=1,
                                shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, 1)
@@ -1342,9 +1413,9 @@ class ThemesButton(unittest.TestCase):
         event.stop.assert_called_once_with()
         return event
 
-    def test_the_button_is_flat_labelled_themes_and_unfocusable(self):
+    def test_the_button_is_flat_labelled_Themes_and_unfocusable(self):
         button = huebox_app.ThemesButton()
-        self.assertEqual(str(button.label), "themes")
+        self.assertEqual(str(button.label), "Themes")
         # Flat look, default variant: `flat=True` would take `-style-flat`,
         # whose `color: auto 90%` reroutes the label past the theme's own
         # selection foreground (see `ThemesButton`).
@@ -1365,7 +1436,7 @@ class ThemesButton(unittest.TestCase):
                          "pair (§6.2)")
 
     def test_the_top_mounts_the_button_in_the_info_column(self):
-        """The `themes` button rides the info column, never a panel.
+        """The `Themes` button rides the info column, never a panel.
 
         One top row: bare logo, the info column (theme plus the flat
         button), the bordered `editor` panel. `info` and `editor` stay
@@ -1492,7 +1563,7 @@ class ThemesButtonRunning(unittest.IsolatedAsyncioTestCase):
             # stylesheet: background *and* label in the selection slots.
             button = app.query_one("#themes-button")
             seen = [seg for seg in button.render_line(0)
-                    if "themes" in seg.text]
+                    if "Themes" in seg.text]
             self.assertEqual(len(seen), 1)
             painted = seen[0].style
             for slot, channel in (("selection-background", "bgcolor"),
@@ -1567,7 +1638,8 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
     def _screen_of(self, app, hit):
         """Left-content hit → screen coords for a `Click`."""
         top = app._side_geom["top"]
-        return hit.x0 + 1 + 1, top + 1 + hit.y
+        pad = app._side_geom.get("pad", 0)
+        return hit.x0 + 1 + pad + 1, top + 1 + hit.y
 
     async def test_wide_mounts_a_pair_beside_each_other(self):
         from textual.containers import Horizontal
@@ -1584,16 +1656,40 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             panels = list(pair.query(huebox_app.Panel))
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
-                             ["theme", "examples"])
+                             ["THEME", "EXAMPLES"])
             left, right = panels
             self.assertEqual(left.styles.width.value,
-                             huebox_app.LEFT_OUTER_W)
+                             huebox_app.LEFT_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.styles.width.value
                              + right.styles.width.value, 120)
             # full width clears the stacked floor, so the limit holds.
             self.assertEqual(left.styles.min_width.value,
                              huebox_app.PANEL_MIN_W)
             self.assertEqual(app.screen.max_scroll_y, 0)
+
+    async def test_padded_chrome_carries_air(self):
+        # Decision 45 at 120x30: every panel pads — the pair one cell left
+        # and right, the editor box its inner cell plus one.
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            self.assertEqual(app._side_geom.get("pad"),
+                             huebox_app.PANEL_PAD)
+            panels = {panel.name: panel
+                      for panel in app.query(huebox_app.Panel)}
+            air = (0, huebox_app.PANEL_PAD, 0, huebox_app.PANEL_PAD)
+            self.assertEqual(tuple(panels["controls"].styles.padding),
+                             air)
+            self.assertEqual(tuple(panels["examples"].styles.padding),
+                             air)
+            air = (0, huebox_app.PANEL_PAD + huebox_app.EDITOR_PAD_X,
+                   0, huebox_app.PANEL_PAD + huebox_app.EDITOR_PAD_X)
+            top_air = app._side_geom.get("top_pad", 0) \
+                + huebox_app.EDITOR_PAD_X
+            self.assertEqual(tuple(panels["editor"].styles.padding),
+                             (0, top_air, 0, top_air))
 
     @mock.patch.dict(os.environ, {"HUEBOX_EDITOR_PANEL": "0"})
     async def test_top_sits_side_by_side_above_the_pair(self):
@@ -1712,7 +1808,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             top, _ = rows
             panels = list(top.query(huebox_app.Panel))
             self.assertEqual([p.border_title for p in panels],
-                             ["editor"])
+                             ["EDITOR"])
             names = sorted(b.name for b in top.query(huebox_app.Frame))
             self.assertEqual(names, ["editor-hsv", "header", "info"])
 
@@ -1812,7 +1908,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows), 2)
             top, _ = rows
             panels = list(top.query(huebox_app.Panel))
-            self.assertEqual([p.border_title for p in panels], ["editor"])
+            self.assertEqual([p.border_title for p in panels], ["EDITOR"])
             header = next(b for b in top.query(huebox_app.Frame)
                           if b.name == "header")
             info = next(b for b in top.query(huebox_app.Frame)
@@ -1843,11 +1939,12 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              header.styles.height.value)
             self.assertEqual(hsv.styles.width.value,
                              editor_outer - 2
-                             - 2 * huebox_app.EDITOR_PAD_X)
+                             - 2 * huebox_app.EDITOR_PAD_X
+                             - 2 * app._side_geom.get("top_pad", 0))
             # The info column owns the top's one control.
             buttons = list(top.query(huebox_app.ThemesButton))
             self.assertEqual(len(buttons), 1)
-            self.assertEqual(str(buttons[0].label), "themes")
+            self.assertEqual(str(buttons[0].label), "Themes")
 
     async def test_arrows_walk_pairs_not_rows(self):
         app = await self._app()
@@ -1898,7 +1995,8 @@ class NarrowSideBySide(unittest.IsolatedAsyncioTestCase):
     def _screen_of(self, app, hit):
         """Left-content hit → screen coords for a `Click`."""
         top = app._side_geom["top"]
-        return hit.x0 + 1 + 1, top + 1 + hit.y
+        pad = app._side_geom.get("pad", 0)
+        return hit.x0 + 1 + pad + 1, top + 1 + hit.y
 
     async def test_narrow_mounts_a_pair_beside_each_other(self):
         from textual.containers import Horizontal
@@ -1916,18 +2014,21 @@ class NarrowSideBySide(unittest.IsolatedAsyncioTestCase):
             panels = list(pairs[0].query(huebox_app.Panel))
             self.assertEqual(len(panels), 2)
             self.assertEqual([p.border_title for p in panels],
-                             ["theme", "examples"])
+                             ["THEME", "EXAMPLES"])
             left, right = panels
             self.assertEqual(left.styles.width.value,
-                             huebox_app.LEFT_NARROW_OUTER_W)
+                             huebox_app.LEFT_NARROW_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.styles.width.value
                              + right.styles.width.value, 80)
             # the floor follows the variant: a 42 minimum would clamp
-            # the 31-wide pair and fill the rest with air.
+            # the 33-wide pair and fill the rest with air.
             self.assertEqual(left.styles.min_width.value,
-                             huebox_app.LEFT_NARROW_OUTER_W)
+                             huebox_app.LEFT_NARROW_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.outer_size.width,
-                             huebox_app.LEFT_NARROW_OUTER_W)
+                             huebox_app.LEFT_NARROW_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_a_click_in_the_narrow_left_panel_selects_the_pair(self):
@@ -1954,10 +2055,11 @@ class NarrowSideBySide(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             before = app.state.sel
             geom = app._side_geom
+            pad = geom.get("pad", 0)
             # The pair's top border row, and the left panel's right
-            # border — one past its 30 content columns.
+            # border — past its content columns plus decision 45's air.
             for x, y in ((10, geom["top"]),
-                         (huebox_app.SIDE_LEFT_NARROW_W + 1,
+                         (huebox_app.SIDE_LEFT_NARROW_W + 1 + 2 * pad,
                           geom["top"] + 1)):
                 app.on_click(Click(widget=None, x=x, y=y,
                                    delta_x=0, delta_y=0, button=1,
@@ -1973,7 +2075,8 @@ class NarrowSideBySide(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app._side_on)
             self.assertTrue(app._side_geom["narrow"])
             self.assertEqual(app._side_geom["left_outer"],
-                             huebox_app.LEFT_THIN_OUTER_W)
+                             huebox_app.LEFT_THIN_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
 
     async def test_narrow_collapse_keeps_the_geometry(self):
         # Shutting a live block keeps the row: the left panel fixes it.
@@ -2007,7 +2110,8 @@ class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
     def _screen_of(self, app, hit):
         """Left-content hit → screen coords for a `Click`."""
         top = app._side_geom["top"]
-        return hit.x0 + 1 + 1, top + 1 + hit.y
+        pad = app._side_geom.get("pad", 0)
+        return hit.x0 + 1 + pad + 1, top + 1 + hit.y
 
     async def test_thin_mounts_a_pair_beside_each_other(self):
         from textual.containers import Horizontal
@@ -2024,20 +2128,24 @@ class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
                              "no controls | live pair mounted")
             left, right = list(pairs[0].query(huebox_app.Panel))
             self.assertEqual([p.border_title for p in (left, right)],
-                             ["theme", "examples"])
+                             ["THEME", "EXAMPLES"])
             self.assertEqual(left.styles.width.value,
-                             huebox_app.LEFT_THIN_OUTER_W)
+                             huebox_app.LEFT_THIN_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.styles.width.value
                              + right.styles.width.value, 70)
             self.assertEqual(left.styles.min_width.value,
-                             huebox_app.LEFT_THIN_OUTER_W)
+                             huebox_app.LEFT_THIN_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.outer_size.width,
-                             huebox_app.LEFT_THIN_OUTER_W)
+                             huebox_app.LEFT_THIN_OUTER_W
+                             + 2 * huebox_app.PANEL_PAD)
             # wide enough that the stacked floor still holds the right.
             self.assertEqual(right.styles.min_width.value,
                              huebox_app.PANEL_MIN_W)
             self.assertEqual(right.outer_size.width, 70
-                             - huebox_app.LEFT_THIN_OUTER_W)
+                             - huebox_app.LEFT_THIN_OUTER_W
+                             - 2 * huebox_app.PANEL_PAD)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_a_click_in_the_thin_left_panel_selects_the_pair(self):
@@ -2088,7 +2196,8 @@ class ThinSideBySide(unittest.IsolatedAsyncioTestCase):
                              "no controls | live pair mounted")
             left, right = list(pairs[0].query(huebox_app.Panel))
             self.assertEqual(right.styles.min_width.value,
-                             50 - huebox_app.LEFT_THIN_OUTER_W)
+                             50 - huebox_app.LEFT_THIN_OUTER_W
+                             - 2 * huebox_app.PANEL_PAD)
             self.assertEqual(left.outer_size.width
                              + right.outer_size.width, 50)
             self.assertEqual(app.screen.max_scroll_y, 0)
@@ -2158,9 +2267,9 @@ class CollapsibleExamples(unittest.TestCase):
 
     def test_the_strip_is_called_interface_text(self):
         self.assertEqual(huebox_app.LIVE_TITLES["examples"],
-                         "interface text")
-        self.assertEqual(huebox_app.LIVE_TITLES["diff"], "live diff")
-        self.assertEqual(huebox_app.LIVE_TITLES["sample"], "live code")
+                         "Interface text")
+        self.assertEqual(huebox_app.LIVE_TITLES["diff"], "Live diff")
+        self.assertEqual(huebox_app.LIVE_TITLES["sample"], "Live code")
 
     def test_bare_opt_out_mounts_no_examples(self):
         from textual.geometry import Offset
@@ -2352,13 +2461,14 @@ class CollapsiblePanels(unittest.TestCase):
         # so collapsing it would be a no-op that proves nothing.
         editor, _ = self._editor(collapsed=("sample",))
         hit = next(hit for hit in editor.hits if hit.slot == 5)
-        # Panels offset content by one border column left and the top's
-        # growth plus the controls' own border row above (read off the
-        # geometry — the top is bare chrome at 80x24, so one row); the
-        # collapsed strip is below both.
+        # Panels offset content by one border column left plus decision 45's
+        # horizontal air, and the top's growth plus the controls' own border
+        # row above (read off the geometry — the top is bare chrome at
+        # 80x24, so no growth row); the collapsed strip is below both.
         geom = editor._panel_geom
+        pad = geom.get("pad", 0)
         dy = (geom["top_screen"] - geom["header_h"]) + 1
-        self._click(editor, hit.x0 + 1 + 1, hit.y + dy)
+        self._click(editor, hit.x0 + 1 + 1 + pad, hit.y + dy)
         self.assertEqual(editor.state.sel, 5,
                          "a click below a collapse selected the wrong slot")
 
@@ -2595,8 +2705,10 @@ class PanelLimitsRunning(unittest.IsolatedAsyncioTestCase):
         return huebox_app.Editor()
 
     async def test_panels_carry_their_bounds_as_styles(self):
+        # Roomy enough that no hug-fit overrides the limits below: the
+        # right column must clear the stacked floor past the air.
         app = await self._app()
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             panels = list(app.query(huebox_app.Panel))
             self.assertTrue(panels, "no panels mounted")

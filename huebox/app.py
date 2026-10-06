@@ -182,7 +182,7 @@ def load_slots() -> dict:
 
 
 def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
-               regions=None):
+               regions=None, indent="  "):
     """The frame as a list of rows, captured from `draw_editor`.
 
     Returns the rows without the trailing-newline decision, which belongs to
@@ -200,13 +200,15 @@ def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
     with the frame's blocks as `(name, first row, rows)`. Both are asked of the
     drawing code rather than recomputed here, so a click cannot land a row away
     from the swatch the user aimed at and a widget cannot claim a row the frame
-    did not draw.
+    did not draw. `indent` is the content rows' own air (decision 46): the
+    stacked panels capture with `""` so the panel's padding is the only
+    edge air; the bare frame keeps the default.
     """
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
                     state.status, state.mult, head=head, hits=hits,
-                    regions=regions, size=(cols, rows))
+                    regions=regions, size=(cols, rows), indent=indent)
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -433,7 +435,7 @@ BLOCK_WIDGETS = {"palette": Swatches, "interface": Swatches,
 #: (§15.4).
 PANEL_CONTROLS = ("palette", "interface", "selected")
 PANEL_EXAMPLES = ("examples", "diff", "sample")
-PANEL_TITLES = {"controls": "theme", "examples": "examples"}
+PANEL_TITLES = {"controls": "THEME", "examples": "EXAMPLES"}
 
 #: The side-by-side layout: `selected` full-width above, the controls and
 #: the live blocks in two panels next to each other below. The left panel
@@ -533,14 +535,38 @@ def panels_enabled() -> bool:
     return os.environ.get("HUEBOX_PANELS", "1") != "0"
 
 
-EDITOR_TITLE = "editor"
+#: Breathing room inside every bordered panel (§8.1, decision 45): one cell
+#: of air on the left and right, so content never touches a border — the
+#: frame's own rows carry a two-column indent on the left and nothing on the
+#: right, which reads as padding on one side only. Vertical air would come
+#: 1:1 out of the widgets, so panels take horizontal air only. Padding is
+#: the first thing the layout spends when the window shrinks: panels pad iff
+#: the padded layout still mounts everything the unpadded one does, else
+#: they mount unpadded, else the bare stack stands.
+PANEL_PAD = 1
+#: A padded panel needs the draw floor plus its own air: borders plus
+#: `PANEL_PAD` air on each side, so the content still holds `MIN_COLS`.
+PANEL_PAD_MIN_W = MIN_COLS + 2 + 2 * PANEL_PAD
+
+
+def panel_pad_enabled() -> bool:
+    """Whether panels pad their content (decision 45).
+
+    Default on: every `Panel` carries `PANEL_PAD` on the left and right.
+    `HUEBOX_PANEL_PAD=0` keeps the unpadded panels at any size — the same
+    rows, touching the borders; tests pin whichever chrome they assert.
+    """
+    return os.environ.get("HUEBOX_PANEL_PAD", "1") != "0"
+
+
+EDITOR_TITLE = "EDITOR"
 
 
 def editor_panel_enabled() -> bool:
     """Whether the compositor top is laid out, or left bare (§8.1).
 
     Default on: the top is bare logo beside the flexible info column and
-    one bordered `Panel("editor")` holding the selected readout plus the
+    one bordered `Panel("EDITOR")` holding the selected readout plus the
     three HSV bars (`editor.top_layout` shares the widths, so info shrinks
     with the window instead of holding air while the editor squeezes).
     `HUEBOX_EDITOR_PANEL=0` keeps the bare stack top at any width — the
@@ -570,6 +596,7 @@ class Panel(Vertical):
         background: $background;
         border-title-color: $foreground;
         border-title-background: $background;
+        border-title-style: bold;
         padding: 0;
         margin: 0;
     }
@@ -594,9 +621,9 @@ class Panel(Vertical):
 
 
 class ThemesButton(Button):
-    """The `themes` button: a mouse mirror of `t` (§4.3.2).
+    """The `Themes` button: a mouse mirror of `t` (§4.3.2).
 
-    A flat `Button` labelled `themes`, and the one control the top owns —
+    A flat `Button` labelled `Themes`, and the one control the top owns —
     everything else up there is chrome and answers to no click. It rides
     under the theme subject in the top's info column. The flat *look*
     is the CSS below
@@ -669,7 +696,7 @@ class ThemesButton(Button):
         # take the `-style-flat` class whose `color: auto 90%` reroutes the
         # label (see the class docstring), so the variant stays off and the
         # borderlessness carries the flatness instead.
-        super().__init__("themes", id="themes-button",
+        super().__init__("Themes", id="themes-button",
                          name="themes", **kwargs)
 
 
@@ -682,8 +709,8 @@ LIVE_BLOCKS = ("examples", "diff", "sample")
 #: interface text pairs (background, selection, cursor), so that is what its
 #: header says; the bare rows keep `draw_editor`'s own "examples" title, and
 #: label is product chrome of the same kind.
-LIVE_TITLES = {"examples": "interface text", "diff": "live diff",
-                "sample": "live code"}
+LIVE_TITLES = {"examples": "Interface text", "diff": "Live diff",
+                "sample": "Live code"}
 
 #: One key per live block. All three are free in `apply_key`, so the toggles
 #: never steal a colour key; the picker owns the surface while it is up, so
@@ -966,63 +993,49 @@ class Editor(App):
             # `top_layout` shares (`_top_screen_height` minus the bare
             # header it replaces — the unified logo plus info beside
             # `editor`, or nothing where no share fits and the bare header
-            # stays), plus two border rows per panel row below it. First at
-            # H-5, and only when live blocks showed up re-lay for top + both
-            # borders; always reserving both would trim the hints into the
-            # controls at small sizes (60x16), where they belong outside the
-            # panel, not in it — below what fits the borders the frame falls
-            # back to the bare stack instead. At most three lays: the top's
-            # own share can grow the bill after the trial (a 7-row `editor`
-            # top where a 6-row fallback used to be), and the re-lay pays it
-            # out of decoration rather than scrolling.
-            inner_w = layout_w - 2
-            state.grid = grid_geometry(inner_w)
-            inner_h = layout_h - 5
+            # stays), plus two border rows per panel row below it, plus
+            # decision 45's air on both sides of every panel while padded.
+            # First at H-5, and only when live blocks showed up re-lay for
+            # top + both borders; always reserving both would trim the hints
+            # into the controls at small sizes (60x16), where they belong
+            # outside the panel, not in it — below what fits the borders the
+            # frame falls back to the bare stack instead. At most three lays:
+            # the top's own share can grow the bill after the trial (a 7-row
+            # `editor` top where a 6-row fallback used to be), and the re-lay
+            # pays it out of decoration rather than scrolling.
+            # Decision 45 — padding is the first thing spent when the window
+            # shrinks: the padded panels where they show everything the
+            # unpadded ones do, the unpadded panels where they would not, the
+            # bare stack past that. The width gate is structural: a padded
+            # panel needs the draw floor plus its own air (`PANEL_PAD_MIN_W`),
+            # so below it only the unpadded layout is attempted.
             rows_text = None
-            for _ in range(3):
-                if inner_h < MIN_ROWS:
-                    break
-                lay_hits, lay_regions = [], []
-                lay = frame_rows(self.fmt, session_path(state), state,
-                                 inner_w, inner_h,
-                                 head=self.head_for(state),
-                                 hits=lay_hits, regions=lay_regions)
-                by_name = {name: (first, count)
-                           for name, first, count in lay_regions}
-                # The bare header `_mount_panels` replaces: `header`, plus
-                # `selected` only where the frame put it above the palette
-                # (the side top block) — the same rule as `rows_for(top)`.
-                header_names = ["header"]
-                if ("selected" in by_name and "palette" in by_name
-                        and by_name["selected"][0]
-                        < by_name["palette"][0]):
-                    header_names.append("selected")
-                header_here = sum(by_name[_name][1]
-                                  for _name in header_names
-                                  if _name in by_name)
-                top_screen_here = self._top_screen_height(layout_w, state,
-                                                          header_here)
-                two = bool(set(by_name) & set(PANEL_EXAMPLES))
-                need = ((top_screen_here - header_here)
-                        + (4 if two else 2))
-                if inner_h + need <= layout_h:
-                    self.hits = lay_hits
-                    self.regions = lay_regions
-                    rows_text = lay
-                    break
-                inner_h = layout_h - need
+            lay = self._lay_stacked(layout_w, layout_h, state, pad=0)
+            if lay is not None:
+                choice = lay
+                if (panel_pad_enabled()
+                        and layout_w >= PANEL_PAD_MIN_W):
+                    airy = self._lay_stacked(layout_w, layout_h, state,
+                                             pad=PANEL_PAD)
+                    if (airy is not None
+                            and self._pad_keeps_content(lay, airy)):
+                        choice = airy
+                rows_text, self.hits, self.regions = choice[:3]
+                self.rows_text = rows_text
+                state.grid = grid_geometry(layout_w - 2 - 2 * choice[5], "")
+                named = list(self.regions)
+                self._mount_panels(layout_w, rows_text, named, choice[5],
+                                     choice[6])
+                self._panels_on = True
             if rows_text is None:
                 # Room for one panel but not all: fall back to the bare frame
-                # rather than trimming widgets to buy borders.
+                # rather than trimming widgets to buy borders. The grid keeps
+                # the inner width, which is the inline loop's own rule.
+                state.grid = grid_geometry(layout_w - 2)
                 rows_text = frame_rows(self.fmt, session_path(state), state,
                                        layout_w, layout_h,
                                        head=self.head_for(state),
                                        hits=self.hits, regions=self.regions)
-            else:
-                self.rows_text = rows_text
-                named = list(self.regions)
-                self._mount_panels(layout_w, rows_text, named)
-                self._panels_on = True
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
                                    layout_w, layout_h,
@@ -1075,14 +1088,16 @@ class Editor(App):
                % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
 
-    def _top_editor_row(self, width: int, state, top_h: int):
+    def _top_editor_row(self, width: int, state, top_h: int, pad: int = 0):
         """Logo plus info beside one bordered `editor` panel, or `None`.
 
         The selected readout and the HSV bars alone get the border — logo
         and theme metadata stay bare chrome, while the chip row (plus the
         specimen, stacked onto its own row where narrow) and the three
-        equal HSV bars ride in `Panel("editor")` with one cell of inner
-        padding on each side (`EDITOR_PAD_X`). The info column owns the
+        equal HSV bars ride in `Panel("EDITOR")` with one cell of inner
+        padding on each side (`EDITOR_PAD_X`) plus decision 45's horizontal
+        air (`pad` on the left and right, so the padded box costs two columns
+        and no rows). The info column owns the
         top's one control: the flat `themes` button under the theme
         subject, a mouse mirror of `t` through the same `apply_key` call
         — the column's last row is blank fill anyway, so the button costs
@@ -1102,7 +1117,7 @@ class Editor(App):
         # share the caller keeps the bare stack, so `info` never carries
         # the editor's own controls.
         try:
-            lay = top_layout(width, label, path, slots, sel)
+            lay = top_layout(width, label, path, slots, sel, pad=pad)
         except Exception:
             return None
         if lay is None:
@@ -1116,9 +1131,9 @@ class Editor(App):
         except Exception:
             return None
         value = slots.get(SLOTS[sel], MISSING)
-        single_chrome = len("hue") + 1 + HSV_FIELD + 2 + 1
+        single_chrome = len("hue") + 1 + HSV_FIELD + 2
         left_raw = top_left_rows(slots, left_w)
-        content_w = editor_outer - 2 - 2 * EDITOR_PAD_X
+        content_w = editor_outer - 2 - 2 * EDITOR_PAD_X - 2 * pad
         if content_w < head_w:
             return None
         bar_w = content_w - single_chrome
@@ -1134,7 +1149,8 @@ class Editor(App):
         editor_rows = head + hsv_rows
         # Six, not seven: the head is one row (`top_editor_meta` dropped
         # its blank), so the box holds 1 + 3 bars behind two borders —
-        # the six rows the redraw budget already pays for the top.
+        # the six rows the redraw budget already pays for the top. The
+        # content rows never move for padding: the box narrows around them.
         top_screen = max(top_h, 6, len(left_raw))
         inner_h = top_screen - 2
         if inner_h < len(editor_rows):
@@ -1167,10 +1183,11 @@ class Editor(App):
         # column down: past the label's own 16 the button squeezes with
         # it rather than overflowing the share the allocator gave it.
         button = ThemesButton()
-        button.styles.width = meta_w
-        button.styles.min_width = min(16, meta_w)
+        button_air = 1 if meta_w > 2 else 0
+        button.styles.width = meta_w - 2 * button_air
+        button.styles.min_width = min(16, meta_w - 2 * button_air)
         button.styles.height = 1
-        button.styles.margin = 0
+        button.styles.margin = (0, button_air)
         button.styles.padding = 0
         meta_col = Vertical(meta_frame, button)
         meta_col.styles.width = meta_w
@@ -1185,7 +1202,7 @@ class Editor(App):
         editor_panel = Panel(EDITOR_TITLE, hsv_frame, name="editor")
         editor_panel.styles.width = editor_outer
         editor_panel.styles.height = top_screen
-        editor_panel.styles.padding = (0, EDITOR_PAD_X)
+        editor_panel.styles.padding = (0, EDITOR_PAD_X + pad)
         editor_panel.styles.margin = 0
         row = Horizontal(header_frame, meta_col, editor_panel)
         row.styles.width = width
@@ -1194,19 +1211,40 @@ class Editor(App):
         row.styles.margin = 0
         return row, top_screen
 
-    def _top_screen_height(self, width: int, state, top_h: int) -> int:
+    def _top_box_pad(self, width: int, state, top_h: int) -> int:
+        """The editor box's own air: padded iff the padded box mounts.
+
+        Decision 45 — the top decides its air for itself, independent of the
+        content panels below it: a tight readout (an editor box with no slack
+        behind its head) keeps today's unpadded box rather than collapsing
+        into a bare readout, and that never vetoes air elsewhere. Narrower
+        cannot mount where wider fails, so a padded mount implies the
+        unpadded one mounts too and the two can only agree.
+        """
+        if not panel_pad_enabled():
+            return 0
+        if self._top_screen_height(width, state, top_h, PANEL_PAD) != top_h:
+            return PANEL_PAD
+        return 0
+
+    def _top_screen_height(self, width: int, state, top_h: int,
+                           pad: int = 0) -> int:
         """Screen rows the top will occupy, without building it.
 
         Asks `editor.top_layout` — the same shares `_top_editor_row`
         mounts — so `_try_side` sizes the middle from the identical answer
-        rather than a second copy of the ladder.
+        rather than a second copy of the ladder. `pad` is decision 45's
+        horizontal air per side, reserved out of the info column's share
+        by the allocator: the content width is what the unpadded box had,
+        so a padded top mounts wherever the unpadded one does and the
+        caller only keeps the bare stack where no top fits at all.
         """
         if (editor_panel_enabled()
                 and os.environ.get("HUEBOX_TOP", "1") != "0"):
             try:
                 label = self.head_for(state) or self.fmt
                 lay = top_layout(width, label, session_path(state),
-                                 state.slots, state.sel)
+                                 state.slots, state.sel, pad=pad)
             except Exception:
                 lay = None
             if lay is not None:
@@ -1215,13 +1253,18 @@ class Editor(App):
                     _meta, head, _w = top_editor_meta(
                         label, session_path(state), state.slots,
                         state.sel, meta_w=lay[1], stacked=lay[3])
+                    head_w = max(visible(row) for row in head)
                 except Exception:
                     return top_h
                 top_screen = max(top_h, 6, len(left_raw))
                 # The same viability `_top_editor_row` mounts: the inner
-                # must hold the head plus all three bars, else the caller
+                # must hold the head plus all three bars at a content width
+                # that holds the head and a usable bar, else the caller
                 # keeps the bare stack and the budget loop pays nothing.
-                if top_screen - 2 >= len(head) + 3:
+                content_w = lay[2] - 2 - 2 * EDITOR_PAD_X - 2 * pad
+                bar_w = content_w - (len("hue") + 1 + HSV_FIELD + 2)
+                if (top_screen - 2 >= len(head) + 3
+                        and content_w >= head_w and bar_w >= 7):
                     return top_screen
         # No layout: the caller keeps the bare stack top (`top_h`). There
         # is no info-only fallback — `info` never carries the editor's
@@ -1229,11 +1272,11 @@ class Editor(App):
         # header and selected instead of a merged panel.
         return top_h
 
-    def _top_side_row(self, width: int, state, top_h: int):
+    def _top_side_row(self, width: int, state, top_h: int, pad: int = 0):
         """The compositor top, or `(None, top_h)` for the bare stack (§8.1).
 
         One arrangement and no merge step: bare logo, the flexible info
-        column (theme only), and the bordered `Panel("editor")` holding
+        column (theme only), and the bordered `Panel("EDITOR")` holding
         the selected readout plus the three HSV bars — the shares from
         `editor.top_layout`, mounted by `_top_editor_row`. `info` and
         `editor` stay separate boxes at every size they fit; past the
@@ -1245,12 +1288,84 @@ class Editor(App):
         """
         if (editor_panel_enabled()
                 and os.environ.get("HUEBOX_TOP", "1") != "0"):
-            built = self._top_editor_row(width, state, top_h)
+            built = self._top_editor_row(width, state, top_h, pad)
             if built is not None:
                 return built
         return None, top_h
 
-    def _mount_panels(self, width: int, rows_text: list, named: list) -> None:
+    def _lay_stacked(self, layout_w: int, layout_h: int, state,
+                       pad: int):
+        """Lay the stacked panels out at `pad` air per side, or `None`.
+
+        The budget loop `redraw` always ran, lifted whole: the frame is laid
+        out for the content width (borders plus `pad` air on each side come
+        off the window), the top costs its screen rows minus the bare header
+        it replaces, and each panel row below costs its two borders — air
+        costs columns only, never rows, so the budget heights never move for
+        padding. Pure: nothing is mounted and `self` is untouched, so the
+        caller can lay both airs and keep the padded one only where it shows
+        everything the unpadded one does (decision 45). Returns `(rows,
+        hits, regions, top_screen, header_here, pad)`.
+        """
+        inner_w = layout_w - 2 - 2 * pad
+        inner_h = layout_h - 5
+        for _ in range(3):
+            if inner_h < MIN_ROWS:
+                return None
+            lay_hits, lay_regions = [], []
+            lay = frame_rows(self.fmt, session_path(state), state,
+                             inner_w, inner_h,
+                             head=self.head_for(state),
+                             hits=lay_hits, regions=lay_regions,
+                             indent="")
+            by_name = {name: (first, count)
+                       for name, first, count in lay_regions}
+            # The bare header `_mount_panels` replaces: `header`, plus
+            # `selected` only where the frame put it above the palette
+            # (the side top block) — the same rule as `rows_for(top)`.
+            header_names = ["header"]
+            if ("selected" in by_name and "palette" in by_name
+                    and by_name["selected"][0]
+                    < by_name["palette"][0]):
+                header_names.append("selected")
+            header_here = sum(by_name[_name][1]
+                              for _name in header_names
+                              if _name in by_name)
+            top_pad_here = self._top_box_pad(layout_w, state, header_here)
+            top_screen_here = self._top_screen_height(layout_w, state,
+                                                      header_here,
+                                                      top_pad_here)
+            panels_here = 2 if set(by_name) & set(PANEL_EXAMPLES) else 1
+            need = ((top_screen_here - header_here)
+                    + panels_here * 2)
+            if inner_h + need <= layout_h:
+                return (lay, lay_hits, lay_regions,
+                        top_screen_here, header_here, pad, top_pad_here)
+            inner_h = layout_h - need
+        return None
+
+    @staticmethod
+    def _pad_keeps_content(ref, cand) -> bool:
+        """Whether the padded lay shows everything the unpadded one does.
+
+        Decision 45 — air must never cost content: the same top (a padded
+        editor box must not collapse into a bare readout), the same blocks,
+        and no block shows fewer rows. Narrower folds may show *more* rows
+        for the same widgets, which is fine.
+        """
+        (_, _, ref_regions, ref_top, ref_head, _, _) = ref
+        (_, _, cand_regions, cand_top, cand_head, _, _) = cand
+        if (cand_top != cand_head) != (ref_top != ref_head):
+            return False                    # the top changed shape
+        ref_counts = {name: count for name, _, count in ref_regions}
+        cand_counts = {name: count for name, _, count in cand_regions}
+        if set(cand_counts) != set(ref_counts):
+            return False                    # a block came or went
+        return all(cand_counts[name] >= ref_counts[name]
+                   for name in ref_counts)
+
+    def _mount_panels(self, width: int, rows_text: list, named: list,
+                        pad: int = 0, top_pad: int = 0) -> None:
         """Stack the frame's blocks into bordered panels.
 
         `named` is `draw_editor`'s own `(name, first, count)` map at the inner
@@ -1271,7 +1386,7 @@ class Editor(App):
             child.remove()
         for child in list(self.query(Horizontal)):
             child.remove()
-        inner_w = width - 2
+        inner_w = width - 2 - 2 * pad
         by_name = {name: (first, count) for name, first, count in named}
 
         def rows_for(names):
@@ -1359,8 +1474,10 @@ class Editor(App):
         # `editor` panel (`top_screen`: two borders, button costs no row);
         # each panel below adds a top and a bottom border row.
         top_row, top_screen = self._top_side_row(width, self.state,
-                                                 header_h)
+                                                 header_h, top_pad)
         self._panel_geom = {
+            "pad": pad,
+            "top_pad": top_pad,
             "inner_w": inner_w,
             "header_h": header_h,
             "controls_h": controls_h,
@@ -1388,7 +1505,7 @@ class Editor(App):
             panel = Panel(PANEL_TITLES["controls"], *inners, name="controls")
             panel.styles.width = width
             panel.styles.height = controls_h + 2
-            panel.styles.padding = 0
+            panel.styles.padding = (0, pad)
             panel.styles.margin = 0
             self.mount(panel)
         if example_inners:
@@ -1396,7 +1513,7 @@ class Editor(App):
             panel = Panel(PANEL_TITLES["examples"], *inners, name="examples")
             panel.styles.width = width
             panel.styles.height = examples_h + 2
-            panel.styles.padding = 0
+            panel.styles.padding = (0, pad)
             panel.styles.margin = 0
             self.mount(panel)
         for name, first, count in hints:
@@ -1417,7 +1534,10 @@ class Editor(App):
         (§8.1, decision 42) — the same pairs in abbreviated cells — down
         to `SIDE_NARROW_MIN_W`, and past that the thin pair (decision 43:
         narrow rows, hex hidden) down to `SIDE_THIN_MIN_W`, past which the
-        stacked layout runs too.
+        stacked layout runs too. Decision 45's content air is decided from
+        the blocks alone: the right column folds gracefully at any width,
+        so the pair pads iff it still holds a row. The top box decides its
+        own air in `_top_box_pad` and never vetoes the pair's.
         """
         if width >= SIDE_MIN_W:
             narrow, hexes = False, True
@@ -1452,15 +1572,25 @@ class Editor(App):
         status_h = by_name["status"][1] if "status" in by_name else 0
         bottom_h = hints_h + status_h
         top_h = header_h + sel_h
-        top_screen = self._top_screen_height(width, state, top_h)
+        top_pad = self._top_box_pad(width, state, top_h)
+        top_screen = self._top_screen_height(width, state, top_h, top_pad)
         content_h = height - top_screen - bottom_h - 2
         # One height bar for both widths: short windows keep the stacked
         # panels (full-width sample) whatever the width, and the narrower
         # content pads like the full one does past it.
         if content_h < SIDE_LEFT_ROWS:
             return False
-        right_outer = width - left_outer
-        right_inner = right_outer - 2
+        pad = 0
+        if (panel_pad_enabled()
+                and width - left_outer - 2 * PANEL_PAD - 2 - 2 * PANEL_PAD >= 1):
+            # The padded right column still holds a row. Its folds are
+            # graceful at any width and the left pairs are fixed, so the
+            # blocks never move for air here — only the width gate matters.
+            pad = PANEL_PAD
+        right_outer = width - left_outer - 2 * pad
+        right_inner = right_outer - 2 - 2 * pad
+        if right_inner < 1:
+            return False        # the air costs more than the window holds
         right_regions: list = []
         right = side_live_rows(state.slots, right_inner, content_h,
                                regions=right_regions)
@@ -1491,7 +1621,8 @@ class Editor(App):
             child.remove()
         slots = state.slots
         top_h = header_h + sel_h
-        top_row, top_screen = self._top_side_row(width, state, top_h)
+        top_row, top_screen = self._top_side_row(width, state, top_h,
+                                                 top_pad)
         if top_row is not None:
             self.mount(top_row)
         else:
@@ -1503,22 +1634,22 @@ class Editor(App):
         # interface is whatever rows the variant draws after the blank.
         left_children = [block("palette", left[0:9], left_w),
                          block("interface", left[9:left_rows], left_w)]
-        pad = content_h - left_rows
-        if pad:
+        fill = content_h - left_rows
+        if fill:
             left_children.append(block(
-                "left-pad", [backdrop("", slots, left_w)] * pad,
+                "left-pad", [backdrop("", slots, left_w)] * fill,
                 left_w))
         left_panel = Panel(PANEL_TITLES["controls"], *left_children,
                            name="controls")
-        left_panel.styles.width = left_outer
-        if panel_limits_enabled() and left_outer < PANEL_MIN_W:
+        left_panel.styles.width = left_outer + 2 * pad
+        if panel_limits_enabled() and left_outer + 2 * pad < PANEL_MIN_W:
             # The stacked minimum would clamp the squeezed pair wider
             # than its content and fill the rest with air: below it the
             # floor follows the variant instead. The stacked panels never
             # take this path, so §15.7 keeps holding them as pinned.
-            left_panel.styles.min_width = left_outer
+            left_panel.styles.min_width = left_outer + 2 * pad
         left_panel.styles.height = content_h + 2
-        left_panel.styles.padding = 0
+        left_panel.styles.padding = (0, pad)
         left_panel.styles.margin = 0
         def right_block(name, first, count):
             # The side panel keeps its height: a shut live block hides
@@ -1544,7 +1675,7 @@ class Editor(App):
             # difference — the row's right border column cut off screen.
             right_panel.styles.min_width = right_outer
         right_panel.styles.height = content_h + 2
-        right_panel.styles.padding = 0
+        right_panel.styles.padding = (0, pad)
         right_panel.styles.margin = 0
         row = Horizontal(left_panel, right_panel)
         row.styles.width = width
@@ -1574,9 +1705,11 @@ class Editor(App):
         if status_h:
             self.regions.append(("status", bottom0 + hints_h, status_h))
         self._side_on = True
-        self._side_geom = {"top": top_screen,
+        self._side_geom = {"pad": pad,
+                           "top_pad": top_pad,
+                           "top": top_screen,
                            "content_h": content_h,
-                           "left_outer": left_outer,
+                           "left_outer": left_outer + 2 * pad,
                            "left_w": left_w,
                            "narrow": narrow}
         return True
@@ -1586,30 +1719,37 @@ class Editor(App):
 
         Only the left panel holds controls: the right panel's examples are
         readouts, the `selected` strip above is a readout, and every border
-        row and column is chrome. A click anywhere else selects nothing.
+        row and column is chrome. Decision 45's horizontal air reads as
+        chrome too: a click into it selects nothing, like a click on a
+        border.
         """
         geom = self._side_geom
+        pad = geom.get("pad", 0)
+        content_h = geom["content_h"]
         y = sy - geom["top"]
-        if y == 0 or y == geom["content_h"] + 1:
+        if y == 0 or y == content_h + 1:
             return None             # the pair's top / bottom borders
-        if not 1 <= y <= geom["content_h"]:
+        if not 1 <= y <= content_h:
             return None             # chrome above or below the pair
         if sx >= geom["left_outer"]:
             return None             # the examples panel
-        if sx == 0 or sx >= geom["left_w"] + 1:
-            return None             # the controls panel's own borders
-        return sx - 1, y - 1
+        if sx <= pad or sx > pad + geom["left_w"]:
+            return None             # the controls panel's border or its air
+        return sx - 1 - pad, y - 1
 
     def _panel_frame_coords(self, sx: int, sy: int):
         """Screen → frame coords inside prototype panels, or None on chrome.
 
         Borders are chrome: a click on any border row or border column is
         not an error and moves nothing (§4.3.2). Inner blocks are offset by
-        one column (left border) and by the border rows above them.
+        one column (left border) plus decision 45's horizontal air, and by
+        the border rows above them; a click into the air itself is chrome
+        too.
         """
         geom = self._panel_geom
         if not geom:
             return sx, sy
+        pad = geom.get("pad", 0)
         inner_w = geom["inner_w"]
         header_h = geom["header_h"]
         controls_h = geom["controls_h"]
@@ -1630,26 +1770,36 @@ class Editor(App):
             if sy < header_h:
                 return sx, sy
             y = sy - header_h
-        # Controls panel: top border, inner, bottom border.
-        if y == 0:
+
+        def inner_hit(y, base):
+            # One panel's content rows — border, content, border — against
+            # the frame rows past the panels above it (`base`). The air is
+            # horizontal only (decision 45), so rows map straight past the
+            # border while columns shift past it. A tuple is the frame
+            # coords; `None` is chrome (a border row, or a column past the
+            # content); `False` is past the panel, and only then does the
+            # caller walk on to the next one.
+            if y <= base + 1:
+                if y == 0 or y == base + 1:
+                    return None          # either border row
+                if sx <= pad or sx > pad + inner_w:
+                    return None          # a border column or the air
+                return sx - 1 - pad, y - 1
+            return False
+
+        # Controls panel: top border, air, inner, air, bottom border.
+        hit = inner_hit(y, controls_h)
+        if hit is None:
             return None
-        if 1 <= y <= controls_h:
-            if sx == 0 or sx > inner_w:
-                return None
-            # Inner frame Y includes the header rows before it.
-            return sx - 1, header_h + (y - 1)
-        if y == controls_h + 1:
-            return None
+        if hit is not False:
+            return hit[0], header_h + hit[1]
         y -= controls_h + 2
         if has_examples:
-            if y == 0:
+            hit = inner_hit(y, examples_h)
+            if hit is None:
                 return None
-            if 1 <= y <= examples_h:
-                if sx == 0 or sx > inner_w:
-                    return None
-                return sx - 1, header_h + controls_h + (y - 1)
-            if y == examples_h + 1:
-                return None
+            if hit is not False:
+                return hit[0], header_h + controls_h + hit[1]
             y -= examples_h + 2
         # Hints chrome below both panels: two border rows per panel above.
         panels = 2 if has_examples else 1
