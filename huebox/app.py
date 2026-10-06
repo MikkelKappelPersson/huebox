@@ -54,12 +54,12 @@ from textual.widget import Widget
 from textual.widgets import Collapsible
 
 from .color import MISSING, SLOTS
-from .editor import (MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, EditorState,
+from .editor import (BANNER_LEFT_W, MINI_LEFT_W, MULT_STEPS, SIDE_LEFT_ROWS, SIDE_LEFT_W, TOP_LEFT_W, EditorState,
                      apply_key, backdrop, draw_editor, grid_geometry,
                      head_label, report_session, session_path, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
-                     too_small_frame, top_side_panels)
-from .render import MIN_COLS, MIN_ROWS, visible
+                     too_small_frame, top_editor_meta, top_left_rows, top_meta_rows, top_side_panels)
+from .render import HSV_FIELD, MIN_COLS, MIN_ROWS, visible, hsv_axis
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
 #: The blocks a click and an arrow both act on — the two grids. They are one
@@ -454,6 +454,38 @@ def panels_enabled() -> bool:
     return os.environ.get("HUEBOX_PANELS", "1") != "0"
 
 
+TOP_TITLE = "theme / selected"
+
+
+EDITOR_TITLE = "editor"
+#: Horizontal breathing room inside the editor panel's border (prototype).
+#: Vertical stays 0 so the box costs no extra rows; the bars give up two
+#: cells of sweep for one cell of air on each side.
+EDITOR_PAD_X = 1
+
+
+def editor_panel_enabled() -> bool:
+    """Whether the HSV selectors ride in their own bordered panel.
+
+    Default off. `HUEBOX_EDITOR_PANEL=1` splits the top into header +
+    metadata (bare chrome) beside one bordered `Panel("editor")` holding
+    only the three HSV bars. Prototype for trying; tests pin the bare top.
+    """
+    return os.environ.get("HUEBOX_EDITOR_PANEL", "0") == "1"
+
+
+def top_bordered_enabled() -> bool:
+    """Whether the top rides in one bordered panel (prototype).
+
+    Default off: header + selected stay two unbordered columns (decision 37).
+    `HUEBOX_TOP_BORDER=1` merges them into a single bordered `Panel` so the
+    selected readout shares the same chrome as the controls/examples below.
+    Tests and goldens pin the unbordered top, so this stays opt-in while
+    the layout is tried out.
+    """
+    return os.environ.get("HUEBOX_TOP_BORDER", "0") == "1"
+
+
 class Panel(Vertical):
     """One bordered group of the frame's blocks (prototype).
 
@@ -846,6 +878,142 @@ class Editor(App):
                % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
 
+    def _top_editor_row(self, width: int, state, top_h: int):
+        """Header + metadata beside one bordered `editor` panel, or `None`.
+
+        Prototype (`HUEBOX_EDITOR_PANEL=1`): the hue selectors alone get the
+        border — header logo and theme metadata stay bare chrome, while the
+        chip row plus the three equal HSV bars ride in `Panel("editor")`
+        with one cell of inner padding on each side (`EDITOR_PAD_X`). The
+        duplicated exact numbers are dropped. Returns `(widget, screen_h)`;
+        `None` where the columns do not fit.
+        """
+        slots = state.slots
+        sel = state.sel
+        label = self.head_for(state) or self.fmt
+        path = session_path(state)
+        try:
+            meta_rows, head, meta_w = top_editor_meta(label, path, slots,
+                                                     sel)
+            head_w = max(visible(row) for row in head)
+        except Exception:
+            return None
+        value = slots.get(SLOTS[sel], MISSING)
+        single_chrome = len("hue") + 1 + HSV_FIELD + 2 + 1
+        for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
+            editor_outer = width - left_w - meta_w
+            if editor_outer < single_chrome + 7 + 2 + 2 * EDITOR_PAD_X:
+                continue
+            left_raw = top_left_rows(slots, left_w)
+            if visible(left_raw[0]) > left_w and len(left_raw) > 1:
+                continue
+            if left_w == TOP_LEFT_W and len(left_raw) != 1:
+                continue
+            if left_w != TOP_LEFT_W and len(left_raw) == 1:
+                continue
+            content_w = editor_outer - 2 - 2 * EDITOR_PAD_X
+            if content_w < head_w:
+                continue
+            bar_w = content_w - single_chrome
+            if bar_w < 7:
+                continue
+            try:
+                hsv_rows = [hsv_axis(slots, value, axis, bar_w)
+                            for axis in range(3)]
+            except IndexError:
+                continue
+            if any(not row for row in hsv_rows):
+                continue
+            editor_rows = head + hsv_rows
+            top_screen = max(top_h, 7, len(left_raw))
+            inner_h = top_screen - 2
+            if inner_h < len(editor_rows):
+                continue
+            header = [backdrop(line, slots, left_w) for line in left_raw]
+            header += [backdrop("", slots, left_w)] * max(0, top_screen - len(header))
+            header = header[:top_screen]
+            meta = [backdrop(line, slots, meta_w) for line in meta_rows]
+            meta += [backdrop("", slots, meta_w)] * max(0, top_screen - len(meta))
+            meta = meta[:top_screen]
+            hsv = [backdrop(line, slots, content_w)
+                   for line in editor_rows]
+            hsv += [backdrop("", slots, content_w)] * max(0, inner_h - len(hsv))
+            hsv = hsv[:inner_h]
+            header_frame = Frame(header, left_w, name="header")
+            header_frame.styles.width = left_w
+            header_frame.styles.height = top_screen
+            header_frame.styles.padding = 0
+            header_frame.styles.margin = 0
+            meta_frame = Frame(meta, meta_w, name="selected")
+            meta_frame.styles.width = meta_w
+            meta_frame.styles.height = top_screen
+            meta_frame.styles.padding = 0
+            meta_frame.styles.margin = 0
+            hsv_frame = Frame(hsv, content_w, name="editor-hsv")
+            hsv_frame.styles.width = content_w
+            hsv_frame.styles.height = inner_h
+            hsv_frame.styles.padding = 0
+            hsv_frame.styles.margin = 0
+            editor_panel = Panel(EDITOR_TITLE, hsv_frame, name="editor")
+            editor_panel.styles.width = editor_outer
+            editor_panel.styles.height = top_screen
+            editor_panel.styles.padding = (0, EDITOR_PAD_X)
+            editor_panel.styles.margin = 0
+            row = Horizontal(header_frame, meta_frame, editor_panel)
+            row.styles.width = width
+            row.styles.height = top_screen
+            row.styles.padding = 0
+            row.styles.margin = 0
+            return row, top_screen
+        return None
+
+    def _top_screen_height(self, width: int, state, top_h: int) -> int:
+        """Screen rows the top will occupy, without building it.
+
+        Mirrors `_top_side_row`'s viability ladder so `_try_side` can size
+        the middle before mounting anything. Prototype helper.
+        """
+        if editor_panel_enabled():
+            try:
+                label = self.head_for(state) or self.fmt
+                _meta, head, meta_w = top_editor_meta(label, session_path(state),
+                                                      state.slots, state.sel)
+                core_w = max(visible(row) for row in head)
+            except Exception:
+                _meta, meta_w, core_w = None, 10 ** 9, 10 ** 9
+            single_chrome = len("hue") + 1 + HSV_FIELD + 2 + 1
+            for left_w in (BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W):
+                editor_outer = width - left_w - meta_w
+                if editor_outer < single_chrome + 7 + 2 + 2 * EDITOR_PAD_X:
+                    continue
+                if editor_outer - 2 - 2 * EDITOR_PAD_X < core_w:
+                    continue
+                try:
+                    left_raw = top_left_rows(state.slots, left_w)
+                except Exception:
+                    continue
+                if visible(left_raw[0]) > left_w and len(left_raw) > 1:
+                    continue
+                if left_w == TOP_LEFT_W and len(left_raw) != 1:
+                    continue
+                if left_w != TOP_LEFT_W and len(left_raw) == 1:
+                    continue
+                top_screen = max(top_h, 7, len(left_raw))
+                if top_screen - 2 < 5:
+                    continue
+                return top_screen
+        if top_bordered_enabled():
+            try:
+                viable = top_side_panels(state.slots,
+                                         self.head_for(state) or self.fmt,
+                                         session_path(state), state.sel,
+                                         width - 2)
+            except Exception:
+                viable = None
+            if viable is not None:
+                return top_h + 2
+        return top_h
+
     def _top_side_row(self, width: int, state, top_h: int):
         """The top as two unbordered panels side by side, or `None` (§8.1).
 
@@ -858,11 +1026,59 @@ class Editor(App):
         exactly where it did and the click geometry never moves. Unbordered:
         two `Frame`s in a `Horizontal` with no border, no title, only the
         theme's own background — chrome, never a control (§4.3.2).
+
+        Prototype (`HUEBOX_TOP_BORDER=1`): the same `Horizontal` wrapped in
+        one bordered `Panel(TOP_TITLE)`, so header + selected share the
+        same chrome as the controls/examples below. Asked at `width - 2`
+        so the pair fits inside the border; the panel costs two rows.
+
+        Prototype (`HUEBOX_EDITOR_PANEL=1`): header + metadata stay bare and
+        only the three HSV bars ride in `Panel("editor")` beside them.
+        Returns `(widget, screen_h)`; `(None, top_h)` where no top fits.
         """
+        if editor_panel_enabled():
+            built = self._top_editor_row(width, state, top_h)
+            if built is not None:
+                return built
+        if top_bordered_enabled():
+            inner = width - 2
+            top = top_side_panels(state.slots,
+                                  self.head_for(state) or self.fmt,
+                                  session_path(state), state.sel, inner)
+            if top is None:
+                return None, top_h
+            left_w, right_w, left_raw, right_raw = top
+            slots = state.slots
+            left = [backdrop(line, slots, left_w) for line in left_raw]
+            right = [backdrop(line, slots, right_w) for line in right_raw]
+            left += [backdrop("", slots, left_w)] * max(0, top_h - len(left))
+            right += [backdrop("", slots, right_w)] * max(0, top_h - len(right))
+            left, right = left[:top_h], right[:top_h]
+            left_frame = Frame(left, left_w, name="header")
+            left_frame.styles.width = left_w
+            left_frame.styles.height = top_h
+            left_frame.styles.padding = 0
+            left_frame.styles.margin = 0
+            right_frame = Frame(right, right_w, name="selected")
+            right_frame.styles.width = right_w
+            right_frame.styles.height = top_h
+            right_frame.styles.padding = 0
+            right_frame.styles.margin = 0
+            row = Horizontal(left_frame, right_frame)
+            row.styles.width = inner
+            row.styles.height = top_h
+            row.styles.padding = 0
+            row.styles.margin = 0
+            panel = Panel(TOP_TITLE, row, name="top")
+            panel.styles.width = width
+            panel.styles.height = top_h + 2
+            panel.styles.padding = 0
+            panel.styles.margin = 0
+            return panel, top_h + 2
         top = top_side_panels(state.slots, self.head_for(state) or self.fmt,
                               session_path(state), state.sel, width)
         if top is None:
-            return None
+            return None, top_h
         left_w, right_w, left_raw, right_raw = top
         slots = state.slots
         left = [backdrop(line, slots, left_w) for line in left_raw]
@@ -885,7 +1101,7 @@ class Editor(App):
         row.styles.height = top_h
         row.styles.padding = 0
         row.styles.margin = 0
-        return row
+        return row, top_h
 
     def _mount_panels(self, width: int, rows_text: list, named: list) -> None:
         """Stack the frame's blocks into two bordered panels.
@@ -992,14 +1208,17 @@ class Editor(App):
         examples_h = sum(h for _, h in example_inners)
         # Screen geometry for clicks: borders are single rows. Header is
         # bare; each panel adds a top and a bottom border row.
+        top_row, top_screen = self._top_side_row(width, self.state,
+                                                 header_h)
         self._panel_geom = {
             "inner_w": inner_w,
             "header_h": header_h,
             "controls_h": controls_h,
             "examples_h": examples_h,
             "has_examples": bool(examples),
+            "top_bordered": top_bordered_enabled(),
+            "top_screen": top_screen if top_row is not None else header_h,
         }
-        top_row = self._top_side_row(width, self.state, header_h)
         if top_row is not None:
             # §8.1 (decision 37) — the header and the theme plus selected
             # readout stand side by side in two unbordered panels, not one
@@ -1061,7 +1280,9 @@ class Editor(App):
         hints_h = by_name["hints"][1]
         status_h = by_name["status"][1] if "status" in by_name else 0
         bottom_h = hints_h + status_h
-        content_h = height - header_h - sel_h - bottom_h - 2
+        top_h = header_h + sel_h
+        top_screen = self._top_screen_height(width, state, top_h)
+        content_h = height - top_screen - bottom_h - 2
         if content_h < SIDE_LEFT_ROWS:
             return False
         right_outer = width - LEFT_OUTER_W
@@ -1095,10 +1316,11 @@ class Editor(App):
             child.remove()
         slots = state.slots
         top_h = header_h + sel_h
-        top_row = self._top_side_row(width, state, top_h)
+        top_row, top_screen = self._top_side_row(width, state, top_h)
         if top_row is not None:
             self.mount(top_row)
         else:
+            top_screen = top_h
             for name in ("header", "selected"):
                 first, count = by_name[name]
                 self.mount(block(name, full[first:first + count], width))
@@ -1142,7 +1364,7 @@ class Editor(App):
         row.styles.padding = 0
         row.styles.margin = 0
         self.mount(row)
-        bottom0 = header_h + sel_h + content_h + 2
+        bottom0 = top_screen + content_h + 2
         for name in ("hints", "status"):
             if name in by_name:
                 first, count = by_name[name]
@@ -1164,7 +1386,7 @@ class Editor(App):
         if status_h:
             self.regions.append(("status", bottom0 + hints_h, status_h))
         self._side_on = True
-        self._side_geom = {"top": header_h + sel_h,
+        self._side_geom = {"top": top_screen,
                            "content_h": content_h,
                            "left_outer": LEFT_OUTER_W}
         return True
@@ -1203,11 +1425,20 @@ class Editor(App):
         controls_h = geom["controls_h"]
         examples_h = geom["examples_h"]
         has_examples = geom["has_examples"]
-        # Header chrome: full-width, no offset. Columns past the inner width
-        # are pad and hit nothing, which `slot_at` already says as None.
-        if sy < header_h:
-            return sx, sy
-        y = sy - header_h
+        top_screen = geom.get("top_screen", header_h)
+        if top_screen != header_h or geom.get("top_bordered"):
+            # Bordered top or editor panel: the whole top zone is chrome
+            # (clicks there select nothing), then everything below rides
+            # `top_screen - header_h` rows lower than the bare header.
+            if sy < top_screen:
+                return None
+            y = sy - top_screen
+        else:
+            # Header chrome: full-width, no offset. Columns past the inner
+            # width are pad and hit nothing, which `slot_at` says as None.
+            if sy < header_h:
+                return sx, sy
+            y = sy - header_h
         # Controls panel: top border, inner, bottom border.
         if y == 0:
             return None
@@ -1232,8 +1463,9 @@ class Editor(App):
         # Hints chrome below both panels: two border rows per panel above.
         panels = 2 if has_examples else 1
         # `y` is now relative to the hints zone; inner Y adds back everything
-        # above it. Borders above = 2 per panel.
-        return sx, sy - 2 * panels
+        # above it. Borders above = 2 per panel, plus the top's own extra.
+        extra = geom.get("top_screen", header_h) - header_h
+        return sx, sy - 2 * panels - extra
 
     def _mount_bare(self, width: int, rows_text: list, named: list) -> None:
         """Mount every block as its own widget, with no collapsible."""

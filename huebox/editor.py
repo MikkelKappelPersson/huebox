@@ -29,9 +29,9 @@ from typing import NamedTuple
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
-from .render import (BOLD, CHROME_MUTED, MIN_COLS, MIN_ROWS, RESET, backdrop,
+from .render import (BOLD, CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, RESET, backdrop,
                      banner_lines, bg, chrome, clip,
-                     diff_lines, example_lines, fg, hint_line, hsv_numbers,
+                     diff_lines, example_lines, fg, hint_line, hsv_axis, hsv_numbers,
                      hsv_readout, mini_banner_lines, sample_lines, title, visible, wordmark)
 from .tui import term_size
 
@@ -121,6 +121,21 @@ def selected_core(slots, key, value, indent=""):
     `MIN_COLS`. One implementation of the subject, asked from both layouts.
     """
     return (indent + title("selected", slots) + " "
+            + chrome(f"{key:<{SELECTED_KEY_W}}", "foreground", slots)
+            + " " + chrome(value, CHROME_MUTED, slots))
+
+
+def selected_swatch(slots, key, value):
+    """A 2-cell colour chip before the slot's name + hex (prototype).
+
+    The editor panel's first row: two empty cells in the slot's own
+    background, then the pinned name field and the hex as ordinary chrome.
+    No `selected` wording — the box already says whose colour it is.
+    Widths are pinned (chip 2 + name field + hex), so switching the
+    selection never moves anything after it. Pure.
+    """
+    chip = f"{bg(value)}  {RESET}"
+    return (chip + " "
             + chrome(f"{key:<{SELECTED_KEY_W}}", "foreground", slots)
             + " " + chrome(value, CHROME_MUTED, slots))
 
@@ -595,6 +610,105 @@ def top_right_rows(label, path, slots, sel, cols):
                                  cols - TOP_LEFT_W)
 
 
+def _pad_visible(text: str, width: int) -> str:
+    """Pad `text` with air to `width` visible columns (prototype helper)."""
+    return text + " " * max(0, width - visible(text))
+
+
+def top_meta_rows(label, path, slots, sel):
+    """Prototype helper: the readout's metadata column (theme/core/spec).
+
+    Returns `([theme, core, spec], meta_w)` with each row padded to `meta_w`
+    visible columns. The theme keeps its filename (`…` truncates the
+    directory, never the tail). Pure — the editor panel in `app.py` mounts
+    these as a bare frame beside the bordered HSV box.
+    """
+    key = SLOTS[sel]
+    value = slots.get(key, MISSING)
+    core = selected_core(slots, key, value)
+    specimen = f"  {fg(value)}AaBbCc 0123 {RESET}"
+    exact = hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+    suffix = "   " + chrome(exact, CHROME_MUTED, slots)
+    spec = specimen + suffix
+    meta_w = max(visible(core), visible(spec))
+    if path and len(label) + 2 + len(path) <= meta_w:
+        theme = (chrome(label, "foreground", slots, bold=True) + "  "
+                 + chrome(path, CHROME_MUTED, slots))
+    elif path:
+        keep = max(0, meta_w - len(label) - 2 - 1)
+        short = ("…" + path[-keep:] if keep else label) if keep else label
+        theme = chrome(label, "foreground", slots, bold=True)
+        if keep:
+            theme += "  " + chrome(short, CHROME_MUTED, slots)
+    else:
+        theme = chrome(label, "foreground", slots, bold=True)
+    rows = [_pad_visible(clip(theme, meta_w), meta_w),
+            _pad_visible(core, meta_w),
+            _pad_visible(clip(spec, meta_w), meta_w)]
+    return rows, meta_w
+
+
+def top_editor_meta(label, path, slots, sel):
+    """Prototype helper for the bordered `editor` panel (`HUEBOX_EDITOR_PANEL=1`).
+
+    The selected subject, its hex and the specimen all live in the editor
+    box; metadata keeps only the theme. Returns `(meta_rows, head, meta_w)`
+    where `meta_rows` is `[theme]` and `head` is `[combined, ""]` — chip +
+    name + hex + specimen on one line, then a blank breathing line before
+    the HSV bars. `meta_w` stays pinned to the core width so the columns
+    never jump per selection. Pure.
+    """
+    key = SLOTS[sel]
+    value = slots.get(key, MISSING)
+    core = selected_core(slots, key, value)
+    swatch = selected_swatch(slots, key, value)
+    specimen = f"  {fg(value)}AaBbCc 0123 {RESET}"
+    meta_w = max(visible(core), visible(specimen))
+    if path and len(label) + 2 + len(path) <= meta_w:
+        theme = (chrome(label, "foreground", slots, bold=True) + "  "
+                 + chrome(path, CHROME_MUTED, slots))
+    elif path:
+        keep = max(0, meta_w - len(label) - 2 - 1)
+        short = ("…" + path[-keep:] if keep else label) if keep else label
+        theme = chrome(label, "foreground", slots, bold=True)
+        if keep:
+            theme += "  " + chrome(short, CHROME_MUTED, slots)
+    else:
+        theme = chrome(label, "foreground", slots, bold=True)
+    rows = [_pad_visible(clip(theme, meta_w), meta_w)]
+    combined = (swatch + "   "
+                + f"{fg(value)}AaBbCc 0123{RESET}")
+    return rows, [combined, ""], meta_w
+
+
+def top_right_panel_rows_split(label, path, slots, sel, right_w):
+    """Prototype: metadata left, three equal HSV bars right (`HUEBOX_TOP_NEW=1`).
+
+    Same three rows `top_right_panel_rows` paints, re-partitioned: each row
+    is `[metadata | one HSV axis]`, so the three bars share one width and
+    the row count does not move. Returns `None` where even a minimal bar
+    does not fit — the caller keeps the current single-line readout.
+    """
+    key = SLOTS[sel]
+    value = slots.get(key, MISSING)
+    (left0, left1, left2), meta_w = top_meta_rows(label, path, slots, sel)
+    gap = 2
+    # label + number + two spaces + bar + one trailing space of air.
+    single_chrome = len("hue") + 1 + HSV_FIELD + 2 + 1
+    bar_w = right_w - meta_w - gap - single_chrome
+    if bar_w < 7:
+        return None
+    try:
+        axes = [hsv_axis(slots, value, axis, bar_w) for axis in range(3)]
+    except IndexError:
+        return None
+    if any(not axis for axis in axes):
+        return None
+    sep = " " * gap
+    return (left0 + sep + axes[0], left1 + sep + axes[1],
+            left2 + sep + axes[2])
+
+
 def top_right_panel_rows(label, path, slots, sel, right_w):
     """The right panel's three rows at `right_w` wide (§8.1, decision 37).
 
@@ -603,6 +717,11 @@ def top_right_panel_rows(label, path, slots, sel, right_w):
     implementation of what the readout says, asked from two layouts, the
     same hoist as `swatch_cell` for the side pairs.
     """
+    if os.environ.get("HUEBOX_TOP_NEW", "0") == "1":
+        split = top_right_panel_rows_split(label, path, slots, sel,
+                                            right_w)
+        if split is not None:
+            return split
     key = SLOTS[sel]
     value = slots.get(key, MISSING)
     right0 = chrome(label, "foreground", slots, bold=True)

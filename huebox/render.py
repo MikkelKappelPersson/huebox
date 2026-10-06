@@ -707,6 +707,28 @@ def hsv_readout(slots, value: str, cols: int) -> str:
                      in zip(axes, width))
 
 
+def hsv_axis(slots, value: str, axis: int, bar_w: int) -> str:
+    """One HSV axis: `hue 207° [bar]` — prototype for a stacked readout.
+
+    Same chrome/number/ink rules as `hsv_readout`, but a single row with
+    an explicit `bar_w` so three stacked rows can share one width. Pure.
+    Returns `""` when `bar_w` holds no bar.
+    """
+    if bar_w < 2:
+        return ""
+    hue, sat, val = rgb_to_hsv(hex_to_rgb(value))
+    axes = (("hue", hue, f"{hue * 360:{HSV_FIELD - 1}.0f}°",
+             lambda t: hsv_to_rgb(t, sat, val)),
+            ("sat", sat, f"{sat * 100:{HSV_FIELD - 1}.0f}%",
+             lambda t: hsv_to_rgb(hue, t, val)),
+            ("val", val, f"{val * 100:{HSV_FIELD - 1}.0f}%",
+             lambda t: hsv_to_rgb(hue, sat, t)))
+    label, reading, number, colour = axes[axis]
+    return (chrome(label, "foreground", slots) + " "
+            + chrome(number, "foreground", slots) + "  "
+            + _chip(slots, colour, bar_w, reading * (bar_w - 1)) + " ")
+
+
 # --------------------------------------------------------------------------
 # live code sample
 # --------------------------------------------------------------------------
