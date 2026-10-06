@@ -1232,9 +1232,10 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             hit = next(h for h in app.hits if h.slot == 1)
-            # Inner → screen: one border column left, three border rows above
-            # (the `logo`/`info` top costs two plus the controls' own one).
-            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + 3,
+            # Inner → screen: one border column left, four border rows above
+            # (the `logo`/`info` top costs three — two borders plus the
+            # `themes` button's row — and the controls' own one).
+            app.on_click(Click(widget=None, x=hit.x0 + 1, y=hit.y + 4,
                                delta_x=0, delta_y=0, button=1,
                                shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, 1)
@@ -1524,6 +1525,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              + right.styles.width.value, 120)
             self.assertEqual(app.screen.max_scroll_y, 0)
 
+    @mock.patch.dict(os.environ, {"HUEBOX_EDITOR_PANEL": "0"})
     async def test_top_sits_side_by_side_above_the_pair(self):
         from textual.containers import Horizontal
 
@@ -1535,12 +1537,13 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             selected = next(b for b in mounted if b.name == "selected")
             # Two bordered panels side by side, not one full-width stack:
             # the inner widths meet at the window edge minus both borders
-            # and the heights match the chrome the frame laid out, so
-            # everything below rides where it did (§8.1 decision 38).
+            # and the logo column stands one row taller for the `themes`
+            # button under the readout, so everything below rides where it
+            # did (§8.1 decision 38, §4.3.2).
             self.assertEqual(header.styles.width.value
                              + selected.styles.width.value, 120 - 4)
             self.assertEqual(header.styles.height.value,
-                             selected.styles.height.value)
+                             selected.styles.height.value + 1)
             rows = list(app.query(Horizontal))
             self.assertEqual(len(rows), 2)
             top, pair = rows
@@ -1612,6 +1615,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                                    shift=False, meta=False, ctrl=False))
             self.assertEqual(app.state.sel, before)
 
+    @mock.patch.dict(os.environ, {"HUEBOX_EDITOR_PANEL": "0"})
     async def test_the_top_has_a_border(self):
         """Bordered means bordered: two `Panel`s, two titles, one border each.
 
@@ -1633,6 +1637,56 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              ["logo", "info"])
             left, right = list(top.query(huebox_app.Frame))
             self.assertEqual((left.name, right.name), ("header", "selected"))
+
+    async def test_default_top_is_the_bordered_editor_panel(self):
+        """Default product: header + metadata bare beside one `editor` box.
+
+        The hue selectors alone get the border — header logo and theme
+        metadata stay bare chrome, while the chip row plus the three equal
+        HSV bars ride in `Panel("editor")`. The metadata column owns the
+        top's one control: the flat `themes` button under the theme subject.
+        Widths meet at the window edge (25 + 37 + 58 at 120 for the distinct
+        fixture) and the row stands one `top_screen` height, so everything
+        below rides where it did.
+        """
+        from textual.containers import Horizontal
+
+        app = await self._app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            rows = list(app.query(Horizontal))
+            self.assertEqual(len(rows), 2)
+            top, _ = rows
+            panels = list(top.query(huebox_app.Panel))
+            self.assertEqual([p.border_title for p in panels], ["editor"])
+            header = next(b for b in top.query(huebox_app.Frame)
+                          if b.name == "header")
+            selected = next(b for b in top.query(huebox_app.Frame)
+                             if b.name == "selected")
+            hsv = next(b for b in top.query(huebox_app.Frame)
+                       if b.name == "editor-hsv")
+            editor_panel = panels[0]
+            # 25 + 37 + 58 at 120 for the distinct fixture: logo, metadata,
+            # editor box meet at the window edge with no air between them.
+            self.assertEqual((header.styles.width.value,
+                              selected.styles.width.value,
+                              editor_panel.styles.width.value),
+                             (25.0, 37.0, 58.0))
+            self.assertEqual(header.styles.width.value
+                             + selected.styles.width.value
+                             + editor_panel.styles.width.value, 120)
+            # One row budget: header and editor box stand `top_screen`,
+            # the readout leaves its last row for the button below it.
+            self.assertEqual(header.styles.height.value,
+                             editor_panel.styles.height.value)
+            self.assertEqual(selected.styles.height.value + 1,
+                             header.styles.height.value)
+            self.assertEqual(hsv.styles.width.value, 54.0)
+            # The metadata column owns the top's one control.
+            buttons = list(top.query(huebox_app.ThemesButton))
+            self.assertEqual(len(buttons), 1)
+            self.assertEqual(str(buttons[0].label), "themes")
 
     async def test_arrows_walk_pairs_not_rows(self):
         app = await self._app()
@@ -1851,13 +1905,41 @@ class CollapsiblePanels(unittest.TestCase):
     def test_reopening_restores_the_panel(self):
         editor, _ = self._editor()
         geom = dict(editor._panel_geom)
-        shut_editor, _ = self._editor(collapsed=("examples",))
+        # At 80x24 only `sample` fits below the panelled chrome (the top's
+        # `themes` button costs the row `examples` used to ride in), so
+        # reopen the block that is actually shut.
+        shut_editor, _ = self._editor(collapsed=("sample",))
         self.assertNotEqual(shut_editor._panel_geom["examples_h"],
                             geom["examples_h"])
         # `redraw` re-mounts from `_collapsed`: empty again, whole again.
         shut_editor._collapsed.clear()
         shut_editor.redraw()
         self.assertEqual(shut_editor._panel_geom, geom)
+
+    def test_examples_shuts_where_it_fits(self):
+        """At 80x30 the strip fits, so `e` shuts it on its own."""
+        editor, _ = self._editor(cols=80, rows=30)
+        live = [name for name, _, _ in editor.regions
+                if name in huebox_app.LIVE_BLOCKS]
+        self.assertIn("examples", live,
+                      "the strip did not mount at 80x30")
+        regions = {name: (first, count)
+                   for name, first, count in editor.regions}
+        shut_editor, shut_mounted = self._editor(cols=80, rows=30,
+                                                 collapsed=("examples",))
+        lives = {widget.name: widget.collapsed
+                 for widget in self._lives(shut_mounted)}
+        self.assertTrue(lives["examples"], "examples did not shut")
+        self.assertFalse(lives["sample"], "sample shut with examples")
+        first, count = regions["examples"]
+        self.assertEqual(shut_editor._panel_geom["examples_h"],
+                         editor._panel_geom["examples_h"] - (count - 1))
+        self.assertEqual(shut_editor._panel_geom["controls_h"],
+                         editor._panel_geom["controls_h"])
+        # And reopening restores the panel whole again.
+        shut_editor._collapsed.clear()
+        shut_editor.redraw()
+        self.assertEqual(shut_editor._panel_geom, dict(editor._panel_geom))
 
     def test_the_regions_still_name_every_block(self):
         editor, _ = self._editor()
@@ -1871,12 +1953,15 @@ class CollapsiblePanels(unittest.TestCase):
 
     def test_a_collapsed_panel_keeps_grid_clicks(self):
         """Shutting the strip must not move the swatches above it."""
-        editor, _ = self._editor(collapsed=("examples",))
+        # At 80x24 the live area is only `sample`: `examples` never mounted,
+        # so collapsing it would be a no-op that proves nothing.
+        editor, _ = self._editor(collapsed=("sample",))
         hit = next(hit for hit in editor.hits if hit.slot == 5)
-        # Panels offset content by one border column left and three border
-        # rows above the controls (the `logo`/`info` top plus the controls'
-        # own); the collapsed strip is below both.
-        self._click(editor, hit.x0 + 1 + 1, hit.y + 3)
+        # Panels offset content by one border column left and four border
+        # rows above the controls (the `logo`/`info` top costs three — two
+        # borders plus the `themes` button's row — and the controls' own
+        # one); the collapsed strip is below both.
+        self._click(editor, hit.x0 + 1 + 1, hit.y + 4)
         self.assertEqual(editor.state.sel, 5,
                          "a click below a collapse selected the wrong slot")
 
@@ -1994,7 +2079,10 @@ class CollapsiblePanelsRunning(unittest.IsolatedAsyncioTestCase):
 
     The regression this guards: with the default grouping the keys
     recorded the collapse and the frame never moved. At 80x24 the
-    stacked panels are up, so `e` must shut the strip inside them.
+    stacked panels are up, so `c` must shut the sample inside them —
+    `examples` never mounts at this size (the top's `themes` button
+    costs its row), so the sample is the block that proves the keys
+    reach inside the panels.
     """
 
     async def _app(self):
@@ -2024,18 +2112,18 @@ class CollapsiblePanelsRunning(unittest.IsolatedAsyncioTestCase):
             lives = list(app.query(huebox_app.Live))
             self.assertTrue(lives, "no live block mounted")
             before = [widget for widget in lives
-                      if widget.name == "examples"][0]
+                      if widget.name == "sample"][0]
             self.assertFalse(before.collapsed)
-            await self._press(app, pilot, "e")
-            self.assertEqual(app._collapsed, {"examples"},
-                             "`e` recorded the collapse and changed nothing")
+            await self._press(app, pilot, "c")
+            self.assertEqual(app._collapsed, {"sample"},
+                             "`c` recorded the collapse and changed nothing")
             shut = [widget for widget in app.query(huebox_app.Live)
-                    if widget.name == "examples"][0]
+                    if widget.name == "sample"][0]
             self.assertTrue(shut.collapsed,
                             "the strip did not shut inside its panel")
             self.assertEqual(len(list(app.query(huebox_app.Live))),
                              len(lives),
                              "collapsing unmounted a sibling")
-            await self._press(app, pilot, "e")
+            await self._press(app, pilot, "c")
             self.assertEqual(app._collapsed, set(),
-                             "second `e` did not reopen the strip")
+                             "second `c` did not reopen the sample")

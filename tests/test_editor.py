@@ -296,6 +296,7 @@ class Readout(unittest.TestCase):
         return next(cols for cols in range(40, 130)
                     if self.bars(cols))
 
+    @mock.patch.dict(os.environ, {"HUEBOX_TOP_NEW": "0"})
     def test_both_readings_are_on_screen_where_the_row_fits(self):
         # the bars are the glance, the exact numbers are the truth, and
         # neither of them gives up a row for the other (§8.3). The full
@@ -310,6 +311,7 @@ class Readout(unittest.TestCase):
         self.assertNotIn(self.exact(), wide)
         self.assertEqual(len(self.bars(100)), sum(HSV_TIGHT))
 
+    @mock.patch.dict(os.environ, {"HUEBOX_TOP_NEW": "0"})
     def test_a_bar_carries_the_sweep_and_the_line_and_nothing_else(self):
         # the arrangement that lets the number and the hairline both be
         # complete: the reading is beside its bar, so the bar has only the
@@ -339,6 +341,7 @@ class Readout(unittest.TestCase):
                 self.assertIn("#61afef", text)
                 self.assertLess(text.index("palette-4"), text.index("#61afef"))
 
+    @mock.patch.dict(os.environ, {"HUEBOX_TOP_NEW": "0"})
     def test_the_row_does_not_move_when_a_reading_grows_a_digit(self):
         # §8.3 — the readings are in fixed fields, so the bars start in the
         # same columns whatever the slot says; the row is stable while the
@@ -400,6 +403,89 @@ class Readout(unittest.TestCase):
                          example_rows(lines(narrow)))
 
 
+class ReadoutSplit(unittest.TestCase):
+    """The default readout: metadata left, one HSV axis per row.
+
+    `HUEBOX_TOP_NEW` defaults on: each of the three top rows is
+    `[metadata | one HSV axis]`, so the three bars share one width and
+    the row count never moves. The single-line ladder (`HSV_FULL` etc.)
+    is the `HUEBOX_TOP_NEW=0` opt-out `Readout` pins above.
+    """
+
+    SLOTS = dict(FULL_SLOTS, background="#101014", foreground="#e6e6ea",
+                 **{"palette-4": "#61afef"})
+
+    def painted_top(self, cols, rows=30, sel=4, slots=None):
+        body = lines(frame(cols, rows, sel=sel, slots=slots or self.SLOTS))
+        return body[:3]
+
+    def plain_top(self, cols, rows=30, sel=4, slots=None):
+        return [plain(line)
+                for line in self.painted_top(cols, rows, sel, slots)]
+
+    def bars_in(self, painted_row):
+        return [cell for cell in Readout.CELL.findall(painted_row)
+                if (tuple(int(v) for v in cell[:3]) != Readout.FILL
+                    or cell[6] != " ")]
+
+    def exact(self, value="#61afef"):
+        return hsv_numbers(*rgb_to_hsv(hex_to_rgb(value)))
+
+    def test_split_rows_carry_one_axis_each(self):
+        first, second, third = self.plain_top(120)
+        # metadata left: theme, selected subject, specimen + exact.
+        self.assertIn("ghostty", first)
+        self.assertIn("selected", second)
+        self.assertIn("palette-4", second)
+        self.assertIn("AaBbCc", third)
+        self.assertIn(self.exact(), third)
+        self.assertNotIn(self.exact(), first)
+        self.assertNotIn(self.exact(), second)
+        # one axis right: hue, sat, val each beside its own bar.
+        self.assertIn("hue", first)
+        self.assertNotIn("sat", first)
+        self.assertNotIn("val", first)
+        self.assertIn("sat", second)
+        self.assertNotIn("hue", second)
+        # `val` names the bar; the exact below it names all three, so
+        # only the bar's presence is asserted on the third row.
+        self.assertIn("val", third)
+
+    def test_bars_share_one_width(self):
+        # One width for all three axes, spending what the metadata left:
+        # 47 / 38 / 27 / 7 cells at 120 / 111 / 100 / 80, nothing at 60
+        # where even a minimal bar does not fit.
+        for cols, want in ((120, 47), (111, 38), (100, 27), (80, 7)):
+            with self.subTest(cols=cols):
+                painted = self.painted_top(cols)
+                counts = [len(self.bars_in(row)) for row in painted]
+                self.assertEqual(counts, [want] * 3)
+        self.assertEqual([len(self.bars_in(row))
+                          for row in self.painted_top(60)], [0] * 3)
+
+    def test_no_bars_where_split_does_not_fit(self):
+        # At 60 the split returns `None` and the rows are bare metadata:
+        # the subject and the exact reading survive, the bars do not.
+        first, second, third = self.plain_top(60)
+        self.assertIn("ghostty", first)
+        self.assertIn("#61afef", second)
+        self.assertIn(self.exact(), third)
+        self.assertNotIn("hue 207\u00b0", first)
+        self.assertNotIn("sat", second)
+
+    def test_each_bar_carries_its_sweep_and_its_line(self):
+        # Like the single-line bar: the sweep plus one hairline, and
+        # nothing else — but one axis per row, so one ink per row.
+        for row in self.painted_top(120):
+            with self.subTest(row=plain(row)[:24]):
+                cells = self.bars_in(row)
+                self.assertTrue(cells)
+                self.assertEqual({cell[6] for cell in cells} - {" "},
+                                 {"\u258f"})
+                self.assertEqual(len([cell for cell in cells if cell[3]]),
+                                 1)
+
+
 class TopBlock(unittest.TestCase):
     """The side-by-side top block: wordmark left, theme readout right.
 
@@ -436,6 +522,7 @@ class TopBlock(unittest.TestCase):
         self.assertTrue(second.startswith(" " * editor.TOP_LEFT_W))
         self.assertNotIn("huebox", second)
 
+    @mock.patch.dict(os.environ, {"HUEBOX_TOP_NEW": "0"})
     def test_the_right_column_keeps_the_ladder(self):
         # full where the right column has the columns, compact a rung
         # down, nothing where even the tight rung does not fit — the same
