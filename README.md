@@ -1,4 +1,4 @@
-# 🎨 HUEBOX
+![HUEBOX](docs/huebox-header-transparent.png)
 
 [![PyPI](https://img.shields.io/pypi/v/huebox)](https://pypi.org/p/huebox/) [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](pyproject.toml) [![License](https://img.shields.io/github/license/MikkelKappelPersson/huebox)](LICENSE)
 
