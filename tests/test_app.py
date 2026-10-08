@@ -2256,3 +2256,53 @@ class PanelLimits(unittest.TestCase):
             self.assertFalse(huebox_app.panel_limits_enabled())
             self.assertEqual(huebox_app.layout_size(200, 60), (200, 60))
         self.assertTrue(huebox_app.panel_limits_enabled())
+
+
+class ImportPreview(unittest.TestCase):
+    """The popup preview shows palette plus abbreviated interface."""
+
+    @needs_app
+    def test_preview_includes_abbreviated_interface_cells(self):
+        from huebox.color import SLOTS
+        slots = {name: "#112233" for name in SLOTS}
+        rows = huebox_app.import_preview_rows("Demo", slots, 60)
+        text = "\n".join(rows)
+        for abbr in ("BG", "FG", "CC", "CT", "SB", "SF"):
+            self.assertIn(abbr, text)
+
+    @needs_app
+    def test_empty_slots_stay_a_single_muted_row(self):
+        rows = huebox_app.import_preview_rows("Demo", {}, 60)
+        self.assertEqual(len(rows), 1)
+
+    @needs_app
+    def test_wide_preview_shares_two_lines(self):
+        from huebox.color import SLOTS
+        slots = {name: "#112233" for name in SLOTS}
+        rows = huebox_app.import_preview_rows("Demo", slots, 80)
+        # title, blank, then the two shared lines.
+        self.assertIn("FG", rows[2])
+        self.assertIn("BG", rows[3])
+        self.assertIn(" 0", rows[2])
+        self.assertIn(" 8", rows[3])
+
+    @needs_app
+    def test_narrow_preview_stacks_to_four_lines(self):
+        from huebox.color import SLOTS
+        slots = {name: "#112233" for name in SLOTS}
+        rows = huebox_app.import_preview_rows("Demo", slots, 60)
+        # title, blank, two palette lines, blank, two paired lines.
+        self.assertNotIn("FG", rows[2])
+        self.assertIn("FG", rows[5])
+        self.assertIn("BG", rows[6])
+
+    @needs_app
+    def test_pairs_columns_foregrounds_over_backgrounds(self):
+        from huebox.color import SLOTS
+        slots = {name: "#112233" for name in SLOTS}
+        rows = huebox_app.import_preview_rows("Demo", slots, 80)
+        top, bottom = rows[2], rows[3]
+        self.assertLess(top.index("FG"), top.index("CC"))
+        self.assertLess(top.index("CC"), top.index("SB"))
+        self.assertLess(bottom.index("BG"), bottom.index("CT"))
+        self.assertLess(bottom.index("CT"), bottom.index("SF"))

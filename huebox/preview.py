@@ -27,6 +27,13 @@ here clips, pads to a frame, or paints a background: indent, `clip` and
 `backdrop` are the caller's layout job, so the same rows mount in the bare
 frame and in a popup `Static` alike.
 
+Paired interface (defined once, here): the 6 interface slots as two rows
+of three abbreviated cells — foregrounds above backgrounds
+(`FG CC SB` / `BG CT SF`), so each column is one pair. Same cells as
+`interface_rows` (`abbrev=True`, no hex), only the grouping differs; the
+popup asks `palette_interface_rows` for both blocks on the same two lines
+where they fit, else `palette_rows` plus `interface_pair_rows` stacked.
+
 `TOKEN_SLOTS` note (for the P5 docs pass): no new entries. Every colour
 these units emit is read out of a theme slot (`palette-*`, `background`,
 `foreground`, …) on the call, so the I2 colour-closure property the popup
@@ -43,14 +50,17 @@ from .render import BOLD, RESET, bg, example_lines, fg, sample_lines
 __all__ = [
     "CELL_FULL",
     "CELL_MIN",
+    "INTERFACE_PAIRS",
     "NAMED_ABBR",
     "NAMED_ABBR_W",
     "NAMED_COL_W",
     "NAMED_MIN_W",
     "example_lines",
+    "interface_pair_rows",
     "interface_rows",
     "named_cell",
     "named_cell_width",
+    "palette_interface_rows",
     "palette_rows",
     "sample_lines",
     "swatch_cell",
@@ -157,3 +167,40 @@ def interface_rows(slots, sel=-1, per=2, abbrev=False, show_hex=True):
         rows.append("  ".join(named_cell(slots, key, sel, abbrev, show_hex)
                               for key in NAMED[start:start + per]))
     return rows
+
+
+#: Paired columns for the popup: each column is one pair — foregrounds on
+#: the top row, backgrounds below — so `FG` stands over `BG`, `CC` over
+#: `CT`, `SB` over `SF`.
+INTERFACE_PAIRS = (("foreground", "cursor-color",
+                    "selection-background"),
+                   ("background", "cursor-text",
+                    "selection-foreground"))
+
+
+def interface_pair_rows(slots, sel=-1):
+    """The 6 interface slots as two paired rows: `FG CC SB` / `BG CT SF`.
+
+    Same cells as `interface_rows` with `abbrev=True, show_hex=False` —
+    the compact share the popup stacks under the palette where the two
+    blocks do not fit side by side. `sel=-1` marks nothing.
+    """
+    return ["  ".join(named_cell(slots, key, sel, abbrev=True,
+                                  show_hex=False)
+                       for key in pair)
+            for pair in INTERFACE_PAIRS]
+
+
+def palette_interface_rows(slots, sel=-1, sep="  "):
+    """Palette plus paired interface on the same two lines.
+
+    Row 0 is palette `0-7` beside `FG CC SB`, row 1 palette `8-15` beside
+    `BG CT SF` — base/bright on the left, one interface pair per column on
+    the right, so the two blocks line up instead of stacking to four rows.
+    Same cells as `palette_rows` plus `interface_pair_rows`, joined with
+    `sep`; like both, no indent, no clip, no background — the caller owns
+    the edges and checks the fit before asking.
+    """
+    pal = palette_rows(slots, sel=sel)
+    pairs = interface_pair_rows(slots, sel=sel)
+    return [left + sep + right for left, right in zip(pal, pairs)]

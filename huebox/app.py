@@ -63,7 +63,8 @@ from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROW
                      head_label, report_session, session_path, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
                      too_small_frame, top_editor_meta, top_layout, top_left_rows)
-from .preview import example_lines, palette_rows, sample_lines
+from .preview import (example_lines, interface_pair_rows,
+                       palette_interface_rows, palette_rows, sample_lines)
 from .render import (CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, chrome,
                      hint_line, hsv_axis, title, visible)
 
@@ -972,21 +973,31 @@ def import_preview_rows(name, slots, width):
     """The popup's right column for the highlighted theme (003 spec §4.5).
 
     Pure like every preview unit: the theme name as a bold-`foreground`
-    header, the compact 16-slot palette (`palette_rows`, all readable at
-    once), the interface-text examples strip (`example_lines`), and the live
-    code sample (`sample_lines`) — the same units the editor frame calls, so
-    the two cannot disagree about what a theme looks like. Every row stands
-    on the previewed theme's own `background` (`backdrop`, §8.2), never the
-    terminal's. Shedding is tail-first by construction: the sample is last,
-    so a short column clips it before the strip, which keeps its floor.
-    `{}` slots preview as one muted row rather than the last theme's.
+    header, palette plus paired interface on the same two lines where they
+    fit (`palette_interface_rows`: `0-7` beside `FG CC SB`, `8-15` beside
+    `BG CT SF`), else stacked (`palette_rows` over `interface_pair_rows`)
+    — same cells either way, abbreviated with no hex and read-only
+    (`sel=-1`) — then the interface-text examples strip (`example_lines`)
+    and the live code sample (`sample_lines`). The same units the editor
+    frame calls, so the two cannot disagree about what a theme looks like.
+    Every row stands on the previewed theme's own `background` (`backdrop`,
+    §8.2), never the terminal's. Shedding is tail-first by construction:
+    the sample is last, so a short column clips it before the strip, which
+    keeps its floor. `{}` slots preview as one muted row rather than the
+    last theme's.
     """
     if not slots:
         note = (title(name, slots) if name
                 else chrome("no themes found", CHROME_MUTED, slots or {}))
         return [backdrop(note, slots or {}, width)]
     rows = [title(name, slots), ""]
-    rows.extend(palette_rows(slots, sel=-1))
+    combined = palette_interface_rows(slots, sel=-1)
+    if combined and visible(combined[0]) <= width:
+        rows.extend(combined)
+    else:
+        rows.extend(palette_rows(slots, sel=-1))
+        rows.append("")
+        rows.extend(interface_pair_rows(slots, sel=-1))
     rows.append("")
     rows.extend(example_lines(slots, cols=width, indent=""))
     code = [line for line, _ in sample_lines(slots)]

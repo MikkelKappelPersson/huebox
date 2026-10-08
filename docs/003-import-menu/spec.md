@@ -127,7 +127,12 @@ into the library without dropping back to a shell per theme.
   selection set: moving the cursor repaints the preview on the same frame.
 - Preview content, top to bottom:
   1. Theme name (bold `foreground` header, same as other block titles).
-  2. A small palette rendering — all 16 slots readable at once.
+  2. Palette plus paired interface on the same two lines where they fit
+     (`palette_interface_rows`: `0-7` beside `FG CC SB`, `8-15` beside
+     `BG CT SF` — one interface pair per column, foregrounds above
+     backgrounds), else stacked (`palette_rows` over `interface_pair_rows`)
+     — abbreviated cells, no hex, the same `swatch_cell` / `named_cell`
+     units the editor frame calls.
   3. The interface-text examples strip (background / selection / cursor
      pairs).
   4. The live code sample below, space permitting (first to shed rows on
@@ -200,9 +205,10 @@ The popup preview and the editor frame must render from the same code:
   re-implements the strip, the sample token→slot mapping, or the swatch
   geometry is a second description of the layout, and the two will drift
   the way `frame_hits` was created to prevent.
-- The small 16-slot palette rendering is part of this contract: whatever
-  compact form the popup uses (grid, pairs, abbreviated cells) is the unit
-  under test for both callers, not inline paint in the popup.
+- The small palette + paired-interface rendering is part of this contract:
+  whatever compact form the popup uses (`palette_interface_rows` side by
+  side where it fits, else `palette_rows` over `interface_pair_rows`) is
+  the unit under test for both callers, not inline paint in the popup.
 - Theme-closed like everything else: the popup's own chrome (group titles,
   toggle marks, footer, borders) binds only the design tokens `TOKEN_SLOTS`
   already maps, and the colour-closure harness (§10) will reject anything
