@@ -827,35 +827,36 @@ class TheFrameIsWidgets(unittest.TestCase):
         frames = self._frames(mounted)
         self.assertEqual([f.name for f in frames],
                          ["header", "info", "editor-hsv", "palette",
-                          "interface", "sample", "hints"])
+                          "interface", "examples", "sample"])
         self.assertGreater(len(frames), 3,
                            "the frame collapsed back into a single widget")
         names = [name for name, _, _ in regions]
-        for name in ("header", "palette", "interface", "selected", "hints"):
+        for name in ("header", "palette", "interface", "selected"):
             self.assertIn(name, names,
                           "the frame no longer names its %s block" % name)
 
     def test_the_widgets_stack_to_the_frame_and_no_further(self):
-        """A stack taller than the screen gives the screen a scrollbar.
+        """The mounted zones tile the screen exactly: footer included.
 
         That is not a hypothetical: seven of Textual's 168 design tokens exist
         only for scrollbars, and I2's whole job is to reject a colour that was
-        not the theme's. The mounted zones tile the screen exactly: the top
-        row stands its own height once (logo, info and `editor` share it,
-        they never stack), then a border row top and bottom per panel row
-        below. At 80x24 that is 6 + 9 + 7 + 2 — one row more would scroll."""
+        not the theme's. The frame stacks to one row short of the screen and
+        the docked footer stands the last one: at 80x24 that is 6 + 9 + 8 +
+        1 — one row more would scroll."""
         editor, mounted = self._mounted()
         from textual.containers import Horizontal
         self.assertEqual(len(mounted), 4)
-        top, controls, examples, hints = mounted
+        top, controls, examples, footer = mounted
         self.assertIsInstance(top, Horizontal)
+        self.assertIsInstance(footer, huebox_app.HueFooter)
         self.assertEqual([p.border_title for p in (controls, examples)],
                          ["THEME", "EXAMPLES"])
         heights = [top.styles.height.value, controls.styles.height.value,
-                   examples.styles.height.value, hints.styles.height.value]
-        self.assertEqual(heights, [6, 9, 7, 2])
-        self.assertEqual(sum(heights), 24,
-                         "the stack is taller than the screen")
+                   examples.styles.height.value]
+        self.assertEqual(heights, [6, 9, 8])
+        self.assertEqual(sum(heights) + 1, 24,
+                         "the stack plus the footer is taller than "
+                         "the screen")
 
     def test_every_block_paints_only_its_own_rows(self):
         editor, mounted = self._mounted()
@@ -863,8 +864,9 @@ class TheFrameIsWidgets(unittest.TestCase):
         # The share top replaces the bare header chrome: one top row of
         # logo, info and `editor` instead of full-width header blocks —
         # the bare rows it stands in for are drawn but never mounted.
-        top, controls, examples, hints = mounted
+        top, controls, examples, footer = mounted
         self.assertIsInstance(top, Horizontal)
+        self.assertIsInstance(footer, huebox_app.HueFooter)
         top_frames = [b.name for b in self._frames([top])]
         self.assertEqual(top_frames, ["header", "info", "editor-hsv"])
         self.assertEqual(controls.border_title, "THEME")
@@ -872,14 +874,18 @@ class TheFrameIsWidgets(unittest.TestCase):
         inner = lambda panel: [
             c.name for c in getattr(panel, "_pending_children", [])]
         self.assertEqual(inner(controls), ["palette", "interface"])
-        self.assertEqual(inner(examples), ["sample"])
-        self.assertEqual(hints.name, "hints")
-        self.assertEqual(hints.styles.width.value, 80)
+        self.assertEqual(inner(examples), ["examples", "sample"])
+        # Hints and status ride the docked footer, not a block: the
+        # footer carries every hint pair and the status behind it.
+        pairs = dict(footer._pairs)
+        self.assertEqual(pairs["arrows"], "move")
+        self.assertEqual(footer._status, "")
         # Chrome below both panels mounts full-width, like the bare
         # frame it stands in for.
-        rest = self._frames([controls, examples, hints])
+        rest = self._frames([controls, examples])
         self.assertEqual([b.name for b in rest],
-                         ["palette", "interface", "sample", "hints"])
+                         ["palette", "interface", "examples",
+                          "sample"])
 
 
 @needs_app
@@ -946,29 +952,24 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
     async def test_an_arrow_still_moves_when_no_grid_is_focused(self):
         """The App's own handler is the fallback, and it must still work.
 
-        40x12 shows only some of the twenty-two slots, in the narrow
-        grids — four palette swatches and two abbreviated interface cells
-        to a row (§15.2). Selecting `selection-foreground` puts the
-        selection below the fold, where no grid block can hold focus — and
-        the keys have to keep working, or the frame would trap the user on
-        the slots it can show.
+        The 40x12 floor shows every slot now that the footer is docked, so
+        the selection can no longer sit below the fold: focus is cleared
+        outright instead, and `up` must still move through the app handler.
 
-        `up`, which stays in the column: from `selection-foreground` that
-        is `cursor-text` in the two-abreast grid.
+        `up`, which stays in the column: from 21 that is 19 in the narrow
+        grid.
         """
         app = await self._app()
         async with app.run_test(size=(40, 12)) as pilot:
             await pilot.pause()
-            app.state.sel = 21              # below the fold at this size
-            app.focus_grid(21)
+            app.state.sel = 21
+            app.set_focus(None)
             await pilot.pause()
-            self.assertNotIsInstance(app.focused, huebox_app.Swatches,
-                                     "a grid kept focus with the selection off "
-                                     "it, so on_key would skip the arrows")
+            self.assertIsNone(app.focused)
             await self._press(app, pilot, "up")
             self.assertEqual(app.state.sel, 19,
-                             "the keys stopped working once the selection "
-                             "was off the grid")
+                             "the keys stopped working once no grid "
+                             "held focus")
 
     async def test_focus_follows_the_selection_across_the_two_grids(self):
         app = await self._app()
@@ -1101,18 +1102,14 @@ class TheFrameIsSizedByTheCompositor(unittest.IsolatedAsyncioTestCase):
                         # rows full, 14 squeezed (§8.1 decision 42).
                         geom = app._side_geom
                         top, content_h = geom["top"], geom["content_h"]
-                        by_name = {name: (first, count)
-                                   for name, first, count in app.regions}
-                        bottom = by_name["hints"][1] + by_name.get(
-                            "status", (0, 0))[1]
-                        self.assertEqual(top + (content_h + 2) + bottom,
+                        # Top plus pair plus the docked footer is exactly
+                        # the window: the hints and the status ride the
+                        # footer, not the regions, so the bar stands the
+                        # last row where the pair ends.
+                        self.assertEqual(top + (content_h + 2) + 1,
                                          rows,
                                          "the side layout does not fill "
                                          "the window")
-                        self.assertEqual(by_name["hints"][0],
-                                         top + content_h + 2,
-                                         "the hints ride where the pair "
-                                         "ends")
                         left_rows = (huebox_app.SIDE_LEFT_NARROW_ROWS
                                      if geom["narrow"]
                                      else huebox_app.SIDE_LEFT_ROWS)
@@ -1367,16 +1364,16 @@ class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
     async def test_the_hint_line_shows_the_step_not_its_repr(self):
         """`f x1`, never `f xFalse` or `f x'1'`.
 
-        The hint line prints the multiplier verbatim, so a string multiplier is
+        The footer prints the multiplier verbatim, so a string multiplier is
         visible on screen even before it is fatal — which is how `f xFalse`
         first showed itself."""
         app = await self._app()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            hints = [_plain(row) for row in app.rows_text if "arrows" in row]
-            self.assertEqual(len(hints), 1, "no hint line")
-            self.assertIn("f x1", hints[0])
-            self.assertNotIn("xFalse", hints[0])
+            pairs = dict(app._footer._pairs)
+            self.assertIn("arrows", pairs, "no hint pairs")
+            self.assertEqual(pairs["f"], "x1")
+            self.assertNotIn("xFalse", pairs["f"])
 
 
 def _plain(row):
@@ -1617,12 +1614,12 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(tuple(panel.styles.padding), air)
 
     async def test_narrow_panels_drop_the_air_first(self):
-        # Decision 45: padding is the first thing spent — at 42x24 the
+        # Decision 45: padding is the first thing spent — at 42x18 the
         # padded content would not even hold the draw floor, so it mounts
         # unpadded rather than trimming widgets (or dropping the panels).
-        # At 44x24 the padded lay keeps every row the unpadded one shows,
+        # At 46x18 the padded lay keeps every row the unpadded one shows,
         # so the air stays: air is spent first, never content.
-        for size, pad in (((44, 24), 1), ((42, 24), 0)):
+        for size, pad in (((46, 18), 1), ((42, 18), 0)):
             with self.subTest(size=size):
                 app = await self._app()
                 async with app.run_test(size=size) as pilot:
@@ -1694,6 +1691,79 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertFalse(app._panels_on)
             self.assertEqual(len(list(app.query(huebox_app.Panel))), 0)
+
+    async def test_adjust_reuses_widgets_in_place(self):
+        # §1: hold-to-sweep must never show an empty frame. An adjust-only
+        # redraw keeps every block at the same size, so it swaps rows via
+        # `Frame.update_rows` instead of remove+mount: same objects, same
+        # heights, new colours. Focus never leaves, so no scroll/focus churn
+        # under key repeat.
+        app = await self._app()
+        app.state.setup = None
+        app.state.overlay = None
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            self.assertTrue(app._panels_on)
+            self.assertFalse(app._side_on)
+            before = {w.name: w
+                      for w in app.screen_stack[0].query(huebox_app.Frame)}
+            heights = {name: w.styles.height.value
+                       for name, w in before.items()}
+            focused_before = app.focused
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.pause()
+            self.assertTrue(app._fast_reused)
+            after = {w.name: w
+                     for w in app.screen_stack[0].query(huebox_app.Frame)}
+            self.assertEqual(set(after), set(before))
+            for name in before:
+                self.assertIs(after[name], before[name])
+                self.assertEqual(after[name].styles.height.value,
+                                 heights[name])
+            self.assertEqual(app.state.sel, 5)
+            self.assertIs(app.focused, focused_before)
+
+    async def test_repeat_redraws_coalesce_to_one(self):
+        # Holding a key fires repeats faster than the compositor paints:
+        # state advances per press, the repaint collapses to one redraw
+        # showing the latest state.
+        from huebox.editor import apply_key, SLOTS as EDITOR_SLOTS
+
+        app = await self._app()
+        app.state.setup = None
+        app.state.overlay = None
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            calls = []
+            orig = app.redraw
+
+            def counting(*args, **kwargs):
+                calls.append(1)
+                return orig(*args, **kwargs)
+            app.redraw = counting
+            before = list(app.rows_text)
+            apply_key("w", app.state)
+            app.request_redraw()
+            apply_key("w", app.state)
+            app.request_redraw()
+            await pilot.pause()
+            await pilot.pause()
+            self.assertEqual(len(calls), 1)
+            self.assertFalse(app._redraw_scheduled)
+            self.assertTrue(app._fast_reused)
+            self.assertNotEqual(list(app.rows_text), before)
+            # Paint-level: the coalesced redraw must reach the screen, not
+            # just the rows — a batched surface refresh once left state
+            # ahead of paint here, and only a forced repaint caught up.
+            shown = app.state.slots[EDITOR_SLOTS[app.state.sel]]
+            fd, shot = tempfile.mkstemp(suffix=".svg")
+            os.close(fd)
+            self.addCleanup(os.unlink, shot)
+            with open(app.save_screenshot(shot), encoding="utf-8") as fh:
+                self.assertIn(shown.lower(), fh.read().lower())
 
 
 @needs_app
@@ -2250,6 +2320,38 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
             await self._press(app, pilot, "up")
             self.assertEqual(app.state.sel, 7)
 
+    async def test_adjust_reuses_widgets_in_place(self):
+        # §1: the side pair reuses like the stacked panels. Same widget
+        # objects across an adjust, heights preserved — including the info
+        # frame, which mounts one row shorter than its rows for the buttons.
+        app = await self._app()
+        app.state.setup = None
+        app.state.overlay = None
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            self.assertTrue(app._side_on)
+            before = {w.name: w
+                      for w in app.screen_stack[0].query(huebox_app.Frame)}
+            heights = {name: w.styles.height.value
+                       for name, w in before.items()}
+            self.assertEqual(heights.get("info"), 3)
+            focused_before = app.focused
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.pause()
+            self.assertTrue(app._fast_reused)
+            after = {w.name: w
+                     for w in app.screen_stack[0].query(huebox_app.Frame)}
+            self.assertEqual(set(after), set(before))
+            for name in before:
+                self.assertIs(after[name], before[name])
+                self.assertEqual(after[name].styles.height.value,
+                                 heights[name])
+            self.assertEqual(heights.get("info"), 3)
+            self.assertEqual(app.state.sel, 5)
+            self.assertIs(app.focused, focused_before)
+
 
 @needs_app
 class CollapsibleExamples(unittest.TestCase):
@@ -2460,15 +2562,15 @@ class CollapsiblePanels(unittest.TestCase):
         self.assertEqual(shut_editor._panel_geom, geom)
 
     def test_examples_shuts_where_it_fits(self):
-        """At 60x24 the strip fits, so `e` shuts it on its own."""
-        editor, _ = self._editor(cols=60, rows=24)
+        """At 80x24 the strip fits, so `e` shuts it on its own."""
+        editor, _ = self._editor(cols=80, rows=24)
         live = [name for name, _, _ in editor.regions
                 if name in huebox_app.LIVE_BLOCKS]
         self.assertIn("examples", live,
                       "the strip did not mount at 60x24")
         regions = {name: (first, count)
                    for name, first, count in editor.regions}
-        shut_editor, shut_mounted = self._editor(cols=60, rows=24,
+        shut_editor, shut_mounted = self._editor(cols=80, rows=24,
                                                  collapsed=("examples",))
         lives = {widget.name: widget.collapsed
                  for widget in self._lives(shut_mounted)}

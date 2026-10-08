@@ -67,6 +67,21 @@ DIRTY_MARK = "●"
 THEME_HINTS = [("arrows", "move"), ("Enter", "use"), ("n", "new from buffer"),
                ("N", "save as new"), ("t / Esc", "back")]
 
+
+def editor_hints(mult, undo_len):
+    """The editor footer's `(key, what)` pairs — one source, two paints.
+
+    `draw_editor` folds these into tail rows (headless/direct mode) and the
+    `HueFooter` widget shows the same pairs in its docked row (compositor);
+    building the list here is what keeps the keys and the frame from
+    disagreeing about what the footer says.
+    """
+    return [("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"),
+            ("x/c", "light"), ("f", f"x{mult}"), ("h", "hex"),
+            ("^S", "save"), ("u", f"undo({undo_len})"), ("r", "revert"),
+            ("t", "themes"), ("i", "import"), ("N", "as new"),
+            ("Esc", "quit")]
+
 #: First-run setup: the two ways out of an empty library. `import` opens the
 #: import popup, `new` asks for a name and writes the buffer as that theme —
 #: the same two seams (`import_pending` for the popup, `Library.create` via
@@ -406,8 +421,12 @@ def _theme_row(name: str, selected: bool, current: bool, slots: dict) -> str:
 
 
 def theme_lines(names, index, current, cols, rows, status="", slots=None,
-                hits=None):
+                hits=None, footer=True):
     """The theme picker as a frame of lines (§13.7).
+
+    `footer=False` drops the hint footer and the status row: the compositor
+    shows those in the dialog's bar instead, so the rows are the list
+    alone (the windowing budget counts list rows only).
 
     Pure, like the editor frame: rows are the library's names, the session's
     subject is marked `*` (the theme this buffer came from — after `n`/Enter
@@ -421,9 +440,10 @@ def theme_lines(names, index, current, cols, rows, status="", slots=None,
     """
     slots = slots or {}
     out = ["  " + wordmark(slots) + "  " + title("themes", slots), ""]
-    footer = ["  " + line
-              for line in hint_line(slots, THEME_HINTS, cols - 2)]
-    if status:
+    footer = (["  " + line
+               for line in hint_line(slots, THEME_HINTS, cols - 2)]
+              if footer else [])
+    if status and footer:
         footer.append(f"  {BOLD}{status}{RESET}")
 
     if not names:
@@ -518,7 +538,7 @@ def _setup_row(choice: str, selected: bool, slots: dict) -> str:
 
 
 def setup_lines(index, cols, rows, status="", slots=None, hits=None,
-                name=None):
+                name=None, footer=True):
     """The first-run choice as a frame of lines: import or create.
 
     Pure, like `theme_lines`: the wordmark plus a `welcome` title, one muted
@@ -535,9 +555,10 @@ def setup_lines(index, cols, rows, status="", slots=None, hits=None,
     """
     slots = slots or {}
     if name is not None:
-        footer = ["  " + line
-                  for line in hint_line(slots, SETUP_NAME_HINTS, cols - 2)]
-        if status:
+        footer = (["  " + line
+                   for line in hint_line(slots, SETUP_NAME_HINTS, cols - 2)]
+                  if footer else [])
+        if status and footer:
             footer.append(f"  {BOLD}{status}{RESET}")
         out = ["  " + wordmark(slots) + "  " + title("welcome", slots),
                "",
@@ -560,9 +581,10 @@ def setup_lines(index, cols, rows, status="", slots=None, hits=None,
             hits.append(Hit(len(out), 2, cols - 1, row))
         out.append(_setup_row(choice, row == index, slots))
     out.append("")
-    footer = ["  " + line
-              for line in hint_line(slots, SETUP_HINTS, cols - 2)]
-    if status:
+    footer = (["  " + line
+               for line in hint_line(slots, SETUP_HINTS, cols - 2)]
+              if footer else [])
+    if status and footer:
         footer.append(f"  {BOLD}{status}{RESET}")
     out.extend(footer)
     if len(out) > rows:                    # belt and braces: keep the footer
@@ -991,8 +1013,13 @@ def top_left_rows(slots, left_w):
 
 def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
                 grid=None, hits=None, size=None, regions=None,
-                use_banner=None, indent="  "):
+                use_banner=None, indent="  ", footer=True):
     """The frame, written to stdout.
+
+    `footer` keeps the hints tail plus the status row (headless and direct
+    mode, where the rows are the whole UI). The compositor passes
+    `footer=False`: the hints and the status live in the docked `HueFooter`
+    widget instead, so the frame lays out the rows above it.
 
     `indent` is the content rows' own air (decision 46): the bare frame's
     two columns, empty (`""`) where the rows mount inside bordered
@@ -1027,15 +1054,12 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # Built before the first body row: the banner insertion below needs
     # the whole frame — body, widgets and `tail` — before it can know
     # whether the rows below leave room.
-    tail = ["  " + line for line in hint_line(slots, [
-        ("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"), ("x/c", "light"),
-        ("f", f"x{mult}"), ("h", "hex"), ("^S", "save"),
-        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"), ("i", "import"),
-        ("N", "as new"), ("Esc", "quit")],
+    tail = ["  " + line for line in hint_line(slots,
+        editor_hints(mult, len(undo)),
         # two spaces, not three: the picker added two keys to this line and
         # one more row here would come out of the examples strip's budget
-        cols - 2)]
-    if status:
+        cols - 2)] if footer else []
+    if status and footer:
         tail.append(f"  {BOLD}{status}{RESET}")
     body = []
     # Checkpoints: `(name, first row of the frame)`, each block running until
@@ -1235,8 +1259,9 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # The hints and the status are last, and `extra` is not known until the
     # widgets have had their rows, so these two checkpoints can only be taken
     # here rather than where the rows themselves are built.
-    marks.append(("hints", at_extra()))
-    if status:
+    if footer:
+        marks.append(("hints", at_extra()))
+    if status and footer:
         marks.append(("status", at_extra() + len(tail) - 1))
 
     # The header draws only out of leftover (decision 33): the frame above

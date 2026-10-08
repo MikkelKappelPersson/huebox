@@ -47,27 +47,33 @@ from rich.segment import Segment
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import (Horizontal, HorizontalGroup, Vertical,
+                                VerticalScroll)
+from textual.geometry import Region
 from textual.screen import ModalScreen
 from textual.strip import Strip
 from textual.style import Style
 from textual.widget import Widget
-from textual.widgets import Button, Collapsible, SelectionList, Static
+from textual.widgets import (Button, Collapsible, Footer, SelectionList,
+                             Static)
+from textual.widgets._footer import FooterKey, FooterLabel
 
 from . import import_state
 from .color import MISSING, SLOTS
 from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
                      SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
                      SIDE_LEFT_W, EditorState,
-                     apply_key, backdrop, draw_editor, enter_setup, grid_geometry,
-                     head_label, report_session, session_path, setup_lines, side_grid,
+                     apply_key, backdrop, draw_editor, editor_hints, enter_setup,
+                     grid_geometry,
+                     head_label, report_session, session_path, SETUP_HINTS,
+                     SETUP_NAME_HINTS, setup_lines, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
-                     too_small_frame, top_editor_meta, top_layout, top_left_rows,
+                     THEME_HINTS, too_small_frame, top_editor_meta, top_layout, top_left_rows,
                      top_subject)
 from .preview import (example_lines, interface_pair_rows,
                        palette_interface_rows, palette_rows, sample_lines)
 from .render import (CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, chrome,
-                     hint_line, hsv_axis, title, visible)
+                     hsv_axis, title, visible)
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
 #: The blocks a click and an arrow both act on — the two grids. They are one
@@ -132,6 +138,12 @@ TOKEN_SLOTS = {
     "text-disabled": "palette-8",
     "foreground": "foreground",
     "foreground-muted": "palette-8",
+    # The footer bar's own halves: the key wears the brightest half of a
+    # hint line (`palette-11`, what the finger hunts for) and its label the
+    # quiet one (`palette-14`) — the same slots `render.key_hint` paints
+    # inline, as tokens so the widget never falls back to Textual's own.
+    "footer-key": "palette-11",
+    "footer-description": "palette-14",
     "scrollbar": "palette-8",
     "scrollbar-hover": "palette-8",
     "scrollbar-active": "foreground",
@@ -188,8 +200,12 @@ def load_slots() -> dict:
 
 
 def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
-               regions=None, indent="  "):
+               regions=None, indent="  ", footer=True):
     """The frame as a list of rows, captured from `draw_editor`.
+
+    `footer=False` drops the hints tail and the status row: the compositor
+    shows those in the docked `HueFooter` instead, so the widgets stack to
+    exactly the rows above it.
 
     Returns the rows without the trailing-newline decision, which belongs to
     whoever writes them: `draw_editor` keeps that (and withholds the newline
@@ -214,7 +230,8 @@ def frame_rows(fmt, path, state, cols, rows, head=None, hits=None,
     with contextlib.redirect_stdout(buffer):
         draw_editor(fmt, path, state.slots, state.sel, state.undo,
                     state.status, state.mult, head=head, hits=hits,
-                    regions=regions, size=(cols, rows), indent=indent)
+                    regions=regions, size=(cols, rows), indent=indent,
+                    footer=footer)
     text = buffer.getvalue()
     rows = text.split("\r\n")
     if rows and rows[-1] == "":
@@ -258,11 +275,20 @@ class Frame(Widget):
         The import popup's preview and footer repaint on every cursor move
         and toggle; removing and remounting a widget per repaint would churn
         focus and scroll, so the rows (and their parse) are swapped under the
-        mounted widget instead. Editor blocks never call this — their rows
-        are rebuilt by `redraw`.
+        mounted widget instead. Unchanged rows keep their parse: only new
+        strings pay `from_ansi`.
         """
+        old_rows = self.rows_text
+        old_cache = self._cache
+        cache = []
+        for index, row in enumerate(rows_text):
+            if index < len(old_rows) and row == old_rows[index] \
+                    and index < len(old_cache):
+                cache.append(old_cache[index])
+            else:
+                cache.append(Text.from_ansi(row))
         self.rows_text = rows_text
-        self._cache = [Text.from_ansi(row) for row in rows_text]
+        self._cache = cache
         self.styles.height = len(rows_text)
         if width is not None:
             self.styles.width = width
@@ -349,7 +375,7 @@ class Swatches(Frame):
     def action_slot(self, direction: str) -> None:
         app = self.app
         apply_key(direction, app.state)
-        app.redraw()
+        app.request_redraw()
         app.focus_grid(app.state.sel)
 
     def on_click(self, event) -> None:
@@ -454,6 +480,7 @@ class SetupScreen(ModalScreen):
         self._hits: list = []         # their clickable cells, content coords
         self._body = None             # the `Frame` carrying the rows
         self._dialog = None           # the bordered container
+        self._bars = []               # the folded footer rows
 
     def compose(self) -> ComposeResult:
         # Nothing here: the dialog's width comes from the compositor, and
@@ -494,30 +521,43 @@ class SetupScreen(ModalScreen):
         rows = [backdrop(line, st.slots, dlg_w)
                 for line in setup_lines(st.setup or 0, dlg_w, 99,
                                         st.status, st.slots, hits=self._hits,
-                                        name=st.setup_name)]
+                                        name=st.setup_name, footer=False)]
+        folded = _fold_footer(self._pairs(st), st.status, dlg_w)
+        bars = [HueFooter(p, s, name="setup-bar") for p, s in folded]
+        for bar in bars:
+            # In-flow, not docked: the dialog already stacks body over
+            # bar at a fixed height, so a dock would overlay the last row.
+            bar.styles.dock = "none"
         self._dlg_w = dlg_w
-        self._dlg_h = len(rows)
+        self._dlg_h = len(rows) + len(bars)
         body = Frame(rows, dlg_w, name="setup-body")
         body.styles.width = dlg_w
         body.styles.height = len(rows)
         body.styles.padding = 0
         body.styles.margin = 0
-        dialog = Vertical(body, classes="setup-dialog")
+        dialog = Vertical(body, *bars, classes="setup-dialog")
         dialog.styles.width = dlg_w + 2
-        dialog.styles.height = len(rows) + 2
+        dialog.styles.height = self._dlg_h + 2
         dialog.styles.padding = 0
         ox, oy = self._origin()
         dialog.styles.margin = (oy, 0, 0, ox)
         self.mount(dialog)
         self._body = body
         self._dialog = dialog
+        self._bars = bars
+
+    def _pairs(self, st):
+        """The bar's pairs: naming keys while naming, choice keys else."""
+        if st.setup_name is not None:
+            return SETUP_NAME_HINTS
+        return SETUP_HINTS
 
     def _repaint(self) -> None:
         """Repaint the dialog in place: new rows, same widgets.
 
-        The choice never moves rows (only the `>` mark and the status line),
-        so the dialog keeps its size and its margins — a repaint cannot
-        misplace a click.
+        The choice never moves rows (only the `>` mark), so the dialog
+        keeps its size and its margins — a repaint cannot misplace a
+        click. The bar follows the status and the naming keys.
         """
         if self._body is None or not self._body.is_mounted:
             return              # mounts still queued; `_fill` paints them
@@ -526,8 +566,14 @@ class SetupScreen(ModalScreen):
         rows = [backdrop(line, st.slots, self._dlg_w)
                 for line in setup_lines(st.setup or 0, self._dlg_w, 99,
                                         st.status, st.slots, hits=self._hits,
-                                        name=st.setup_name)]
+                                        name=st.setup_name, footer=False)]
+        folded = _fold_footer(self._pairs(st), st.status, self._dlg_w)
+        if len(folded) != len(self._bars):
+            self._fill()       # naming toggled the fold; re-lay
+            return
         self._body.update_rows(rows, self._dlg_w)
+        for bar, (pairs, status) in zip(self._bars, folded):
+            bar.update_footer(pairs, status)
 
     def setup_key(self, key: str) -> None:
         """One keypress while this screen is top, from `Editor.on_key`.
@@ -619,6 +665,7 @@ class ThemesScreen(ModalScreen):
         self._hits: list = []         # their clickable cells, content coords
         self._body = None             # the `Frame` carrying the rows
         self._dialog = None           # the bordered container
+        self._bars = []               # the folded footer rows
 
     def compose(self) -> ComposeResult:
         # Nothing here: the dialog's width comes from the compositor, and
@@ -666,31 +713,38 @@ class ThemesScreen(ModalScreen):
         rows = [backdrop(line, st.slots, dlg_w)
                 for line in theme_lines(names, index, current, dlg_w,
                                          max_h, st.status, st.slots,
-                                         hits=self._hits)]
+                                         hits=self._hits, footer=False)]
+        folded = _fold_footer(THEME_HINTS, st.status, dlg_w)
+        bars = [HueFooter(p, s, name="themes-bar") for p, s in folded]
+        for bar in bars:
+            # In-flow, not docked: the dialog already stacks body over
+            # bar at a fixed height, so a dock would overlay the last row.
+            bar.styles.dock = "none"
         self._dlg_w = dlg_w
-        self._dlg_h = len(rows)
+        self._dlg_h = len(rows) + len(bars)
         body = Frame(rows, dlg_w, name="themes-body")
         body.styles.width = dlg_w
         body.styles.height = len(rows)
         body.styles.padding = 0
         body.styles.margin = 0
-        dialog = Vertical(body, classes="themes-dialog")
+        dialog = Vertical(body, *bars, classes="themes-dialog")
         dialog.styles.width = dlg_w + 2
-        dialog.styles.height = len(rows) + 2
+        dialog.styles.height = self._dlg_h + 2
         dialog.styles.padding = 0
         ox, oy = self._origin()
         dialog.styles.margin = (oy, 0, 0, ox)
         self.mount(dialog)
         self._body = body
         self._dialog = dialog
+        self._bars = bars
 
     def _repaint(self) -> None:
         """Repaint the dialog in place: new rows, same widgets.
 
         The list window moves with the selection (`theme_lines` owns it),
         so the dialog keeps its width and its budget — only the height
-        follows the rows (a status line arriving or leaving), with the
-        margins re-centered so the click map never drifts.
+        follows the list rows, with the margins re-centered so the click
+        map never drifts. The bar follows the status.
         """
         if self._body is None or not self._body.is_mounted:
             return              # mounts still queued; `_fill` paints them
@@ -704,14 +758,14 @@ class ThemesScreen(ModalScreen):
                 for line in theme_lines(names, index, current,
                                          self._dlg_w, self._max_h,
                                          st.status, st.slots,
-                                         hits=self._hits)]
+                                         hits=self._hits, footer=False)]
+        folded = _fold_footer(THEME_HINTS, st.status, self._dlg_w)
+        if len(rows) + len(folded) != self._dlg_h:
+            self._fill()       # rows or fold moved; re-lay
+            return
         self._body.update_rows(rows, self._dlg_w)
-        if len(rows) != self._dlg_h:
-            self._dlg_h = len(rows)
-            if self._dialog is not None:
-                self._dialog.styles.height = len(rows) + 2
-                ox, oy = self._origin()
-                self._dialog.styles.margin = (oy, 0, 0, ox)
+        for bar, (pairs, status) in zip(self._bars, folded):
+            bar.update_footer(pairs, status)
 
     def themes_key(self, key: str) -> None:
         """One keypress while this screen is top, from `Editor.on_key`.
@@ -1100,6 +1154,152 @@ class ImportButton(Button):
                          name="import", **kwargs)
 
 
+class HueFooterKey(FooterKey):
+    """One hint pair in the footer: bright key, quiet label, click-proof.
+
+    Stock `FooterKey` clicks simulate the key through the app — in a frame
+    where every key moves colours, a click on `w` must not adjust hue. The
+    footer is chrome: clicks stop here and select nothing, the same rule
+    the `Frame` footer rows always kept (§4.3.1). Never focusable, so the
+    arrows stay on the grids and tab-trapping is impossible.
+    """
+
+    def on_mouse_down(self, event) -> None:
+        event.stop()
+
+
+class HueStatusLabel(FooterLabel):
+    """The status half of the footer: bold foreground, never selectable.
+
+    The old status `Frame` refused text selection (`ALLOW_SELECT = False`)
+    so a drag starting on the status never began one; the label keeps it.
+    """
+
+    ALLOW_SELECT = False
+
+
+class HueFooter(Footer):
+    """One docked row for hints plus status, fed from one source.
+
+    The pairs come from `editor.editor_hints` — the same list `draw_editor`
+    folds into tail rows headless — and the status is `state.status`, so the
+    bar and the frame cannot disagree about what the footer says. Height 1:
+    overflow scrolls horizontally (bars zero-size) instead of folding.
+    Dialogs stack two one-row bars (pairs split balanced, status on the
+    second) for the two-row foot. Stock binding keys never leak in: `compose` yields only what
+    `update_footer` stored, and every app/screen binding is `show=False`.
+    Theme-closed like every frame: `$background`/`$foreground` plus the two
+    footer halves (`palette-11`/`palette-14`, what `key_hint` paints) — no
+    Textual blue, no hover wash, no focus tint.
+    """
+
+    DEFAULT_CSS = """
+    HueFooter {
+        dock: bottom;
+        height: 1;
+        background: $background;
+        color: $foreground;
+        padding: 0;
+        margin: 0;
+        scrollbar-size: 0 0;
+    }
+    HueFooter HueFooterKey {
+        width: auto;
+        height: 1;
+        background: $background;
+        color: $foreground;
+        margin: 0 2 0 0;
+        padding: 0;
+    }
+    HueFooterKey .footer-key--key {
+        color: $footer-key;
+        background: $background;
+        text-style: bold;
+        padding: 0;
+    }
+    HueFooterKey .footer-key--description {
+        color: $footer-description;
+        background: $background;
+        padding: 0 0 0 1;
+    }
+    HueFooterKey:hover {
+        background: $background;
+        color: $foreground;
+    }
+    HueFooter .hue-status {
+        background: $background;
+        color: $foreground;
+        text-style: bold;
+        margin: 0 0 0 2;
+    }
+    HueFooter .hue-hints {
+        width: auto;
+        height: 1;
+        background: $background;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def __init__(self, pairs=(), status="", **kwargs):
+        super().__init__(show_command_palette=False, **kwargs)
+        self._pairs = [(k, d) for k, d in pairs]
+        self._status = status or ""
+        self._keys: list = []
+        self._hints_box = None
+        self._status_label = None
+        self._composed = False
+
+    def compose(self) -> ComposeResult:
+        # Only what `update_footer` stored — never the stock binding keys.
+        # The keys ride in a non-scrolling group (the bar itself scrolls).
+        self._keys = [HueFooterKey(k, k, d, "")
+                      for k, d in self._pairs]
+        self._hints_box = HorizontalGroup(*self._keys,
+                                          classes="hue-hints")
+        self._status_label = HueStatusLabel(self._status,
+                                            classes="hue-status")
+        yield self._hints_box
+        yield self._status_label
+        self._composed = True
+
+    def update_footer(self, pairs, status) -> None:
+        """New hints/status: mutate in place, mount only what grew.
+
+        Rebuilding the bar per redraw would churn focus and scroll; the
+        pairs change only with step size and undo depth, the status on
+        save/import — so equal content is a no-op and the mounted keys
+        are reused, their text swapped under them. Before the first mount
+        there is nothing to sync into: `compose` builds from storage.
+        """
+        pairs = [(k, d) for k, d in pairs]
+        status = status or ""
+        if pairs == self._pairs and status == self._status:
+            return
+        self._pairs, self._status = pairs, status
+        if not self.is_mounted or not self._composed:
+            return
+        keys = self._keys
+        box = self._hints_box
+        for key in keys[len(pairs):]:
+            key.remove()
+        del keys[len(pairs):]
+        for index, (k, d) in enumerate(pairs):
+            if index < len(keys):
+                key = keys[index]
+                if (key.key, key.description) != (k, d):
+                    key.key = k
+                    key.key_display = k
+                    key.description = d
+                    key.refresh()
+            elif box is not None:
+                key = HueFooterKey(k, k, d, "")
+                keys.append(key)
+                box.mount(key)
+        if self._status_label is not None:
+            self._status_label.update(status)
+
+
 class ImportFooterButton(Button):
     """The popup's confirm/cancel: click only, never focus (003 spec §4.7).
 
@@ -1256,11 +1456,35 @@ IMPORT_LEFT_W = 34
 IMPORT_WIDGET_KEYS = ("up", "down", "home", "end", "pagedown",
                       "pageup", "space")
 
-#: The popup footer's hint pairs, painted through `hint_line` like every
+#: The popup footer's hint pairs, shown in the dialog's bar like every
 #: footer huebox draws.
 IMPORT_HINTS = [("space", "toggle"), ("a", "all visible"),
                 ("n", "clear"), ("arrows", "move"),
                 ("Enter", "import"), ("Esc", "cancel")]
+
+
+def _fold_footer(pairs, status, width):
+    """One row if it fits, else two rows folded by width.
+
+    The first row takes pairs while they fit; the rest ride the second,
+    with the status last — never dropped, its overflow scrolling in the
+    bar instead of clipping. Returns `[(pairs, status-or-None), ...]`.
+    """
+    row0, row1, taken = [], [], 0
+    for key, what in pairs:
+        wide = len(key) + 1 + len(what)
+        if taken == 0 or taken + 2 + wide <= width:
+            row0.append((key, what))
+            taken += wide + (2 if taken else 0)
+        else:
+            row1.append((key, what))
+    if status:
+        if not row1 and (taken == 0 or taken + 2 + len(status) <= width):
+            return [(row0, status)]
+        return [(row0, None), (row1, status)]
+    if not row1:
+        return [(row0, None)]
+    return [(row0, None), (row1, None)]
 
 
 class ImportList(SelectionList):
@@ -1325,7 +1549,8 @@ def import_preview_rows(name, slots, width):
 
 
 class ImportScreen(ModalScreen):
-    """The theme-import popup: list left, preview right, confirm footer.
+    """The theme-import popup as a centered dialog: list left, preview right,
+    confirm footer.
 
     003 spec §§4–5, P0 verdict followed without re-litigating: one
     `ModalScreen`, pushed with `push_screen` and closed with
@@ -1336,7 +1561,9 @@ class ImportScreen(ModalScreen):
     `expanded`; empty providers are omitted, never a `Name (0)` group)
     each holding one `ImportList` of `(display, display)` rows, the preview column
     (`import_preview_rows` in a `Frame` carrier), and a footer of hints plus
-    a live count plus confirm/cancel buttons.
+    a live count plus confirm/cancel buttons. Each list is exact-fit (one
+    line per theme, its own scrollbars off), so only the outer list column
+    ever scrolls — one scrollbar for the whole popup, following the cursor.
 
     The state (`import_state.ImportState`) owns the behaviour — cursor over
     open groups, expanded set, toggled set, confirm mapping — and this screen
@@ -1372,10 +1599,34 @@ class ImportScreen(ModalScreen):
     # the box marks the toggled set alone — muted until picked, bright once
     # picked — and the cursor never repaints it: a cursor row keeps the muted
     # box unless toggled, the selection-pair wash carries the cursor.
+    #: The dialog's content width: list column plus preview column plus
+    #: footer inside one dialog. Bigger than Themes' 44; clamped to narrow
+    #: screens in `_fill` — the same clamp as `SetupScreen`, so all popups
+    #: read as one kind. At max width the preview takes 66 columns, where
+    #: the palette shares two lines with the interface instead of stacking.
+    DIALOG_W = 100
+
+    #: The dialog content's tallest honest height: body plus footer inside
+    #: one dialog. Clamped to short screens in `_fill`.
+    DIALOG_MAX_H = 28
+
+    #: The dialog content's narrowest honest width: below this even the
+    #: choice rows clip, so the dialog never shrinks past it.
+    DIALOG_MIN_W = 24
+
     DEFAULT_CSS = """
     ImportScreen {
+        /* No background of its own: the modal dim (`$background` at 60%)
+        stays, so the editor frame shows through behind the dialog.
+        Painting this opaque would hide the session the list belongs
+        to — the same rule as `SetupScreen` / `ThemesScreen`. */
+        padding: 0;
+    }
+    ImportScreen .import-dialog {
         background: $background;
-        overflow: hidden;
+        border: round $border;
+        padding: 0;
+        margin: 0;
     }
     ImportScreen #import-body {
         height: 1fr;
@@ -1408,6 +1659,19 @@ class ImportScreen(ModalScreen):
         border: none;
         padding: 0;
         margin: 0;
+        /* One scrollbar for the whole popup: each list is exact-fit (one
+        line per theme, sized in `_fill`), so only the outer list column
+        ever scrolls. Zero-size bars rather than `show_*` flags — the
+        compositor recomputes those from overflow on every layout. */
+        scrollbar-size: 0 0;
+    }
+    ImportScreen SelectionList:focus {
+        /* Above `OptionList:focus` (same rule twice over): no focus ring
+        around the list — the dialog already has the border, and a ring
+        would steal two rows from the exact-fit height. No tint either:
+        the cursor reads through the selection-pair wash alone. */
+        border: none;
+        background-tint: transparent;
     }
     ImportScreen SelectionList > .selection-list--button {
         background: $background;
@@ -1426,6 +1690,21 @@ class ImportScreen(ModalScreen):
         background: $screen-selection-background;
         color: $screen-selection-foreground;
         text-style: bold;
+    }
+    /* One scrollbar means exact geometry: a group is its title plus its
+    list, nothing else. Stock `Collapsible` wears a top border and a
+    bottom padding (two phantom rows per group the cursor math never
+    counted, so the last rows scrolled under the footer) and a
+    focus-within wash the theme never painted — all off. */
+    ImportScreen Collapsible {
+        background: $background;
+        border: none;
+        padding: 0;
+        margin: 0;
+    }
+    ImportScreen Collapsible:focus-within {
+        background: $background;
+        background-tint: transparent;
     }
     """
 
@@ -1448,8 +1727,11 @@ class ImportScreen(ModalScreen):
         self._left = None
         self._right = None
         self._footer = None
-        self._hints_frame = None
-        self._count_frame = None
+        self._dialog = None         # the bordered container
+        self._dlg_w = 0               # content width from the last `_fill`
+        self._dlg_h = 0               # content height from the last `_fill`
+        self._left_w = IMPORT_LEFT_W  # list-column width from `_fill`
+        self._bars = []               # the folded footer rows
         self._preview_pane = None
         self._full = True               # False while the too-small line
                                         # stands in for the popup
@@ -1486,13 +1768,29 @@ class ImportScreen(ModalScreen):
         """
         return getattr(getattr(self.app, "state", None), "slots", {})
 
-    def _fill(self) -> None:
-        """Mount the popup at the current size: full, or the too-small line.
+    def _origin(self):
+        """The dialog's top-left, in screen coords.
 
-        Below `MIN_COLS`×`MIN_ROWS` the popup keeps the editor's own fallback
+        The dialog is the screen's only child and carries its centering as
+        explicit margins (set in `_fill`), so this recomputes to exactly
+        where it was mounted — the click map never drifts from the paint.
+        Clicks themselves stay native: lists, titles and buttons answer
+        directly, so there is no hit map to translate.
+        """
+        width, height = self.size
+        return ((width - (self._dlg_w + 2)) // 2,
+                (height - (self._dlg_h + 2)) // 2)
+
+    def _fill(self) -> None:
+        """Mount the dialog at the current size, centered with margins.
+
+        Below `MIN_COLS`x`MIN_ROWS` the popup keeps the editor's own fallback
         — the `terminal too small` line instead of a squeezed modal, same
-        floor, no second constant. Widget state is never carried: lists,
-        collapsed flags and selections re-sync from the state afterwards.
+        floor, no second constant. Otherwise one centered bordered dialog
+        over the dimmed editor (the screen keeps the modal dim, never an
+        opaque fill), same kind as `SetupScreen` / `ThemesScreen`.
+        Widget state is never carried: lists, collapsed flags and selections
+        re-sync from the state afterwards.
         """
         for child in list(self.children):
             child.remove()
@@ -1500,7 +1798,8 @@ class ImportScreen(ModalScreen):
         self._collapsibles = {}
         self._echo = {}
         self._left = self._right = self._footer = None
-        self._hints_frame = self._count_frame = self._preview_pane = None
+        self._dialog = None
+        self._bars = []
         width, height = self.size
         if width < MIN_COLS or height < MIN_ROWS:
             self._full = False
@@ -1511,6 +1810,13 @@ class ImportScreen(ModalScreen):
             self.mount(small)
             return
         self._full = True
+        dlg_w = max(self.DIALOG_MIN_W,
+                    min(self.DIALOG_W, width - 2))
+        dlg_h = min(self.DIALOG_MAX_H, height - 2)
+        self._dlg_w = dlg_w
+        self._dlg_h = dlg_h
+        left_w = min(IMPORT_LEFT_W, dlg_w - 8)
+        self._left_w = left_w
         st = self._istate
         slots = self._editor_slots()
         groups = []
@@ -1522,6 +1828,10 @@ class ImportScreen(ModalScreen):
             lst = ImportList(*[(st.display[tid], st.display[tid])
                                for tid in ids],
                              id=f"import-list-{provider}")
+            # Exact-fit, never internally scrolled: one line per theme, so
+            # the list is exactly its rows tall and only the outer column
+            # scrolls (its bars are zero-size in the CSS above).
+            lst.styles.height = len(ids)
             self._lists[provider] = lst
             coll = Collapsible(lst, title=title_text,
                                collapsed=(provider not in st.expanded),
@@ -1535,24 +1845,34 @@ class ImportScreen(ModalScreen):
             groups = [Static(Text.from_ansi(
                 chrome("no themes found", CHROME_MUTED, slots)))]
         left = VerticalScroll(*groups, id="import-left")
+        left.styles.width = left_w
         right = Vertical(id="import-right")
         body = Horizontal(left, right, id="import-body")
-        hints = Frame(self._hint_rows(width), width, name="import-hints")
-        hints.styles.width = width
-        hints.styles.height = len(hints.rows_text)
-        count = Frame(self._count_rows(width), width, name="import-count")
-        count.styles.width = width
-        count.styles.height = 1
+        folded = _fold_footer(IMPORT_HINTS, self._count_text(), dlg_w)
+        bars = [HueFooter(p, s, name="import-bar")
+                for p, s in folded]
+        for bar in bars:
+            # In-flow, not docked: the dialog already stacks body over
+            # footer at a fixed height, so a dock would overlay the
+            # list's last row.
+            bar.styles.dock = "none"
         confirm = ImportFooterButton("Import", id="import-confirm")
         cancel = ImportFooterButton("Cancel", id="import-cancel")
         buttons = Horizontal(confirm, cancel, id="import-buttons")
-        footer = Vertical(hints, count, buttons, id="import-footer")
+        footer = Vertical(*bars, buttons, id="import-footer")
+        dialog = Vertical(body, footer, classes="import-dialog")
+        dialog.styles.width = dlg_w + 2
+        dialog.styles.height = dlg_h + 2
+        dialog.styles.padding = 0
+        ox, oy = self._origin()
+        dialog.styles.margin = (oy, 0, 0, ox)
         # One mount call: everything above is constructor-composed (a widget
         # accepts `mount` only once it is mounted itself, so nesting through
         # constructors is the only synchronous shape).
-        self.mount(body, footer)
+        self.mount(dialog)
         self._left, self._right, self._footer = left, right, footer
-        self._hints_frame, self._count_frame = hints, count
+        self._dialog = dialog
+        self._bars = bars
         self._preview_pane = None
 
     def _tree_mounted(self) -> bool:
@@ -1562,7 +1882,12 @@ class ImportScreen(ModalScreen):
                 and self._right.is_mounted)
 
     def _relayout(self) -> None:
-        """Re-evaluate the size after a resize: swap or repaint."""
+        """Re-evaluate the size after a resize: re-lay the dialog.
+
+        The rows are fixed-width, but the clamp and the centering are
+        not: re-lay rather than repaint, like `SetupScreen` / `ThemesScreen`.
+        State survives in `import_state`; widgets re-sync afterwards.
+        """
         if not self.is_running:
             return
         width, height = self.size
@@ -1571,36 +1896,35 @@ class ImportScreen(ModalScreen):
             self._fill()
             self._sync_all()
         elif fits and self._tree_mounted():
-            self._repaint_preview()
-            self._refresh_footer()
+            self._fill()
+            self._sync_all()
 
-    # -- rows ----------------------------------------------------------
+    # -- bar -----------------------------------------------------------
 
-    def _hint_rows(self, width):
-        slots = self._editor_slots()
-        return ["  " + line
-                for line in hint_line(slots, IMPORT_HINTS, width - 2)]
+    def _count_text(self):
+        """The live count: `N selected — Enter imports, Esc cancels`.
 
-    def _count_rows(self, width):
-        """The live count: `N selected — Enter imports, Esc cancels`."""
+        Plain text for the bar (it paints itself); the `nothing selected`
+        note rides along the same way it did on the footer row.
+        """
         st = self._istate
-        slots = self._editor_slots()
-        line = (chrome(f"{len(st.selected)} selected", "foreground",
-                        slots, bold=True)
-                + chrome(" — Enter imports, Esc cancels",
-                         CHROME_MUTED, slots))
+        line = (f"{len(st.selected)} selected"
+                " — Enter imports, Esc cancels")
         if st.note:
-            line += "  " + chrome(st.note, CHROME_MUTED, slots)
-        return [backdrop(line, slots, width)]
+            line += f"  {st.note}"
+        return line
 
     def _refresh_footer(self) -> None:
         if self._footer is None or not self._full:
             return
-        width, _ = self.size
-        if getattr(self, "_hints_frame", None) is not None:
-            self._hints_frame.update_rows(self._hint_rows(width), width)
-        if getattr(self, "_count_frame", None) is not None:
-            self._count_frame.update_rows(self._count_rows(width), width)
+        folded = _fold_footer(IMPORT_HINTS, self._count_text(),
+                              self._dlg_w or self.size.width)
+        if len(folded) != len(getattr(self, "_bars", [])):
+            self._fill()       # the fold gained or lost a row; re-lay
+            self._sync_all()
+            return
+        for bar, (pairs, status) in zip(self._bars, folded):
+            bar.update_footer(pairs, status)
 
     def _repaint_preview(self) -> None:
         """Repaint the preview from the cursor theme's slots (read-once).
@@ -1618,7 +1942,9 @@ class ImportScreen(ModalScreen):
         tid = import_state.cursor_id(st)
         slots = import_state.cursor_slots(st) if tid is not None else {}
         name = st.display.get(tid, "") if tid is not None else ""
-        width = max(8, self.size.width - IMPORT_LEFT_W)
+        left_w = getattr(self, "_left_w", IMPORT_LEFT_W)
+        dlg_w = getattr(self, "_dlg_w", 0) or self.size.width
+        width = max(8, dlg_w - left_w)
         rows = import_preview_rows(name, slots, width)
         if getattr(self, "_preview_pane", None) is None:
             pane = Frame(rows, width, name="import-preview")
@@ -1697,11 +2023,43 @@ class ImportScreen(ModalScreen):
                 target = next(iter(self._lists.values()), None)
             if target is not None:
                 target.focus()
-                if target.highlighted is not None:
-                    target.scroll_to_highlight()
         finally:
             self._syncing = False
+        self._follow_cursor()
         self._repaint_preview()
+
+    def _follow_cursor(self) -> None:
+        """Keep the cursor row visible in the outer list column.
+
+        Every provider list is exact-fit (one line per theme, scrollbars
+        off), so only the outer `VerticalScroll` ever scrolls. This moves
+        it minimally to the cursor row: the group titles plus the open
+        rows above it. Nowhere (closed or empty group) holds still.
+        """
+        if self._left is None or not self._full:
+            return
+        if not self._left.is_mounted:
+            return              # mounts still queued; `_sync_all` retries
+        st = self._istate
+        provider, index = st.cursor
+        ids = st.theme_ids.get(provider, [])
+        if provider not in st.expanded or not 0 <= index < len(ids):
+            return
+        y = 0
+        found = False
+        for name in st.provider_order:
+            names = st.theme_ids.get(name, [])
+            if not names:
+                continue      # empty providers never appear as groups
+            if name == provider:
+                y += 1 + index  # its title plus the rows above
+                found = True
+                break
+            y += 1 + (len(names) if name in st.expanded else 0)
+        if not found:
+            return
+        self._left.scroll_to_region(Region(0, y, max(1, self._left_w), 1),
+                                    animate=False)
 
     # -- keys ----------------------------------------------------------
 
@@ -1772,6 +2130,7 @@ class ImportScreen(ModalScreen):
         if (provider, highlighted) == (st.cursor[0], st.cursor[1]):
             return
         st.cursor = (provider, highlighted)
+        self._follow_cursor()
         self._repaint_preview()
 
     def on_selection_list_selected_changed(self, event) -> None:
@@ -1963,6 +2322,7 @@ class Editor(App):
         self.import_result = None     # the last confirm's plan payload
         self.import_notes = []        # per-theme failures, for P5's report
         self._import_state = None     # the open popup's state, if any
+        self._footer = None           # the docked hints/status bar
         # `None` means "derive it from the session"; `""` means "none", which is
         # how the harness pins the header to the reference's arguments.
         self.head_override = head_override
@@ -1977,6 +2337,22 @@ class Editor(App):
         # (panels off) means identity: `slot_at` on the event as-is.
         self._panels_on = False
         self._panel_geom: dict = {}
+        self._side_on = False
+        self._side_geom: dict = {}
+        # Fast path (§1): the structural key of the mounted tree plus the
+        # selection/picker it was focused for. An adjust-only redraw reuses
+        # the widgets in place (`Frame.update_rows`) instead of remove+mount,
+        # so hold-to-repeat never shows an empty frame; focus/scroll is
+        # skipped when neither moved.
+        self._mount_key = None
+        self._mount_mode = None
+        self._fast_reused = False
+        self._last_sel = None
+        self._last_picker_up = None
+        # Coalesced repaints: holding a key fires repeats faster than the
+        # compositor paints, so key handlers schedule via `request_redraw`
+        # and repeats collapse to one redraw per frame.
+        self._redraw_scheduled = False
         # The live collapsibles, all open by default (§14.1): the set of
         # block names standing collapsed. Compositor state, not buffer state
         # — the frame is always drawn whole and the collapsed rows are hidden,
@@ -2055,6 +2431,177 @@ class Editor(App):
             return self.head_override or None
         return head_label(state)
 
+    def _frames_by_name(self):
+        """Mounted `Frame` widgets by name, or `{}` when headless.
+
+        Live blocks share their name between the `Live` wrapper and its inner
+        `Frame`; only the `Frame` is returned, since only it paints rows.
+        Panels, buttons and layout boxes are never `Frame`s, so they never
+        appear here. A missing entry means the tree is not what the last
+        mount left behind, and the caller falls back to remove+mount.
+        """
+        if not self.is_running:
+            return {}
+        try:
+            surface = self._editor_screen()
+            found = {}
+            for widget in surface.query(Frame):
+                name = getattr(widget, "name", None)
+                if name and name not in found:
+                    found[name] = widget
+            return found
+        except Exception:
+            return {}
+
+    def _bare_mode(self, named) -> str:
+        """`"collapsible"` when live blocks ride in `Live`s, else `"bare"`."""
+        if (collapsible_enabled()
+                and any(name in LIVE_BLOCKS for name, _, _ in named)):
+            return "collapsible"
+        return "bare"
+
+    def _bare_key(self, layout_w, named):
+        mode = self._bare_mode(named)
+        sig = tuple((name, first, count) for name, first, count in named)
+        if mode == "collapsible":
+            return (mode, layout_w, sig, tuple(sorted(self._collapsed)))
+        return (mode, layout_w, sig)
+
+    def _try_fast_bare(self, width, rows_text, named) -> bool:
+        """Repaint the bare stack in place, or `False` to remount.
+
+        Succeeds only when the mounted tree has the same blocks at the same
+        sizes: same mode, same width, same `(name, first, count)` map and
+        same collapsed set. Every block keeps its widget; only its rows are
+        swapped via `update_rows`, so focus never leaves and no empty frame
+        is ever shown. Live blocks update their inner `Frame` (the title
+        row stays the `Live`'s own) with the body slice, mirroring mount.
+        """
+        if not self.is_running:
+            return False
+        if self._panels_on or getattr(self, "_side_on", False):
+            return False
+        if self._bare_mode(named) != getattr(self, "_mount_mode", None):
+            # First paint (`None`) or a mode change: mount, don't patch.
+            if getattr(self, "_mount_mode", None) is not None:
+                return False
+            # `None` still needs the widget-exists check below; fall through
+            # only when there is already something to reuse.
+            return False
+        if self._mount_key != self._bare_key(width, named):
+            return False
+        frames = self._frames_by_name()
+        by_name = {name: (first, count) for name, first, count in named}
+        # Every expected block must already be mounted, with the same row
+        # count it was mounted with; anything missing or resized remounts.
+        for name, first, count in named:
+            widget = frames.get(name)
+            if widget is None:
+                return False
+            if name in LIVE_BLOCKS and self._bare_mode(named) == "collapsible":
+                body = rows_text[first + 1:first + count]
+                if len(widget.rows_text) != len(body):
+                    return False
+            else:
+                if len(widget.rows_text) != count:
+                    return False
+        for name, first, count in named:
+            widget = frames[name]
+            if name in LIVE_BLOCKS and self._bare_mode(named) == "collapsible":
+                body = rows_text[first + 1:first + count]
+                widget.update_rows(body, width)
+            else:
+                widget.update_rows(rows_text[first:first + count], width)
+        return True
+
+    def _panels_key(self, width, named, pad, top_pad, top_screen,
+                      header_h, controls_h, examples_h, has_examples,
+                      top_has_row, top_shares=None):
+        sig = tuple((name, first, count) for name, first, count in named)
+        return ("panels", width, sig, pad, top_pad, top_screen,
+                header_h, controls_h, examples_h, has_examples,
+                top_has_row, top_shares, tuple(sorted(self._collapsed)))
+
+    def _side_key(self, width, height, named, right_regions, pad, top_pad,
+                    top_screen, content_h, left_w, right_inner, narrow,
+                    top_has_row, top_shares=None):
+        sig = tuple((name, first, count) for name, first, count in named)
+        rsig = tuple((name, first, count)
+                 for name, first, count in right_regions)
+        return ("side", width, height, sig, rsig, pad, top_pad,
+                top_screen, content_h, left_w, right_inner, narrow,
+                top_has_row, top_shares, tuple(sorted(self._collapsed)))
+
+    def _update_top_frames(self, frames, top_row) -> bool:
+        """Copy a fresh top's rows into the mounted top, or `False`."""
+        try:
+            fresh = getattr(top_row, "_top_frames", None)
+            if fresh is None:
+                # Older caller without the rider (tests, bare header): walk
+                # `children`, which exists from construction unlike `query`.
+                fresh = {}
+                stack = [top_row]
+                while stack:
+                    widget = stack.pop()
+                    name = getattr(widget, "name", None)
+                    if isinstance(widget, Frame) and name and name not in fresh:
+                        fresh[name] = widget
+                    for child in getattr(widget, "children", []):
+                        stack.append(child)
+        except Exception:
+            return False
+        for name in ("header", "info", "editor-hsv"):
+            old = frames.get(name)
+            new = fresh.get(name)
+            if new is None:
+                # Absent on either side is fine when both sides agree: a bare
+                # header has no `info`/`editor-hsv`, a compositor top has all
+                # three. A mismatch (one side has it, the other does not) is
+                # a structural change the key should already have caught.
+                if old is not None:
+                    return False
+                continue
+            if old is None:
+                return False
+            if len(old.rows_text) != len(new.rows_text):
+                return False
+        for name in ("header", "info", "editor-hsv"):
+            if name in fresh and name in frames:
+                new = fresh[name]
+                # Widths never change under a matching key; keep the mounted
+                # width and only swap rows (row counts already checked equal).
+                # Heights are kept too: the info frame mounts one row shorter
+                # than its rows (`top_screen-3` over `top_screen-2`) to leave
+                # its column's last three rows for the two buttons, and
+                # `update_rows` would otherwise grow it into them.
+                old_h = frames[name].styles.height
+                frames[name].update_rows(list(new.rows_text), None)
+                frames[name].styles.height = old_h
+        # Bare-stack top (`header`/`selected` full-width chrome) has no
+        # `info`/`editor-hsv`; its rows arrive via the generic chrome path.
+        return True
+
+    def request_redraw(self) -> None:
+        """Schedule one redraw for the next refresh, coalescing repeats.
+
+        Holding an adjust key fires repeats faster than the compositor
+        paints; each ran a full `redraw` synchronously, so N repeats cost
+        N frame recomputes and only the last was ever seen. `apply_key`
+        still runs per press (cheap state), but the repaint collapses to
+        one per frame. Headless sessions draw inline, as before.
+        """
+        if getattr(self, "_redraw_scheduled", False):
+            return
+        if not self.is_running:
+            self.redraw()
+            return
+        self._redraw_scheduled = True
+        self.call_after_refresh(self._flush_redraw)
+
+    def _flush_redraw(self) -> None:
+        self._redraw_scheduled = False
+        self.redraw()
+
     def redraw(self) -> None:
         """Re-derive the frame at the current size and hand it to the widget."""
         width, height = self.size
@@ -2067,9 +2614,22 @@ class Editor(App):
         # past the layout read as fill (§4.3.2).
         layout_w, layout_h = layout_size(width, height)
         self._layout_w, self._layout_h = layout_w, layout_h
+        # The docked footer owns the bottom row: the frame lays out the
+        # rows above it (`footer=False` drops the tail it replaces). The
+        # floor keeps its single-screen behavior — below one row past the
+        # minimum there is no row for the bar, so the fallback (or the
+        # frame alone) owns the whole window instead, footer hidden.
+        show_footer = (width >= MIN_COLS and height >= MIN_ROWS + 1)
+        frame_h = layout_h - 1 if show_footer else layout_h
         # §15 — one geometry per frame, read by the frame and by the arrows,
         # which move through the grid the user can see (§4.3)
         state.grid = grid_geometry(layout_w)
+        # Fast-path bookkeeping (§1): the previous tree's key/mode plus the
+        # selection/picker it was focused for. Adjust-only keys keep every
+        # size, so the next redraw can reuse widgets and skip focus/scroll.
+        prev_sel = getattr(self, "_last_sel", None)
+        prev_picker_up = getattr(self, "_last_picker_up", None)
+        self._fast_reused = False
 
         self.hits = []
         self.regions = []
@@ -2084,7 +2644,7 @@ class Editor(App):
         if width < MIN_COLS or height < MIN_ROWS:
             rows_text = [too_small_frame(width)]
         elif (panels_enabled() and layout_w >= SIDE_THIN_MIN_W
-                and self._try_side(layout_w, layout_h, state)):
+                and self._try_side(layout_w, frame_h, state)):
             # Side-by-side mounted everything: chrome above, two panels
             # below. Both locals are what the debug line counts.
             named = list(self.regions)
@@ -2115,12 +2675,12 @@ class Editor(App):
             # panel needs the draw floor plus its own air (`PANEL_PAD_MIN_W`),
             # so below it only the unpadded layout is attempted.
             rows_text = None
-            lay = self._lay_stacked(layout_w, layout_h, state, pad=0)
+            lay = self._lay_stacked(layout_w, frame_h, state, pad=0)
             if lay is not None:
                 choice = lay
                 if (panel_pad_enabled()
                         and layout_w >= PANEL_PAD_MIN_W):
-                    airy = self._lay_stacked(layout_w, layout_h, state,
+                    airy = self._lay_stacked(layout_w, frame_h, state,
                                              pad=PANEL_PAD)
                     if (airy is not None
                             and self._pad_keeps_content(lay, airy)):
@@ -2138,25 +2698,18 @@ class Editor(App):
                 # the inner width, which is the inline loop's own rule.
                 state.grid = grid_geometry(layout_w - 2)
                 rows_text = frame_rows(self.fmt, session_path(state), state,
-                                       layout_w, layout_h,
+                                       layout_w, frame_h,
                                        head=self.head_for(state),
-                                       hits=self.hits, regions=self.regions)
+                                       hits=self.hits, regions=self.regions,
+                                       footer=False)
         else:
             rows_text = frame_rows(self.fmt, session_path(state), state,
-                                   layout_w, layout_h,
+                                   layout_w, frame_h,
                                    head=self.head_for(state),
-                                   hits=self.hits, regions=self.regions)
+                                   hits=self.hits, regions=self.regions,
+                                   footer=False)
         if not self._panels_on and not self._side_on:
             self.rows_text = rows_text
-            surface = self._editor_screen()
-            for child in list(surface.query(Panel)):
-                child.remove()
-            for child in list(surface.query(Frame)):
-                child.remove()
-            for child in list(surface.query(Live)):
-                child.remove()
-            for child in list(surface.query(Horizontal)):
-                child.remove()
             # §5.6 — one widget per block of the frame. The blocks are the rows
             # `draw_editor` reported, in order and without gaps, so the widgets stack
             # to exactly the frame's height and not one row more: a stack taller than
@@ -2174,23 +2727,49 @@ class Editor(App):
             # popup (ThemesScreen) over it — so there is no picker branch here.
             named = (list(self.regions)
                      or [("frame", 0, len(rows_text))])
-            if (collapsible_enabled()
-                    and not (width < MIN_COLS or height < MIN_ROWS)
-                    and any(entry[0] in LIVE_BLOCKS for entry in named)):
-                self._mount_collapsible(layout_w, rows_text, named)
+            if self._try_fast_bare(layout_w, rows_text, named):
+                # Same blocks at the same sizes: rows swapped in place, no
+                # empty frame, focus never left. The key already matches, so
+                # only the reuse flag moves.
+                self._fast_reused = True
             else:
-                self._mount_bare(layout_w, rows_text, named)
+                surface = self._editor_screen()
+                for child in list(surface.query(Panel)):
+                    child.remove()
+                for child in list(surface.query(Frame)):
+                    child.remove()
+                for child in list(surface.query(Live)):
+                    child.remove()
+                for child in list(surface.query(Horizontal)):
+                    child.remove()
+                if (collapsible_enabled()
+                        and not (width < MIN_COLS or height < MIN_ROWS)
+                        and any(entry[0] in LIVE_BLOCKS for entry in named)):
+                    self._mount_collapsible(layout_w, rows_text, named)
+                else:
+                    self._mount_bare(layout_w, rows_text, named)
         # `mount` is a request, not a fact: the widgets do not exist yet, so
         # focus has to wait for the next refresh. Done inline it would query an
         # empty tree and quietly leave the focus wherever it was — which, with
         # seven blocks each asking for it on mount, was the last block in the
         # frame. Every block used to steal focus in `on_mount`; now only the two
         # grids can take it, and only the one holding the selection does.
-        settle = partial(self.place_focus, picker is not None, state.sel)
-        if self.is_running:
-            self.call_after_refresh(settle)
-        else:
-            settle()
+        # Fast path (§1): the tree never emptied and focus never left, so
+        # when neither the selection nor the picker moved there is no focus
+        # or scroll work to do — scheduling it would churn `scroll_home` and
+        # a redundant `focus` under every key repeat.
+        picker_up = picker is not None
+        cur_sel = state.sel
+        self._last_sel = cur_sel
+        self._last_picker_up = picker_up
+        self._sync_footer(show_footer)
+        if not (self._fast_reused and cur_sel == prev_sel
+                and picker_up == prev_picker_up):
+            settle = partial(self.place_focus, picker_up, cur_sel)
+            if self.is_running:
+                self.call_after_refresh(settle)
+            else:
+                settle()
         _debug("redraw %dx%d: %d rows, %d blocks, sel=%d, widest=%d"
                % (width, height, len(rows_text), len(named), state.sel,
                   max((visible(row) for row in rows_text), default=0)))
@@ -2329,6 +2908,11 @@ class Editor(App):
         row.styles.height = top_screen
         row.styles.padding = 0
         row.styles.margin = 0
+        # Fast path (§1) copies these rows into the mounted top without a
+        # query: `top_row` is never mounted on that path, and `query` needs
+        # a mounted tree, so the fresh frames ride along instead.
+        row._top_frames = {"header": header_frame, "info": meta_frame,
+                           "editor-hsv": hsv_frame}
         return row, top_screen
 
     def _top_box_pad(self, width: int, state, top_h: int) -> int:
@@ -2438,7 +3022,7 @@ class Editor(App):
                              inner_w, inner_h,
                              head=self.head_for(state),
                              hits=lay_hits, regions=lay_regions,
-                             indent="")
+                             indent="", footer=False)
             by_name = {name: (first, count)
                        for name, first, count in lay_regions}
             # The bare header `_mount_panels` replaces: `header`, plus
@@ -2499,15 +3083,8 @@ class Editor(App):
         by the widget would leave two columns on the terminal's own background
         (§8.2) — the pad has no style of its own.
         """
-        surface = self._editor_screen()
-        for child in list(surface.query(Panel)):
-            child.remove()
-        for child in list(surface.query(Frame)):
-            child.remove()
-        for child in list(surface.query(Live)):
-            child.remove()
-        for child in list(surface.query(Horizontal)):
-            child.remove()
+        # Removes are deferred to the full path below: the fast path reuses
+        # every widget in place and must never empty the screen.
         inner_w = width - 2 - 2 * pad
         by_name = {name: (first, count) for name, first, count in named}
 
@@ -2584,6 +3161,98 @@ class Editor(App):
             return block
 
         header_h = sum(c for _, _, c in header)
+        # Fast path (§1): same blocks at the same sizes reuse every widget.
+        # Heights without building anything: a shut live block costs its
+        # header, exactly as `mount_inner` mounts.
+        def _pure_h(name, count):
+            if (name in LIVE_BLOCKS and collapsible_enabled()
+                    and name in self._collapsed):
+                return 1
+            return count
+        controls_h_pure = sum(_pure_h(n, c) for n, _, c in controls)
+        examples_h_pure = sum(_pure_h(n, c) for n, _, c in examples)
+        top_row, top_screen = self._top_side_row(width, self.state,
+                                                 header_h, top_pad)
+        top_has = top_row is not None
+        try:
+            st = self.state
+            tlabel, tpath = top_subject(st, self.head_for(st) or self.fmt)
+            tshares = top_layout(width, tlabel, tpath, st.slots, st.sel,
+                                 pad=top_pad)
+        except Exception:
+            tshares = None
+        top_shares = tuple(tshares) if (tshares is not None and top_has) else None
+        new_key = self._panels_key(width, named, pad, top_pad,
+                                   top_screen if top_has else header_h,
+                                   header_h, controls_h_pure,
+                                   examples_h_pure, bool(examples), top_has,
+                                   top_shares)
+        if (new_key == getattr(self, "_mount_key", None)
+                and getattr(self, "_mount_mode", None) == "panels"
+                and self.is_running):
+            frames = self._frames_by_name()
+            ok = True
+            slots = self.state.slots
+            # Inner blocks: same slices `mount_inner` mounts.
+            for name, first, count in list(controls) + list(examples):
+                widget = frames.get(name)
+                if widget is None:
+                    ok = False
+                    break
+                if name in LIVE_BLOCKS and collapsible_enabled():
+                    body = rows_text[first + 1:first + count]
+                    if len(widget.rows_text) != len(body):
+                        ok = False
+                        break
+                    widget.update_rows(body, None)
+                else:
+                    if len(widget.rows_text) != count:
+                        ok = False
+                        break
+                    widget.update_rows(rows_text[first:first + count], None)
+            # Chrome: header only when no compositor top replaces it.
+            if ok:
+                chrome = list(extra) + list(hints)
+                if not top_has:
+                    chrome = list(header) + chrome
+                for name, first, count in chrome:
+                    widget = frames.get(name)
+                    if widget is None:
+                        ok = False
+                        break
+                    rows_here = rows_text[first:first + count]
+                    if width > inner_w:
+                        rows_here = [backdrop(row, slots, width)
+                                     for row in rows_here]
+                    if len(widget.rows_text) != len(rows_here):
+                        ok = False
+                        break
+                    widget.update_rows(rows_here, None)
+            if ok and top_has:
+                ok = self._update_top_frames(frames, top_row)
+            if ok:
+                self._panel_geom = {
+                    "pad": pad,
+                    "top_pad": top_pad,
+                    "inner_w": inner_w,
+                    "header_h": header_h,
+                    "controls_h": controls_h_pure,
+                    "examples_h": examples_h_pure,
+                    "has_examples": bool(examples),
+                    "top_screen": top_screen if top_has else header_h,
+                }
+                self._fast_reused = True
+                return
+        # Full path: empty the screen, then mount everything below.
+        surface = self._editor_screen()
+        for child in list(surface.query(Panel)):
+            child.remove()
+        for child in list(surface.query(Frame)):
+            child.remove()
+        for child in list(surface.query(Live)):
+            child.remove()
+        for child in list(surface.query(Horizontal)):
+            child.remove()
         # Panel heights follow what mounted, not what the frame drew: a
         # shut live block costs its header, so the panel shrinks and the
         # chrome below rides up to the rows that remain.
@@ -2591,12 +3260,8 @@ class Editor(App):
         example_inners = [mount_inner(n, f, c) for n, f, c in examples]
         controls_h = sum(h for _, h in control_inners)
         examples_h = sum(h for _, h in example_inners)
-        # Screen geometry for clicks: borders are single rows. The top is
-        # bare logo plus the flexible info column beside one bordered
-        # `editor` panel (`top_screen`: two borders, button costs no row);
-        # each panel below adds a top and a bottom border row.
-        top_row, top_screen = self._top_side_row(width, self.state,
-                                                 header_h, top_pad)
+        # `top_row`/`top_screen` already built above for the key; reuse them
+        # rather than building a second top for the full mount.
         self._panel_geom = {
             "pad": pad,
             "top_pad": top_pad,
@@ -2607,6 +3272,9 @@ class Editor(App):
             "has_examples": bool(examples),
             "top_screen": top_screen if top_row is not None else header_h,
         }
+        self._mount_key = new_key
+        self._mount_mode = "panels"
+        self._fast_reused = False
         if top_row is not None:
             # §8.1 (decision 40) — the bare logo, the info column and the
             # bordered `editor` panel stay separate boxes at every size
@@ -2682,21 +3350,19 @@ class Editor(App):
         full_regions: list = []
         full = frame_rows(self.fmt, session_path(state), state,
                           width, height, head=self.head_for(state),
-                          hits=full_hits, regions=full_regions)
+                          hits=full_hits, regions=full_regions,
+                          footer=False)
         by_name = {name: (first, count)
                    for name, first, count in full_regions}
-        for need in ("header", "selected", "hints"):
+        for need in ("header", "selected"):
             if need not in by_name:
                 return False        # a trimmed frame: chrome must be whole
         header_h = by_name["header"][1]
         sel_h = by_name["selected"][1]
-        hints_h = by_name["hints"][1]
-        status_h = by_name["status"][1] if "status" in by_name else 0
-        bottom_h = hints_h + status_h
         top_h = header_h + sel_h
         top_pad = self._top_box_pad(width, state, top_h)
         top_screen = self._top_screen_height(width, state, top_h, top_pad)
-        content_h = height - top_screen - bottom_h - 2
+        content_h = height - top_screen - 2
         # One height bar for both widths: short windows keep the stacked
         # panels (full-width sample) whatever the width, and the narrower
         # content pads like the full one does past it.
@@ -2733,6 +3399,97 @@ class Editor(App):
             widget.styles.margin = 0
             return widget
 
+        # The fresh top is built once for both paths: the fast path copies
+        # its rows into the mounted top, the full path below mounts it.
+        slots = state.slots
+        top_h = header_h + sel_h
+        top_row, top_screen = self._top_side_row(width, state, top_h,
+                                                 top_pad)
+        top_has = top_row is not None
+        final_top = top_screen if top_has else top_h
+        new_regions = [("header", 0, header_h),
+                       ("selected", header_h, sel_h),
+                       ("palette", 0, 9),
+                       ("interface", 9, left_rows - 9)]
+        new_regions.extend(right_regions)
+        try:
+            tlabel, tpath = top_subject(state, self.head_for(state) or self.fmt)
+            tshares = top_layout(width, tlabel, tpath, state.slots, state.sel,
+                                 pad=top_pad)
+        except Exception:
+            tshares = None
+        top_shares = tuple(tshares) if (tshares is not None and top_has) else None
+        new_key = self._side_key(width, height, new_regions, right_regions,
+                                 pad, top_pad, final_top, content_h,
+                                 left_w, right_inner, narrow, top_has,
+                                 top_shares)
+        if (new_key == getattr(self, "_mount_key", None)
+                and getattr(self, "_mount_mode", None) == "side"
+                and self.is_running):
+            frames = self._frames_by_name()
+            ok = True
+            for key_name, rows_here in (("palette", left[0:9]),
+                                        ("interface", left[9:left_rows])):
+                widget = frames.get(key_name)
+                if widget is None or len(widget.rows_text) != len(rows_here):
+                    ok = False
+                    break
+                widget.update_rows(rows_here, None)
+            fill = content_h - left_rows
+            if ok and fill:
+                widget = frames.get("left-pad")
+                pad_rows = [backdrop("", slots, left_w)] * fill
+                if widget is None or len(widget.rows_text) != len(pad_rows):
+                    ok = False
+                else:
+                    widget.update_rows(pad_rows, None)
+            if ok:
+                for name, first, count in right_regions:
+                    widget = frames.get(name)
+                    if widget is None:
+                        ok = False
+                        break
+                    if name in LIVE_BLOCKS and collapsible_enabled():
+                        body = right[first + 1:first + count]
+                        if len(widget.rows_text) != len(body):
+                            ok = False
+                            break
+                        widget.update_rows(body, None)
+                    else:
+                        if len(widget.rows_text) != count:
+                            ok = False
+                            break
+                        widget.update_rows(right[first:first + count], None)
+            if ok:
+                if top_has:
+                    ok = self._update_top_frames(frames, top_row)
+                else:
+                    for name in ("header", "selected"):
+                        widget = frames.get(name)
+                        if widget is None:
+                            ok = False
+                            break
+                        first, count = by_name[name]
+                        rows_here = full[first:first + count]
+                        if len(widget.rows_text) != len(rows_here):
+                            ok = False
+                            break
+                        widget.update_rows(rows_here, None)
+            if ok:
+                self.rows_text = full
+                self.hits = left_hits
+                self.regions = new_regions
+                self._side_on = True
+                self._side_geom = {"pad": pad,
+                                   "top_pad": top_pad,
+                                   "top": final_top,
+                                   "content_h": content_h,
+                                   "left_outer": left_outer + 2 * pad,
+                                   "left_w": left_w,
+                                   "narrow": narrow}
+                self._fast_reused = True
+                return True
+        # Full path: empty the screen; the mounts below reuse `top_row`.
         surface = self._editor_screen()
         for child in list(surface.query(Panel)):
             child.remove()
@@ -2742,10 +3499,9 @@ class Editor(App):
             child.remove()
         for child in list(surface.query(Horizontal)):
             child.remove()
-        slots = state.slots
-        top_h = header_h + sel_h
-        top_row, top_screen = self._top_side_row(width, state, top_h,
-                                                 top_pad)
+        self._mount_key = new_key
+        self._mount_mode = "side"
+        self._fast_reused = False
         if top_row is not None:
             surface.mount(top_row)
         else:
@@ -2806,11 +3562,6 @@ class Editor(App):
         row.styles.padding = 0
         row.styles.margin = 0
         surface.mount(row)
-        bottom0 = top_screen + content_h + 2
-        for name in ("hints", "status"):
-            if name in by_name:
-                first, count = by_name[name]
-                surface.mount(block(name, full[first:first + count], width))
         # Coordinate spaces, because there are two panels now: chrome blocks
         # are full-frame rows, `palette` / `interface` are left-content rows
         # (what `self.hits` is announced in), the live blocks right-content
@@ -2824,9 +3575,6 @@ class Editor(App):
                         ("palette", 0, 9),
                         ("interface", 9, left_rows - 9)]
         self.regions.extend(right_regions)
-        self.regions.append(("hints", bottom0, hints_h))
-        if status_h:
-            self.regions.append(("status", bottom0 + hints_h, status_h))
         self._side_on = True
         self._side_geom = {"pad": pad,
                            "top_pad": top_pad,
@@ -2945,6 +3693,9 @@ class Editor(App):
             block.styles.padding = 0
             block.styles.margin = 0
             surface.mount(block)
+        self._mount_key = self._bare_key(width, named)
+        self._mount_mode = "bare"
+        self._fast_reused = False
 
     def _mount_collapsible(self, width: int, rows_text: list,
                            named: list) -> None:
@@ -3004,6 +3755,9 @@ class Editor(App):
             if seen_live:
                 surface.mount(mount_block(
                     name, rows_text[first:first + count]))
+        self._mount_key = self._bare_key(width, named)
+        self._mount_mode = "collapsible"
+        self._fast_reused = False
 
     def place_focus(self, picker_up: bool, sel: int) -> None:
         """Hand focus to whichever block owns it, once the tree exists.
@@ -3051,10 +3805,8 @@ class Editor(App):
         the frame's own hit map rather than computed from the grid — the same
         rule as the click, and for the same reason.
 
-        A short frame can leave the selected slot in no block at all: 40x12 shows
-        twelve of the twenty-two slots, and selecting the twenty-second puts the
-        selection below the fold. Then *focus is dropped*, rather than left
-        where it was — because `on_key` steps over the arrows while a grid holds
+        A frame that cannot show the selected slot leaves it in no block
+        at all. Then *focus is dropped*, rather than left where it was — because `on_key` steps over the arrows while a grid holds
         focus, and a grid still holding focus with the selection off it would
         leave the arrows moving a selection the user cannot see, or not moving
         at all. Dropping it hands the keys back to the app.
@@ -3098,7 +3850,7 @@ class Editor(App):
         if self._themes_screen() is not None:
             return          # the themes dialog re-lays itself the same way
         if self.state is not None:
-            self.call_after_refresh(self.redraw)
+            self.request_redraw()
 
     # -- input -------------------------------------------------------------
 
@@ -3150,7 +3902,7 @@ class Editor(App):
                 self._collapsed.discard(block)
             else:
                 self._collapsed.add(block)
-            self.redraw()
+            self.request_redraw()
             return
         apply_key(translate(event.key), self.state)
         if self.state.quit:
@@ -3160,7 +3912,7 @@ class Editor(App):
                 # `t` opened the list: the popup over the editor, never a
                 # takeover — the frame behind stays as it was.
                 self.open_themes()
-            self.redraw()
+            self.request_redraw()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """The `themes` button: exactly what `t` does, through the same call.
@@ -3308,6 +4060,24 @@ class Editor(App):
         if self.is_running:
             return self.screen_stack[0]
         return self
+
+    def _sync_footer(self, show: bool) -> None:
+        """Mount the docked footer once; feed it hints + status every frame.
+
+        The bar lives on the stack bottom with the frame, so popups dim it
+        along with everything behind them. Content is cheap to compare and
+        costly to rebuild, so equal hints/status never touch the widgets.
+        """
+        footer = getattr(self, "_footer", None)
+        if footer is None:
+            footer = HueFooter()
+            self._footer = footer
+            self._editor_screen().mount(footer)
+        footer.styles.display = "block" if show else "none"
+        if show:
+            state = self.state
+            footer.update_footer(editor_hints(state.mult, len(state.undo)),
+                                 state.status)
 
     def _import_screen(self):
         """The import popup, if it is the top screen — else `None`.
