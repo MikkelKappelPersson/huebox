@@ -190,8 +190,9 @@ def capture_reference_picker(fixture, cols, rows, picker="long", status=None):
     """The picker as the direct-mode editor wrote it, no framework involved.
 
     The two steps below are what `draw_editor`'s overlay branch did and what
-    `app.Picker` does now: `theme_lines` for the rows, `backdrop` to fill each
-    one out to the last column in the buffer's own background (§8.2).
+    the `ThemesScreen` dialog does now (at its own width): `theme_lines` for
+    the rows, `backdrop` to fill each one out to the last column in the
+    buffer's own background (§8.2).
 
     Returns `(raw, written_rows)`, the same shape as `capture_reference`.
     """

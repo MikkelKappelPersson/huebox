@@ -87,9 +87,9 @@ into the library without dropping back to a shell per theme.
 - Each provider is one Textual `Collapsible` (see §5): title is the provider
   name plus count (`Ghostty (142)`), body is that provider's theme list.
 - At least one provider starts expanded; collapsing all is allowed (the
-  footer still names what is selected). Empty providers render their title
-  with a `0` count and one muted `no themes found` row — never a bare
-  missing block.
+  footer still names what is selected). Providers with no themes are
+  omitted — never a `Name (0)` group. When no provider has themes the
+  list shows one muted `no themes found` row.
 - Themes inside a provider are rows in a multi-select list: each row shows
   a toggle mark plus the theme name. The cursor (highlight) and the
   selection (toggled) are visually distinct — moving is not picking.
@@ -236,7 +236,7 @@ The popup preview and the editor frame must render from the same code:
 - Provider read failures (missing dir, unreadable file, zero colours in a
   source file) never abort the whole confirm: the readable themes land, the
   failures are reported per theme in the notes. A provider with nothing
-  readable renders as the empty group in §4.3.
+  readable is omitted from §4.3's list.
 
 ## 8. Open questions — settled 2026-10-08
 

@@ -38,6 +38,7 @@ Separates editing behaviour from the compositor; enables testing behaviour witho
 - A click resolves to a slot and goes through `apply_key` — it never touches a colour or a frame directly. Clickable cells are recorded by the rows that draw them (`draw_editor` / `theme_lines` / `setup_lines` take `hits=`), never recomputed
 - Frame mounts and queries scope to the stack bottom (`_editor_screen`): `App.query` spans every screen while `App.mount` targets the active one, so an unscoped redraw under a modal tears the editor's widgets out of the default screen and mounts them into the popup. Popups mount through their own screen methods, which are already scoped.
 - An empty library opens on the first-run choice as a modal popup, not an editor with nothing to save to: `enter_setup` arms it, `SetupScreen` shows `setup_lines`' rows in a centered dialog over the dimmed editor (the screen keeps the modal dim, never an opaque fill), and `apply_key` still owns every key. `Enter`/`i` raises `import_pending` (opened after dismiss, so modals never stack); `n` opens an inline naming field typed in the popup — the terminal is never handed back — and Enter creates through the prompt-free `_setup_create`. Esc backs out of naming, quits from the choices. A popup closed still empty puts the choice back up.
+- The themes list is the same kind of popup: `ThemesScreen` shows `theme_lines`' rows in a centered dialog over the dimmed editor (the screen keeps the modal dim, never an opaque fill), and `apply_key` still owns every key. Closing is the state going `overlay is None` (Enter picks a theme, Esc/`t` puts the editor back); popups never stack, and the editor behind stays as it was.
 
 ## Architecture
 
@@ -57,7 +58,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff |
 | `huebox/preview.py` | shared palette/strip/sample units the frame and the popup both call |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode |
-| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, the first-run setup choice (`setup_lines`, `enter_setup`; `SetupScreen` shows its rows), staged save, `report_session` |
+| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker (`theme_lines`; `ThemesScreen` shows its rows), the first-run setup choice (`setup_lines`, `enter_setup`; `SetupScreen` shows its rows), staged save, `report_session` |
 | `huebox/import_state.py` | headless import cursor, selection, confirm mapping |
 | `huebox/app.py` | the Textual shell: one widget per block over `render`'s rows; keys, focus, resize, click and wheel |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` |

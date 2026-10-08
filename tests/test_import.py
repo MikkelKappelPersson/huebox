@@ -175,6 +175,29 @@ class ConfirmMapping(unittest.TestCase):
         self.assertEqual((plans, skips, failures), ([], [], []))
         self.assertEqual(state.note, "nothing selected")
 
+    def test_empty_providers_never_appear_as_groups(self):
+        library = self._library(
+            {"ghostty": [("Ember", "/ship/Ember")]},
+            {"/ship/Ember": {"background": "#101010"}})
+        state = self._open(library, ("ghostty", "kitty", "alacritty"))
+        self.assertEqual(state.provider_order, ["ghostty"])
+        self.assertEqual(state.expanded, {"ghostty"})
+        self.assertEqual([prov for prov, _, _ in
+                          import_state.visible_rows(state)],
+                         ["ghostty"])
+        import_state.toggle_group(state, "kitty")
+        self.assertEqual(state.provider_order, ["ghostty"])
+        self.assertEqual(state.expanded, {"ghostty"})
+
+    def test_all_empty_leaves_no_groups_and_no_cursor(self):
+        state = self._open(self._library({}, {}),
+                            ("ghostty", "kitty"))
+        self.assertEqual(state.provider_order, [])
+        self.assertEqual(state.expanded, set())
+        self.assertEqual(import_state.visible_rows(state), [])
+        self.assertIsNone(import_state.cursor_id(state))
+        self.assertEqual(import_state.cursor_slots(state), {})
+
     def test_mapping_writes_nothing_and_keeps_the_session(self):
         with tempfile.TemporaryDirectory() as home:
             root = os.path.join(home, "config")

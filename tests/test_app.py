@@ -550,6 +550,156 @@ class FirstRunSetup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(made), {"dusk"})
 
 
+@needs_app
+class ThemesPopup(unittest.IsolatedAsyncioTestCase):
+    """The themes list opens as a modal popup over the editor (§13.7).
+
+    The same kind as the first-run choice: a centered dialog over the dimmed
+    editor, not a frame takeover — the rows are `theme_lines` at the dialog
+    width, behaviour stays in `EditorState` + `apply_key`, and closing paints
+    the editor behind it.
+    """
+
+    async def _running(self, names=("ash", "ember", "frost"), theme="ember",
+                       **kw):
+        from huebox.editor import Library
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        slots = dict(harness.FIXTURES["distinct"]["slots"])
+
+        def loader(name):
+            return (dict(slots), f"/themes/{name}.toml")
+
+        library = Library(listing=lambda: list(names), loader=loader)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor(library=library, theme=theme,
+                                     slots=dict(slots),
+                                     write=lambda t, p, s: "saved", **kw)
+
+    async def _press(self, app, pilot, *keys):
+        from textual import events
+
+        for key in keys:
+            event = events.Key(key, None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+
+    def _dialog_point(self, editor, slot):
+        """Screen coords of a dialog row: centered origin, one border."""
+        screen = editor.screen
+        width, height = screen.size
+        ox = (width - (screen._dlg_w + 2)) // 2
+        oy = (height - (screen._dlg_h + 2)) // 2
+        hit = next(h for h in screen._hits if h.slot == slot)
+        return ox + 1 + hit.x0 + 1, oy + 1 + hit.y
+
+    def _click_at(self, editor, fx, fy):
+        from textual.events import Click
+
+        editor.on_click(Click(widget=None, x=fx, y=fy, delta_x=0, delta_y=0,
+                              button=1, shift=False, meta=False, ctrl=False))
+
+    async def test_the_list_opens_as_a_popup_over_the_editor(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            screen = editor.screen
+            self.assertIsInstance(screen, huebox_app.ThemesScreen,
+                                  "the themes list is a popup, not a frame takeover")
+            body = "\n".join(screen._body.rows_text)
+            for name in ("ash", "ember", "frost"):
+                self.assertIn(name, body)
+            behind = "\n".join(editor.rows_text)
+            self.assertIn("Palette", behind,
+                          "the dimmed editor frame stays behind the popup")
+            self.assertTrue(list(editor.screen_stack[0].children),
+                            "a redraw under the modal cleared the editor")
+
+    async def test_the_dialog_clamps_to_narrow_screens(self):
+        editor = await self._running()
+        async with editor.run_test(size=(40, 20)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            screen = editor.screen
+            self.assertIsInstance(screen, huebox_app.ThemesScreen)
+            self.assertLessEqual(screen._dlg_w + 2, 40)
+
+    async def test_arrows_move_the_list_not_the_colours(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            self.assertEqual(editor.state.overlay_index, 1)
+            before = editor.state.sel
+            await self._press(editor, pilot, "down")
+            self.assertEqual(editor.state.overlay_index, 2)
+            self.assertEqual(editor.state.sel, before,
+                             "an arrow moved the colours behind the list")
+            await self._press(editor, pilot, "up")
+            self.assertEqual(editor.state.overlay_index, 1)
+
+    async def test_enter_opens_the_selected_theme_and_closes(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            await self._press(editor, pilot, "down")
+            await self._press(editor, pilot, "enter")
+            await pilot.pause()
+            self.assertIsNone(editor.state.overlay)
+            self.assertEqual(editor.state.theme, "frost")
+            self.assertNotIsInstance(editor.screen,
+                                     huebox_app.ThemesScreen)
+
+    async def test_escape_closes_back_to_the_editor(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            self.assertIsInstance(editor.screen, huebox_app.ThemesScreen)
+            await self._press(editor, pilot, "escape")
+            await pilot.pause()
+            self.assertIsNone(editor.state.overlay)
+            self.assertEqual(editor.state.theme, "ember")
+            self.assertNotIsInstance(editor.screen,
+                                     huebox_app.ThemesScreen)
+
+    async def test_a_click_on_a_row_opens_that_theme(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            await pilot.pause()
+            self._click_at(editor, *self._dialog_point(editor, 0))
+            await pilot.pause()
+            self.assertIsNone(editor.state.overlay)
+            self.assertEqual(editor.state.theme, "ash",
+                              "clicking a row did not open that theme")
+
+    async def test_the_wheel_moves_the_list(self):
+        editor = await self._running()
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "t")
+            await pilot.pause()
+            before = editor.state.overlay_index
+            editor._scroll_picker("down", _Event())
+            await pilot.pause()
+            self.assertEqual(editor.state.overlay_index, before + 1)
+            editor._scroll_picker("up", _Event())
+            await pilot.pause()
+            self.assertEqual(editor.state.overlay_index, before)
+
+
 class _Event:
     def stop(self):
         pass
@@ -557,12 +707,11 @@ class _Event:
 
 @needs_app
 class ThePickersMinimum(unittest.TestCase):
-    """§13.7 — below the minimum, both frames are the same hint.
+    """§13.7 — below the minimum, the editor behind the popup is the hint.
 
-    The check used to sit inside `draw_editor`'s overlay branch, so the picker
-    inherited it for free while the editor had it in a different place. With
-    the picker a widget the two frames have separate mounts and the check has
-    to be asked once, by whichever frame is up — which is the only way a frame
+    The list is a modal popup over the editor, so the too-small check covers
+    the frame behind it: the dialog clamps itself, and the editor it dims is
+    the same hint the bare session draws — which is the only way a frame
     added later cannot forget it.
     """
 
@@ -846,7 +995,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.focused.name, "palette")
 
     async def test_the_picker_has_no_grid_to_focus(self):
-        """§13.7 — the picker takes the surface, and it has no arrows.
+        """§13.7 — the picker is a popup over the editor, and it holds no grid.
 
         If focus stayed on a grid underneath it, an arrow would move the
         *colour* selection behind a list the user is reading, which is the one
@@ -860,14 +1009,24 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
             app = huebox_app.Editor()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            self.assertIsInstance(app.focused, huebox_app.Picker)
+            await pilot.pause()
+            self.assertIsInstance(app.screen, huebox_app.ThemesScreen,
+                                  "the themes list is a popup, not a frame takeover")
+            body = "\n".join(app.screen._body.rows_text)
+            self.assertIn("ash", body)
+            self.assertIn("ember", body)
+            behind = "\n".join(app.rows_text)
+            self.assertIn("Palette", behind,
+                          "the dimmed editor frame stays behind the popup")
+            self.assertNotIsInstance(app.focused, huebox_app.Swatches,
+                                     "a grid kept focus behind the popup")
             before = app.state.sel
             await self._press(app, pilot, "right")
             self.assertEqual(app.state.sel, before,
                              "an arrow moved the colour selection behind the "
                              "picker")
             self.assertEqual(app.state.overlay_index, 1,
-                             "the arrow did not move the picker's own row")
+                             "the arrow did not leave the picker's own row")
 
 
 @needs_app

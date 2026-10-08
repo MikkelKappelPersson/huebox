@@ -106,18 +106,19 @@ class ImportLibrary:
 class ImportState:
     """Everything one import-popup session mutates (spec §§4.3–4.4, §9).
 
-    `provider_order` is the group order; `theme_ids` maps provider to its
-    row ids in list order, where an id is the `(provider, display)` tuple
-    (unique per provider, hashable for the toggled set); `display` /
-    `paths` keep the raw display name and file path alongside each id.
-    `expanded` is the open groups (at least one on a non-empty order —
-    the first provider with themes, else the first provider). `cursor`
-    is `(provider, index)` over OPEN groups only. `selected` is the
-    toggled id set — hiding is not deselecting: collapsed groups keep
-    their selections. `note` is the footer note. `slots_cache` is the
-    read-once preview cache (see `preview_slots`). `is_open` is the
-    interlock phase 4/5 read (see `handle_key`). `library` is the injected
-    seam; `None` lists nothing, so a bare state is an empty popup.
+    `provider_order` is the group order — providers with no themes are
+    pruned at construction, so an empty provider never appears as a group.
+    `theme_ids` maps provider to its row ids in list order, where an id is
+    the `(provider, display)` tuple (unique per provider, hashable for the
+    toggled set); `display` / `paths` keep the raw display name and file
+    path alongside each id. `expanded` is the open groups (the first
+    provider, when any remain). `cursor` is `(provider, index)` over OPEN
+    groups only. `selected` is the toggled id set — hiding is not
+    deselecting: collapsed groups keep their selections. `note` is the
+    footer note. `slots_cache` is the read-once preview cache (see
+    `preview_slots`). `is_open` is the interlock phase 4/5 read (see
+    `handle_key`). `library` is the injected seam; `None` lists nothing,
+    so a bare state is an empty popup.
     """
 
     def __init__(self, provider_order=None, library=None):
@@ -133,6 +134,10 @@ class ImportState:
         self.slots_cache: dict = {}         # id -> slots, read-once
         self.is_open = False                # the interlock
         self._load()
+        # Empty providers never appear as groups: prune them so the
+        # cursor, the expanded set and the view agree on what exists.
+        self.provider_order = [provider for provider in self.provider_order
+                               if self.theme_ids.get(provider)]
         self._seed()
 
     def _load(self) -> None:
@@ -153,12 +158,10 @@ class ImportState:
             self.theme_ids[provider] = ids
 
     def _seed(self) -> None:
-        """Expand one provider and park the cursor on the first open row."""
+        """Expand the first provider and park the cursor on its first row."""
         if not self.provider_order:
             return
-        first = next((provider for provider in self.provider_order
-                      if self.theme_ids.get(provider)),
-                     self.provider_order[0])
+        first = self.provider_order[0]
         self.expanded.add(first)
         rows = visible_rows(self)
         if rows:
@@ -171,9 +174,9 @@ def visible_rows(st) -> list:
     """One continuous list over every OPEN group, in provider order.
 
     Each row is `(provider, index, id)`. Collapsed groups contribute
-    nothing — skipped, never deselected — and empty groups contribute
-    nothing either (there is no row to stand on). This is what the cursor
-    walks and what `a` selects.
+    nothing — skipped, never deselected. Empty providers never reach here
+    (pruned at construction), so there is no row to stand on outside the
+    listed groups. This is what the cursor walks and what `a` selects.
     """
     rows = []
     for provider in st.provider_order:

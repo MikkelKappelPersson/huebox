@@ -407,36 +407,6 @@ class Diff(Selectable):
     """The live diff — the hunk that appeared since the last save (§14)."""
 
 
-class Picker(Frame):
-    """The theme picker as a widget of its own (§13.7, migration §5.6).
-
-    Its first version is exactly `theme_lines`' output through the same
-    compositor as everything else — the rows are `render.py`'s, parsed the same
-    way — so extraction is a rearrangement with no visible consequence.
-
-    What it buys is the thing phase 5 is for. The picker used to be a parameter
-    of the editor frame (`draw_editor(overlay=...)`), which meant it could never
-    have its own focus, its own bindings or its own hit-testing, and every
-    change to either surface had to go through a function whose whole job was
-    to be both. As a widget it is mounted instead of composed, and the editor
-    frame goes back to having one job.
-
-    **It scrolls by selection, and that is not a simplification.** The window is
-    a function of `overlay_index` — `theme_lines` centres it — and the footer
-    prints `8-26 of 34` from it, so a viewport that scrolled on its own would
-    move that counter. What a `ScrollView` would add here
-    is a scrollbar: seven of Textual's 168 design tokens exist only for it, and
-    I2's whole job is to reject exactly that. The wheel moves the selection,
-    which moves the window, which is what a user pressing a wheel key means.
-
-    Focusable, because §13.7 says the picker owns the surface while it is up:
-    focus left on a grid underneath would let an arrow move the *colour*
-    selection behind a list the user is reading.
-    """
-
-    can_focus = True
-
-
 class SetupScreen(ModalScreen):
     """The first-run choice as a modal popup over the editor (empty library).
 
@@ -592,6 +562,194 @@ class SetupScreen(ModalScreen):
         st = self.app.state
         st.setup = target
         self.setup_key("\r")
+
+
+class ThemesScreen(ModalScreen):
+    """The theme picker as a modal popup over the editor (same kind as setup).
+
+    The dialog's rows are `editor.theme_lines` at the dialog width — the same
+    rows the headless session draws full-frame, so the two cannot disagree
+    about what the list says. Behaviour stays in `EditorState` + `apply_key`
+    (the `SetupScreen` split, repeated): keys arrive already translated from
+    `Editor.on_key` and go straight to the one key surface, and closing is
+    the state going `overlay is None` — the app repaints the editor behind
+    it. The dialog is positioned with explicit margins rather than `align`,
+    so its origin is exactly what `click_at` recomputes — no stored geometry
+    to drift. Takeovers never stack: the setup choice and the import popup
+    each own the surface their own way, and opening here re-checks both.
+    """
+
+    #: The dialog's content width: holds a theme row with the hint footer
+    #: folded to three lines. Clamped to narrow screens in `_fill` — the
+    #: same clamp as `SetupScreen`, so the two popups read as one kind.
+    DIALOG_W = 44
+
+    #: The dialog content's narrowest honest width: below this even the
+    #: choice rows clip, so the dialog never shrinks past it.
+    DIALOG_MIN_W = 24
+
+    #: The dialog content's tallest honest height: past this the list scrolls
+    #: by selection (`theme_lines` windows it) instead of growing the dialog
+    #: — the popup stays over the UI with the dim visible, rather than
+    #: filling the screen and reading as a takeover. Clamped to short screens
+    #: in `_fill`.
+    DIALOG_MAX_H = 18
+
+    DEFAULT_CSS = """
+    ThemesScreen {
+        /* No background of its own: the modal dim (`$background` at 60%)
+        stays, so the editor frame shows through behind the dialog.
+        Painting this opaque would hide the session the list belongs
+        to — the same rule as `SetupScreen`. */
+        padding: 0;
+    }
+    ThemesScreen .themes-dialog {
+        background: $background;
+        border: round $border;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._dlg_w = 0               # content width from the last `_fill`
+        self._dlg_h = 0               # content height from the last `_fill`
+        self._max_h = self.DIALOG_MAX_H  # list budget from the last `_fill`
+        self._hits: list = []         # their clickable cells, content coords
+        self._body = None             # the `Frame` carrying the rows
+        self._dialog = None           # the bordered container
+
+    def compose(self) -> ComposeResult:
+        # Nothing here: the dialog's width comes from the compositor, and
+        # the size it reports decides the clamp. Shells mount in `_fill`
+        # once the tree exists — the same shape as `Editor.compose`.
+        return iter(())
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._fill)
+
+    def on_resize(self, event) -> None:
+        # The rows are fixed-width, but the clamp and the centering are
+        # not: re-lay rather than repaint.
+        if not self.is_running:
+            return
+        self.call_after_refresh(self._fill)
+
+    def _origin(self):
+        """The dialog's top-left, in screen coords.
+
+        The dialog is the screen's only child and carries its centering as
+        explicit margins (set in `_fill`), so this recomputes to exactly
+        where it was mounted — the click map never drifts from the paint.
+        """
+        width, height = self.size
+        return ((width - (self._dlg_w + 2)) // 2,
+                (height - (self._dlg_h + 2)) // 2)
+
+    def _fill(self) -> None:
+        """Mount the dialog at the current size, centered with margins."""
+        for child in list(self.children):
+            child.remove()
+        st = self.app.state
+        width, height = self.size
+        dlg_w = max(self.DIALOG_MIN_W,
+                    min(self.DIALOG_W, width - 2))
+        max_h = min(self.DIALOG_MAX_H, max(6, height - 2))
+        self._max_h = max_h
+        picker = st.picker_frame()
+        if picker is None:
+            names, index, current = [], 0, ""
+        else:
+            names, index, current = picker
+        self._hits = []
+        rows = [backdrop(line, st.slots, dlg_w)
+                for line in theme_lines(names, index, current, dlg_w,
+                                         max_h, st.status, st.slots,
+                                         hits=self._hits)]
+        self._dlg_w = dlg_w
+        self._dlg_h = len(rows)
+        body = Frame(rows, dlg_w, name="themes-body")
+        body.styles.width = dlg_w
+        body.styles.height = len(rows)
+        body.styles.padding = 0
+        body.styles.margin = 0
+        dialog = Vertical(body, classes="themes-dialog")
+        dialog.styles.width = dlg_w + 2
+        dialog.styles.height = len(rows) + 2
+        dialog.styles.padding = 0
+        ox, oy = self._origin()
+        dialog.styles.margin = (oy, 0, 0, ox)
+        self.mount(dialog)
+        self._body = body
+        self._dialog = dialog
+
+    def _repaint(self) -> None:
+        """Repaint the dialog in place: new rows, same widgets.
+
+        The list window moves with the selection (`theme_lines` owns it),
+        so the dialog keeps its width and its budget — only the height
+        follows the rows (a status line arriving or leaving), with the
+        margins re-centered so the click map never drifts.
+        """
+        if self._body is None or not self._body.is_mounted:
+            return              # mounts still queued; `_fill` paints them
+        st = self.app.state
+        picker = st.picker_frame()
+        if picker is None:
+            return              # closed underneath; dismiss owns it
+        names, index, current = picker
+        self._hits = []
+        rows = [backdrop(line, st.slots, self._dlg_w)
+                for line in theme_lines(names, index, current,
+                                         self._dlg_w, self._max_h,
+                                         st.status, st.slots,
+                                         hits=self._hits)]
+        self._body.update_rows(rows, self._dlg_w)
+        if len(rows) != self._dlg_h:
+            self._dlg_h = len(rows)
+            if self._dialog is not None:
+                self._dialog.styles.height = len(rows) + 2
+                ox, oy = self._origin()
+                self._dialog.styles.margin = (oy, 0, 0, ox)
+
+    def themes_key(self, key: str) -> None:
+        """One keypress while this screen is top, from `Editor.on_key`.
+
+        The key arrives translated; everything routes to the one key
+        surface. Closing is the state going `overlay is None` (Enter picked
+        a theme, Esc/`t`/`Q` put the editor back) — the app repaints from
+        the state — and anything else repaints the dialog in place.
+        """
+        st = self.app.state
+        apply_key(key, st)
+        if st.quit or st.overlay is None:
+            self.dismiss(None)
+        else:
+            self._repaint()
+
+    def click_at(self, fx: int, fy: int) -> None:
+        """A click while this screen is top: a theme row opens it.
+
+        The origin is derived live from the screen size, so resizes need no
+        stored geometry. A click on the border or outside the dialog is
+        chrome and selects nothing — like every other frame, clicking
+        nothing is not an error. A row moves the selection onto it and
+        confirms through the one key surface, so a click and Enter cannot
+        diverge.
+        """
+        ox, oy = self._origin()
+        lx, ly = fx - ox - 1, fy - oy - 1
+        if not (0 <= lx < self._dlg_w and 0 <= ly < self._dlg_h):
+            return
+        target = slot_at(self._hits, lx, ly)
+        if target is None:
+            return
+        st = self.app.state
+        if st.overlay is None:
+            return
+        st.overlay_index = target
+        self.themes_key("\r")
 
 
 #: Which widget draws which block. Everything not named here is a plain `Frame`:
@@ -1171,11 +1329,12 @@ class ImportScreen(ModalScreen):
 
     003 spec §§4–5, P0 verdict followed without re-litigating: one
     `ModalScreen`, pushed with `push_screen` and closed with
-    `dismiss(result)` — the picker's mounted-takeover path is untouched, and
+    `dismiss(result)` — the themes popup path is untouched alongside it, and
     the app routes popup keys here by guarding on this screen's type (it
     still sees keys under a modal). Inside: one `Collapsible` per provider
-    (title `Name (count)`, collapsed set from the state's `expanded`) each
-    holding one `ImportList` of `(display, display)` rows, the preview column
+    with themes (title `Name (count)`, collapsed set from the state's
+    `expanded`; empty providers are omitted, never a `Name (0)` group)
+    each holding one `ImportList` of `(display, display)` rows, the preview column
     (`import_preview_rows` in a `Frame` carrier), and a footer of hints plus
     a live count plus confirm/cancel buttons.
 
@@ -1357,27 +1516,24 @@ class ImportScreen(ModalScreen):
         groups = []
         for provider in st.provider_order:
             ids = st.theme_ids.get(provider, [])
+            if not ids:
+                continue      # empty providers never appear as groups
             title_text = f"{provider} ({len(ids)})"
-            if ids:
-                lst = ImportList(*[(st.display[tid], st.display[tid])
-                                   for tid in ids],
-                                 id=f"import-list-{provider}")
-                kids = [lst]
-                self._lists[provider] = lst
-            else:
-                # An empty provider is one muted row, never a bare missing
-                # block — and no list at all, so `select_all` and the cursor
-                # have nothing to swallow or stand on.
-                kids = [Static(Text.from_ansi(
-                    chrome("no themes found", CHROME_MUTED, slots)))]
-            coll = Collapsible(*kids, title=title_text,
+            lst = ImportList(*[(st.display[tid], st.display[tid])
+                               for tid in ids],
+                             id=f"import-list-{provider}")
+            self._lists[provider] = lst
+            coll = Collapsible(lst, title=title_text,
                                collapsed=(provider not in st.expanded),
                                id=f"import-group-{provider}")
             coll.can_focus = False
             groups.append(coll)
             self._collapsibles[provider] = coll
-            if provider in self._lists:
-                self._echo[provider] = self._lists[provider].highlighted
+            self._echo[provider] = lst.highlighted
+        if not groups:
+            # No provider has themes: one muted row instead of bare air.
+            groups = [Static(Text.from_ansi(
+                chrome("no themes found", CHROME_MUTED, slots)))]
         left = VerticalScroll(*groups, id="import-left")
         right = Vertical(id="import-right")
         body = Horizontal(left, right, id="import-body")
@@ -1499,10 +1655,10 @@ class ImportScreen(ModalScreen):
             self._syncing = False
 
     def _sync_selection(self) -> None:
-        """Mirror the toggled set onto the lists, exactly (no `select_all`:
+        """Mirror the toggled set onto the lists, exactly.
 
-        it would swallow an empty group's muted row into `selected`, the
-        candidate-B failure. Only ids the state knows are ever selected.
+        Only ids the state knows are ever selected — a stale value can
+        never enter the toggled set.
         """
         st = self._istate
         self._syncing = True
@@ -1921,25 +2077,12 @@ class Editor(App):
         self._panel_geom = {}
         self._side_on = False
         self._side_geom = {}
-        # §13.7 — the picker owns the surface while it is up, and it shares the
-        # editor's minimum size, so the too-small check covers both frames and
-        # is asked once, here, rather than twice inside `draw_editor`.
+        # §13.7 — the picker is a modal popup over this frame (ThemesScreen),
+        # so the too-small check covers the editor behind it: the dialog
+        # clamps itself, and this frame is what dims behind it.
         picker = state.picker_frame()
         if width < MIN_COLS or height < MIN_ROWS:
             rows_text = [too_small_frame(width)]
-        elif picker is not None:
-            # §8.2 — `backdrop` is what fills each row out to the last column
-            # in the buffer's own colour, so no cell of the picker shows the
-            # terminal's background. It was the overlay branch's job in
-            # `draw_editor` and it is this widget's job now; dropping it is
-            # invisible in a diff of the text and enormous in a diff of the
-            # cells, since every background becomes "never painted".
-            # Laid out at the layout size (§15.7) so the picker stops
-            # refolding past the maxima like every other frame.
-            rows_text = [backdrop(line, state.slots, layout_w)
-                         for line in theme_lines(*picker, layout_w, layout_h,
-                                                 state.status, state.slots,
-                                                 hits=self.hits)]
         elif (panels_enabled() and layout_w >= SIDE_THIN_MIN_W
                 and self._try_side(layout_w, layout_h, state)):
             # Side-by-side mounted everything: chrome above, two panels
@@ -2027,12 +2170,11 @@ class Editor(App):
             # is below it rides up, and the empty rows at the bottom stand on
             # the screen's own background. Panels and side-by-side do their own
             # grouping, so the collapsibles only apply to the bare stack.
-            if picker is not None:
-                named = [("picker", 0, len(rows_text))]
-            else:
-                named = (list(self.regions)
-                         or [("frame", 0, len(rows_text))])
-            if (collapsible_enabled() and picker is None
+            # The themes picker never takes this frame over — it is a modal
+            # popup (ThemesScreen) over it — so there is no picker branch here.
+            named = (list(self.regions)
+                     or [("frame", 0, len(rows_text))])
+            if (collapsible_enabled()
                     and not (width < MIN_COLS or height < MIN_ROWS)
                     and any(entry[0] in LIVE_BLOCKS for entry in named)):
                 self._mount_collapsible(layout_w, rows_text, named)
@@ -2794,8 +2936,7 @@ class Editor(App):
         surface = self._editor_screen()
         for name, first, count in named:
             rows_here = rows_text[first:first + count]
-            kind = BLOCK_WIDGETS.get(name, Frame) if name != "picker" \
-                else Picker
+            kind = BLOCK_WIDGETS.get(name, Frame)
             # `name` is a constructor argument, not a settable property — which
             # is Textual saying the name is part of a widget's identity.
             block = kind(rows_here, width, name=name)
@@ -2867,10 +3008,10 @@ class Editor(App):
     def place_focus(self, picker_up: bool, sel: int) -> None:
         """Hand focus to whichever block owns it, once the tree exists.
 
-        §13.7 — the picker owns the surface while it is up, so it takes focus.
-        Focus left on a grid underneath would let an arrow move the *colour*
-        selection behind a list the user is reading, which is the one thing
-        §13.7 says cannot happen.
+        §13.7 — the picker owns the surface while it is up, as a modal popup
+        over the editor. Focus stays off the grids underneath, so an arrow
+        cannot move the *colour* selection behind a list the user is reading
+        — the one thing §13.7 says cannot happen.
         """
         # `focused` and `set_focus` both reach for a screen, which an app that
         # has never run does not have. A frame drawn outside Textual — the
@@ -2883,6 +3024,17 @@ class Editor(App):
         # and `redraw` hands the grid back once it closes.
         if self._import_screen() is not None:
             return
+        # The themes popup owns the surface the same way: it has no focusable
+        # of its own (keys arrive via `on_key`), so no grid behind it may
+        # keep the arrows.
+        if self._themes_screen() is not None:
+            return
+        if picker_up:
+            # The list is up but its dialog is not top yet (the push lands a
+            # refresh late): hold focus off the grids until it is.
+            if isinstance(self.focused, Swatches):
+                self.set_focus(None)
+            return
         # The frame is the window, so any scroll offset on the screen is left
         # over from a moment when it was not — a resize mid-frame, or a frame
         # laid out one row taller than the window it is in. Leaving it there is
@@ -2890,10 +3042,6 @@ class Editor(App):
         # were painted for a window that no longer exists, and nothing repaints
         # them because nothing thinks they changed.
         self.screen.scroll_home(animate=False)
-        if picker_up:
-            for block in self.query(Picker):
-                block.focus()
-                return
         self.focus_grid(sel)
 
     def focus_grid(self, sel: int) -> None:
@@ -2930,6 +3078,10 @@ class Editor(App):
             # waits for the refresh after mount — the same shape as every
             # other focus this shell places.
             self.call_after_refresh(self.open_setup)
+        elif self.state.overlay is not None:
+            # The harness pins the picker up on the first paint the same way:
+            # the list opens as a popup over the editor, never as a takeover.
+            self.call_after_refresh(self.open_themes)
 
     def on_resize(self, event) -> None:
         # The frame is laid out from `self.size`, and during `on_resize` that is
@@ -2943,6 +3095,8 @@ class Editor(App):
                             # out, and the frame behind it redraws on close
         if self._setup_screen() is not None:
             return          # the choice dialog re-lays itself the same way
+        if self._themes_screen() is not None:
+            return          # the themes dialog re-lays itself the same way
         if self.state is not None:
             self.call_after_refresh(self.redraw)
 
@@ -2971,12 +3125,19 @@ class Editor(App):
             event.stop()
             self.screen.setup_key(translate(event.key))
             return
+        if self._themes_screen() is not None:
+            # The themes popup owns the surface the same way: every key goes
+            # to the one key surface through the screen, which dismisses on
+            # close and repaints the dialog otherwise.
+            event.stop()
+            self.screen.themes_key(translate(event.key))
+            return
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
             return
         # 003/P4 — `i` (or `I`) opens the import popup, through the one call the
         # `Import` button takes. While the picker owns the surface it has
-        # no branch (takeovers never stack); `open_import` re-checks both.
+        # no branch (popups never stack); `open_import` re-checks both.
         if translate(event.key) in ("i", "I"):
             if self.state.overlay is not None:
                 return
@@ -2995,6 +3156,10 @@ class Editor(App):
         if self.state.quit:
             self.exit()
         else:
+            if self.state.overlay is not None:
+                # `t` opened the list: the popup over the editor, never a
+                # takeover — the frame behind stays as it was.
+                self.open_themes()
             self.redraw()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -3002,10 +3167,10 @@ class Editor(App):
 
         A click is a keypress (§4.3.2): the button resolves to the key surface
         rather than re-implementing the picker — open, blocked-while-dirty,
-        or the no-library status — and `redraw` hands focus to the picker
-        when one opened, the same as `on_key` does after `apply_key`. The
-        `import` button (003/P4) resolves the same way to `open_import`, the
-        identical call the `i`/`I` keys take.
+        or the no-library status — and the list opens as a popup over the
+        editor when one opened, the same as `on_key` does after `apply_key`.
+        The `import` button (003/P4) resolves the same way to `open_import`,
+        the identical call the `i`/`I` keys take.
         """
         button_id = getattr(event.button, "id", None)
         if button_id == "import-button":
@@ -3019,6 +3184,8 @@ class Editor(App):
         if self.state.quit:
             self.exit()
         else:
+            if self.state.overlay is not None:
+                self.open_themes()
             self.redraw()
 
     def _setup_screen(self):
@@ -3033,14 +3200,68 @@ class Editor(App):
         screen = self.screen
         return screen if isinstance(screen, SetupScreen) else None
 
+    def _themes_screen(self):
+        """The themes popup, if it is the top screen — else `None`.
+
+        One guard for every themes check in this shell, mirroring
+        `_setup_screen` and `_import_screen`.
+        """
+        if not self.is_running:
+            return None
+        screen = self.screen
+        return screen if isinstance(screen, ThemesScreen) else None
+
+    def open_themes(self) -> None:
+        """Push the themes popup: the list over the dimmed editor.
+
+        Called after `apply_key` opens the list (`t`, the `Themes` button,
+        or the harnessed first paint) — never from `build_state`, since
+        pushing a screen needs a running app. Popups never stack: the
+        setup choice and the import popup each own the surface their own
+        way, and a second open while the dialog is up is a no-op.
+        """
+        if self.state.overlay is None:
+            return
+        if self.state.setup is not None:
+            return
+        if self._setup_screen() is not None:
+            return
+        if self._import_screen() is not None:
+            return
+        if self._themes_screen() is not None:
+            return
+        if not self.is_running:
+            return              # headless (no compositor): the list stays on
+                                # the state for `apply_key` to own; pushing
+                                # needs a running app like `open_setup` does
+        self.push_screen(ThemesScreen(), self._themes_closed)
+
+    def _themes_closed(self, result) -> None:
+        """The popup dismissed: paint the editor it stood over.
+
+        `result` is always `None` — closing is the state going
+        `overlay is None` (Enter picked a theme, Esc/`t` put the editor
+        back), so this only routes: quit exits, anything else repaints the
+        frame behind it. A dialog dismissed with the list still up (which
+        no key does) puts the popup back up, so the surface never drops.
+        """
+        if not self.is_running:
+            return
+        if self.state.quit:
+            self.exit()
+        elif self.state.overlay is not None:
+            self.open_themes()
+        else:
+            self.redraw()
+
     def open_setup(self) -> None:
         """Push the first-run popup: import or name-and-create.
 
         Called once the session is up (never from `build_state` — pushing a
         screen needs a running app, so `on_mount` defers here), and again
-        when the import popup closes still empty. Takeovers never stack:
-        the picker owns the surface while it is up, and a second open while
-        the popup is up is a no-op.
+        when the import popup closes still empty. Popups never stack:
+        the themes list and the import popup each own the surface their own
+        way, and a second open while a dialog is up is a no-op.
         """
         if self.state.setup is None:
             return
@@ -3049,6 +3270,8 @@ class Editor(App):
         if self._setup_screen() is not None:
             return
         if self._import_screen() is not None:
+            return
+        if self._themes_screen() is not None:
             return
         self.push_screen(SetupScreen(), self._setup_closed)
 
@@ -3104,18 +3327,20 @@ class Editor(App):
 
         Opening is never blocked by a dirty buffer, and neither open nor
         close retargets the session: importing adds library files, it never
-        touches the buffer the way the picker does. Takeovers never stack —
-        the picker owns the surface while it is up, and a second `i` while
-        the popup is up is a no-op. The first-run choice owns the surface the
-        same way: `i` behind it is swallowed by the choice (its own `i`
+        touches the buffer the way the picker does. Popups never stack —
+        the themes list owns the surface while it is up, and a second `i`
+        while a popup is up is a no-op. The first-run choice owns the surface
+        the same way: `i` behind it is swallowed by the choice (its own `i`
         branch asks for the popup instead), so opening from here re-checks
         both. The provider order comes from the
         injected library's formats (P5 builds it; `None` lists nothing, so
-        a bare popup renders empty groups and never crashes).
+        a bare popup renders the `no themes found` row and never crashes).
         """
         if self.state.overlay is not None or self.state.setup is not None:
             return
         if self._import_screen() is not None:
+            return
+        if self._themes_screen() is not None:
             return
         library = self.import_library
         order = list(library.formats) if library is not None else []
@@ -3235,11 +3460,9 @@ class Editor(App):
         selection — the header, the readings and the empty air are not controls,
         and pretending otherwise would make the frame feel like a form.
 
-        Both frames answer from `self.hits`, the cells the frame that is up
-        announced as it painted them — so the picker needs no branch here at
-        all. Its cells carry the *row in the library* in the same field the
-        editor's carry the slot in, because both are "the number this row means"
-        and neither is anything a click has to translate.
+        The themes list answers from its dialog's own cells (`ThemesScreen`
+        owns its hits, like `SetupScreen`): a click while it is top never
+        reaches the editor behind it.
         """
         if self._import_screen() is not None:
             return
@@ -3256,6 +3479,10 @@ class Editor(App):
         if self._setup_screen() is not None:
             # The popup answers its own clicks against its own cells — the
             # editor's panels and layout maxima are behind it, not under it.
+            self.screen.click_at(fx, fy)
+            return
+        if self._themes_screen() is not None:
+            # The themes dialog answers its own clicks against its own cells.
             self.screen.click_at(fx, fy)
             return
         # §15.7 — past the layout maxima the screen is fill, not a panel:
@@ -3290,19 +3517,11 @@ class Editor(App):
         target = slot_at(self.hits, fx, fy)
         if target is None:
             return
-        if self.state.overlay is None:
-            # a swatch or an interface cell
-            if target != self.state.sel:
-                self.state.sel = target
-            self.redraw()
-            return
-        # A row of the library. Move the selection onto it, then let apply_key
-        # do what it does for Enter — so a click and Enter cannot diverge, and a
-        # click cannot open a theme the keyboard would have refused.
-        if target != self.state.overlay_index:
-            self.state.overlay_index = target
-            self.redraw()
-        apply_key("enter", self.state)
+        # A swatch or an interface cell. The themes list never reaches here:
+        # its dialog routes clicks to its own cells above, so this is always
+        # the editor behind any popup.
+        if target != self.state.sel:
+            self.state.sel = target
         self.redraw()
 
     def on_mouse_scroll_up(self, event) -> None:
@@ -3323,15 +3542,32 @@ class Editor(App):
         Only in the picker: the editor frame itself does not scroll, so a wheel
         notch does nothing a user could misread as having moved the colours.
         Either popup owns the wheel while it is up — the import lists stop
-        their own events, and the two-row choice has nothing to walk.
+        their own events, and the two-row choice has nothing to walk. The
+        themes dialog repaints in place; the editor behind it never scrolls.
         """
         if self._setup_screen() is not None:
+            return
+        if self._themes_screen() is not None:
+            event.stop()
+            if self.state.overlay is None:
+                return
+            apply_key(direction, self.state)
+            if self.state.overlay is None:
+                return              # a wheel never closes, but be total
+            self.screen._repaint()
             return
         event.stop()
         if self.state.overlay is None:
             return
         apply_key(direction, self.state)
-        self.redraw()
+        if self.state.overlay is None:
+            return
+        # Headless or between `t` and its push: no dialog to repaint yet —
+        # the next `redraw` paints the editor behind and the push follows.
+        if self._themes_screen() is not None:
+            self.screen._repaint()
+        else:
+            self.redraw()
 
     def prompt_text(self, label: str):
         """One line, with the terminal handed over for it (§4.3).

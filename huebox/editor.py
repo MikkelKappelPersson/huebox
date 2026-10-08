@@ -57,9 +57,9 @@ ENTER_KEYS = ("\r", "\n", "enter")
 #: `import_state` keeps the same three: the headless tests speak `\r`, the
 #: compositor speaks `enter`, and both arrive at the same branch.
 
-# §13.7 — the picker takes the frame over while it is up (decision 19), so
-# it shares the editor's minimum size and header width instead of adding a
-# box of its own. `●` is the spec's own dirty mark, not an ASCII stand-in.
+# §13.7 — the picker is a modal popup over the editor (the same kind as the
+# first-run choice), so its dialog carries its own size instead of taking the
+# frame over. `●` is the spec's own dirty mark, not an ASCII stand-in.
 DIRTY_MARK = "●"
 # the picker footer as `(key, what)` pairs — the frame paints the key and
 # its label separately (§8.1), and `pack` never folds between a key and

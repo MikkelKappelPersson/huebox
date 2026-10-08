@@ -42,11 +42,11 @@ def frame(cols, rows, sel=3, undo=(), status="", mult=1, slots=None,
 
 def picker_frame(cols=80, rows=24, names=("ash", "ember"), index=0,
                  current="ash", status="", slots=None):
-    """The picker frame as `app.Picker` composes it: `theme_lines` + backdrop.
+    """The picker rows as the dialog shows them: `theme_lines` + backdrop.
 
-    `draw_editor` grew an `overlay=` mode for the whole migration and phase 5
-    took it away again, giving the picker its own widget. The frame is those
-    two calls in that order, and this is where that lives now — if `backdrop`
+    The headless session draws them full-frame and the `ThemesScreen` dialog
+    at its own width — same rows either way. The frame is those two calls in
+    that order, and this is where that lives now — if `backdrop`
     ever goes missing again the floor tests below catch it, which is exactly
     how it was caught the first time.
     """
@@ -1914,7 +1914,7 @@ class OverlayFrame(unittest.TestCase):
 
     def overlay_frame(self, cols, rows, names=("ash", "ember", "frost"),
                       index=0, current="ember", status=""):
-        """The picker frame, composed the way `app.Picker` composes it."""
+        """The picker rows, composed the way the dialog composes them."""
         return "\r\n".join(
             editor.backdrop(line, FULL_SLOTS, cols)
             for line in editor.theme_lines(list(names), index, current,
