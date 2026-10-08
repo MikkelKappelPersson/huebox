@@ -6,7 +6,7 @@ docs/001-spec/spec.md). The v1 public names are re-exported here so
 """
 
 # NOTE: version first — cli imports it during package initialisation.
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 from .cli import main
 from .color import MISSING, NAMED, PALETTE, SLOTS
