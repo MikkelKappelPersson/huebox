@@ -183,6 +183,10 @@ over a dummy editor and compare with a mounted swap.
   `t`/`N`/`ADJUST`(`w,e,s,d,x,c,h,l,j,k,H,L`)/`i`,`X`/quit(`esc`,`Q`,Ctrl+C) —
   no `I` branch; `GRID_KEYS` is arrows only, `COLLAPSE_KEYS` is `{E,D,C}`.
   Lowercase `i` stays hex entry.
+
+> 2026-10-09 amendment: remapped — `i` opens the popup (with `I`), hex
+> entry moved to `h`, vim `h`/`j`/`k`/`l` unbound (`w`/`e`, `s`/`d`, `x`/`c`
+> already cover every axis).
 - **Message flow:** `SelectedChanged.selected` → footer count only;
   `SelectionHighlighted` carries (`selection_list`, `selection`) — there is
   **no `index` attr** (research §2 guess wrong); read the cursor index via

@@ -78,11 +78,11 @@ Run `huebox edit` and drive it with the keyboard.
 | `s` / `d` | saturation −/+ |
 | `x` / `c` | lightness −/+ |
 | `f` | cycle step size ×1 → ×5 → ×20 |
-| `i` | type a hex value |
+| `h` | type a hex value |
 | `Ctrl+S` | save — the session's only write: the theme file, then a push |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens, `n` makes a theme from the buffer, `Esc` back |
-| `I` | theme import — browse Ghostty/kitty/Alacritty themes, `space` toggles, `Enter` imports, `Esc` backs out |
+| `i` / `I` | theme import — browse Ghostty/kitty/Alacritty themes, `space` toggles, `Enter` imports, `Esc` backs out |
 | `N` | save the buffer as a new theme (and then save it) |
 | `Esc` | quit — twice if there are unsaved changes |
 

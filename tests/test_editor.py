@@ -931,7 +931,7 @@ class ApplyKey(unittest.TestCase):
 
         st, writes = self.background_state(prompt=prompt)
         self.dirty_and_adjust(st)
-        editor.apply_key("i", st)
+        editor.apply_key("h", st)
         # the prompt carries the slot, not just a bare name (P5 review)
         self.assertEqual(asked, ["  new hex for background: "])
         self.assertEqual(st.slots["background"], "#abcdef")
@@ -947,12 +947,12 @@ class ApplyKey(unittest.TestCase):
         st, _ = self.background_state(prompt=lambda name: "not a colour")
         self.dirty_and_adjust(st)
         before = dict(st.slots)
-        editor.apply_key("i", st)
+        editor.apply_key("h", st)
         self.assertEqual(st.slots, before)
         self.assertIn("valid", st.status)
 
         cancelled, _ = self.state(prompt=lambda name: None)
-        editor.apply_key("i", cancelled)
+        editor.apply_key("h", cancelled)
         self.assertEqual(cancelled.status, "")
         self.assertFalse(cancelled.dirty())
 
@@ -960,8 +960,23 @@ class ApplyKey(unittest.TestCase):
         st, _ = self.background_state()
         self.dirty_and_adjust(st)
         before = dict(st.slots)
-        editor.apply_key("i", st)
+        editor.apply_key("h", st)
         self.assertEqual(st.slots, before)
+
+    def test_i_and_vim_keys_are_inert_in_apply_key(self):
+        # `i` opens the import popup one layer up (app routes it before
+        # `apply_key`); `h` took hex entry and `j`/`k`/`l` stay unbound.
+        asked = []
+        st, writes = self.background_state(
+            prompt=lambda name: asked.append(name) or "#ffffff")
+        self.dirty_and_adjust(st)
+        before = dict(st.slots)
+        for key in ("i", "j", "k", "l"):
+            editor.apply_key(key, st)
+        self.assertEqual(st.slots, before)
+        self.assertEqual(asked, [])
+        self.assertEqual(writes, [])
+        self.assertFalse(st.quit)
 
     def test_movement_and_step_size_stay_clean(self):
         st, writes = self.state()
@@ -982,7 +997,7 @@ class ApplyKey(unittest.TestCase):
         st, writes = self.state(slots=partial)
         editor.apply_key("right", st)       # palette-1: no value in this file
         editor.apply_key("w", st)
-        editor.apply_key("i", st)
+        editor.apply_key("h", st)
         self.assertEqual(st.slots, partial)
         editor.apply_key(SAVE, st)
         self.assertEqual(writes, [partial])
@@ -1449,7 +1464,7 @@ class PickerKeys(PickerCase):
         st = self.picker_state()
         before = dict(st.slots)
         editor.apply_key("t", st)
-        for key in ("e", "d", "c", "u", "r", "f", SAVE, "i", "N"):
+        for key in ("e", "d", "c", "u", "r", "f", SAVE, "h", "N"):
             editor.apply_key(key, st)
         self.assertEqual(st.slots, before)
         self.assertEqual(st.mult, 1)

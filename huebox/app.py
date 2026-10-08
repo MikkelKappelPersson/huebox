@@ -721,17 +721,17 @@ class ThemesButton(Button):
 
 
 class ImportButton(Button):
-    """The `Import` button: a mouse mirror of `I` (003 spec §4.1).
+    """The `Import` button: a mouse mirror of `i` (003 spec §4.1).
 
     The info column's second control, directly below `Themes`: the same flat
     contract (never focusable, so the arrows stay on the grids; painted only
     in the theme's own `selection-background` / `selection-foreground`, hover
     as underline) and the same blank-fill row discipline (it rides the
     column's existing fill, so the row budget never moves). Pressing it does
-    exactly what `I` does, through the same `Editor.open_import` call — the
+    exactly what `i` does, through the same `Editor.open_import` call — the
     button and the key cannot disagree about what the popup is, the same rule
     `Themes`/`t` follows. Bare-stack mode (`HUEBOX_EDITOR_PANEL=0`) mounts no
-    top and keeps no button; `I` still works.
+    top and keeps no button; `i` still works.
     """
 
     can_focus = False
@@ -1402,11 +1402,11 @@ class ImportScreen(ModalScreen):
             elif action in ("selected-all", "cleared"):
                 self._sync_selection()
             return
-        if key in ("esc", "escape", "I", "\x03"):
+        if key in ("esc", "escape", "i", "I", "\x03"):
             if import_state.handle_key(st, key) == "close":
                 self.dismiss(None)
             return
-        # Anything else (`w/e/s/d/x/c/f/i/u/r/t/N/…`, `ctrl+s`, …) is an
+        # Anything else (`w/e/s/d/x/c/f/u/r/t/N/…`, `ctrl+s`, …) is an
         # editor key behind a popup that owns the surface: ignore it.
 
     def scroll_import(self, delta: int) -> None:
@@ -1967,7 +1967,7 @@ class Editor(App):
         # `themes` button, under the theme subject in the metadata
         # column, and below it the same flat `import` button (003/P4) —
         # never focusable, theme-closed by the same CSS, each exactly what
-        # its key does through the same call (`t`/`apply_key`, `I` /
+        # its key does through the same call (`t`/`apply_key`, `i` /
         # `open_import` — see `ThemesButton`, `ImportButton` and
         # `on_button_pressed`). Their floor follows the
         # column down: past the label's own 16 the buttons squeeze with
@@ -1981,7 +1981,7 @@ class Editor(App):
         button.styles.padding = 0
         # The top's second control (003/P4): the same flat `import` button,
         # directly below `themes` in the metadata column. Never focusable,
-        # theme-closed by the same CSS, and exactly what `I` does through the
+        # theme-closed by the same CSS, and exactly what `i` does through the
         # same `open_import` call. It costs no row, and neither does the one
         # blank row parting it from `themes`: the column's last rows were
         # blank fill, and the metadata frame above gives two back.
@@ -2779,10 +2779,10 @@ class Editor(App):
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
             return
-        # 003/P4 — `I` opens the import popup, through the one call the
+        # 003/P4 — `i` (or `I`) opens the import popup, through the one call the
         # `Import` button takes. While the picker owns the surface it has
         # no branch (takeovers never stack); `open_import` re-checks both.
-        if translate(event.key) == "I":
+        if translate(event.key) in ("i", "I"):
             if self.state.overlay is not None:
                 return
             self.open_import()
@@ -2810,7 +2810,7 @@ class Editor(App):
         or the no-library status — and `redraw` hands focus to the picker
         when one opened, the same as `on_key` does after `apply_key`. The
         `import` button (003/P4) resolves the same way to `open_import`, the
-        identical call the `I` key takes.
+        identical call the `i`/`I` keys take.
         """
         button_id = getattr(event.button, "id", None)
         if button_id == "import-button":
@@ -2840,12 +2840,12 @@ class Editor(App):
         return screen if isinstance(screen, ImportScreen) else None
 
     def open_import(self) -> None:
-        """`I` and the `Import` button: one call for both (003 spec §4.1).
+        """`i`/`I` and the `Import` button: one call for both (003 spec §4.1).
 
         Opening is never blocked by a dirty buffer, and neither open nor
         close retargets the session: importing adds library files, it never
         touches the buffer the way the picker does. Takeovers never stack —
-        the picker owns the surface while it is up, and a second `I` while
+        the picker owns the surface while it is up, and a second `i` while
         the popup is up is a no-op. The provider order comes from the
         injected library's formats (P5 builds it; `None` lists nothing, so
         a bare popup renders empty groups and never crashes).
@@ -2888,7 +2888,7 @@ class Editor(App):
     def _import_closed(self, result) -> None:
         """The popup dismissed: write the plan, report, frame returns.
 
-        `result` is `None` on abandon (Esc/`I`/cancel — buffer and status
+        `result` is `None` on abandon (Esc/`i`/cancel — buffer and status
         untouched) or the `(plans, skips, failures)` payload from `confirm`.
         Each plan lands through the injected writer (`themes.create` per
         plan, truth files only); successes and skips fold into the status

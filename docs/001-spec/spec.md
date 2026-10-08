@@ -93,7 +93,7 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `s` / `d` | saturation −/+ |
 | `x` / `c` | lightness −/+ |
 | `f` | cycle step multiplier ×1 → ×5 → ×20 |
-| `i` | type a hex value directly |
+| `h` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens **and pushes it**, `n` new from the buffer, `Esc` back (§13.7) |
@@ -137,7 +137,7 @@ replaces: **every path out of the session restores the terminal**, because
 there is only one owner and it restores on the way down.
 
 The paths out are a clean quit (`Esc`, `Q`, `Ctrl+C`), the same after an
-armed dirty quit discarded the buffer, a prompt — hex entry (`i` / `X`), the
+armed dirty quit discarded the buffer, a prompt — hex entry (`h` / `X`), the
 picker's name prompt (`n`, `N`) and its exists-confirm follow-up — and any
 exception out of a handler. A prompt is a suspend and re-enter of the whole
 application rather than a termios save/restore pair, so there is no longer a
@@ -1069,7 +1069,7 @@ The export as built:
 ### 13.7 TUI theme switching
 
 - `t` opens a theme overlay: arrows + Enter to open, `n` for new (name via
-  the same prompt trick as `i`), `Esc` back. The mouse reaches the same
+  the same prompt trick as `h`), `Esc` back. The mouse reaches the same
   places: a click on a row opens it, the wheel walks the list (§4.3.2).
 - **Enter is a save, not a peek** (decision 27): opening a theme runs the
   ordinary save path, so the truth file is written, the theme is pushed and

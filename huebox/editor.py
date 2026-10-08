@@ -42,10 +42,11 @@ ADJUST = {
     "w": ("h", -1), "e": ("h", +1),
     "s": ("s", -1), "d": ("s", +1),
     "x": ("v", -1), "c": ("v", +1),
-    "h": ("h", -1), "l": ("h", +1),
-    "j": ("v", -1), "k": ("v", +1),
     "H": ("s", -1), "L": ("s", +1),
 }
+#: No vim quartet: `h` takes hex entry and `i` opens the import popup, so
+#: `h`/`j`/`k`/`l` stay unbound — `w`/`e`, `s`/`d` and `x`/`c` already
+#: cover every axis.
 MULT_STEPS = [1, 5, 20]
 #: The slot selected on open and after a theme switch (`palette-5`).
 INITIAL_SEL = 5
@@ -914,8 +915,8 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # whether the rows below leave room.
     tail = ["  " + line for line in hint_line(slots, [
         ("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"), ("x/c", "light"),
-        ("f", f"x{mult}"), ("i", "hex"), ("^S", "save"),
-        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"),
+        ("f", f"x{mult}"), ("h", "hex"), ("^S", "save"),
+        ("u", f"undo({len(undo)})"), ("r", "revert"), ("t", "themes"), ("i", "import"),
         ("N", "as new"), ("Esc", "quit")],
         # two spaces, not three: the picker added two keys to this line and
         # one more row here would come out of the examples strip's budget
@@ -1343,7 +1344,7 @@ def _adjust(st, key):
 
 
 def _prompt(st):
-    """`i` / `X` — hex entry, re-injected so `apply_key` stays testable."""
+    """`h` / `X` — hex entry, re-injected so `apply_key` stays testable."""
     name = SLOTS[st.sel]
     typed = st.prompt_hex(f"  new hex for {name}: ") if st.prompt_hex else None
     if typed is None:                        # cancelled: leave the buffer be
@@ -1583,5 +1584,5 @@ def apply_key(key, st):
         return                  # slot absent from this config: nothing to do
     elif key in ADJUST:
         _adjust(st, key)
-    elif key in ("i", "X"):
+    elif key in ("h", "X"):
         _prompt(st)

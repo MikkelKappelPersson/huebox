@@ -62,6 +62,39 @@ class Slugify(unittest.TestCase):
             self.assertTrue(themes.valid_name(name), name)
 
 
+class OpenCloseKeys(unittest.TestCase):
+    """`i` opens like `I`; every close spelling abandons, writing nothing."""
+
+    def _state(self):
+        lib = import_state.ImportLibrary(
+            listing=lambda provider: ([("Alpha", "/a")]
+                                      if provider == "ghostty" else []),
+            reader=lambda _provider, _path: {},
+            formats={"ghostty": "ghostty"})
+        return import_state.ImportState(["ghostty"], lib)
+
+    def test_i_and_uppercase_i_open(self):
+        for key in ("i", "I"):
+            st = self._state()
+            self.assertEqual(import_state.handle_key(st, key), "open")
+            self.assertTrue(st.is_open)
+
+    def test_other_keys_ignored_while_closed(self):
+        st = self._state()
+        for key in ("h", "t", "enter", "space"):
+            self.assertEqual(import_state.handle_key(st, key), "ignored")
+        self.assertFalse(st.is_open)
+
+    def test_close_spellings_abandon(self):
+        for key in ("esc", "escape", "i", "I", "\x03"):
+            st = self._state()
+            import_state.open_import(st)
+            import_state.toggle(st)
+            self.assertEqual(import_state.handle_key(st, key), "close")
+            self.assertFalse(st.is_open)
+            self.assertEqual(st.selected, set())
+
+
 class ConfirmMapping(unittest.TestCase):
     """The toggled set → names + skip-list; pure, writes nothing."""
 

@@ -58,8 +58,8 @@ __all__ = [
 #: `Enter` spellings `handle_key` confirms on (spec §4.6).
 ENTER_KEYS = ("enter", "\r", "\n")
 
-#: Close spellings: `Esc` / `I` / `Ctrl+C` all abandon, writing nothing.
-CLOSE_KEYS = ("esc", "escape", "I", "\x03")
+#: Close spellings: `Esc` / `i` / `Ctrl+C` all abandon, writing nothing.
+CLOSE_KEYS = ("esc", "escape", "i", "I", "\x03")
 
 
 class ImportLibrary:
@@ -385,7 +385,7 @@ def cursor_slots(st) -> dict:
 
 
 def open_import(st) -> None:
-    """`I` with the popup down: take the surface.
+    """`i` (or `I`) with the popup down: take the surface.
 
     Opening is never blocked (not by a dirty buffer — importing adds
     library files, it never retargets the session) and touches nothing
@@ -429,21 +429,21 @@ def handle_key(st, key: str):
     re-implementing the surface. Mutates only through the transitions
     above; anything without a branch is `"ignored"` with the state
     untouched. In particular every editor colour key
-    (`w/e/s/d/x/c/f/i/u/r/t/N/…`) is inert by construction — there is
+    (`w/e/s/d/x/c/f/u/r/t/N/…`) is inert by construction — there is
     simply no branch for it — and so is the picker's `t` while the popup
     is up.
 
     Interlock (phase 4/5 enforce with `is_open`): route keys here only
     while the import popup owns the surface. While it is up, `t`/picker
-    keys must not reach `apply_key`; while the picker is up, `I` must not
-    reach this (the closed branch below answers only to `I`). `Enter`
+    keys must not reach `apply_key`; while the picker is up, `i` must not
+    reach this (the closed branch below answers only to `i`/`I`). `Enter`
     returns `"confirm"` and leaves the write to the caller
     (`plan_confirm`, then `themes.create` per plan in phase 5); with
     nothing selected the caller stays open on the `"nothing selected"`
     note `plan_confirm` sets.
     """
     if not st.is_open:
-        if key == "I":
+        if key in ("i", "I"):
             open_import(st)
             return "open"
         return "ignored"

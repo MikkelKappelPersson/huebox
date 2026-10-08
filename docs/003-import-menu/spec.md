@@ -56,10 +56,10 @@ into the library without dropping back to a shell per theme.
 - Same look and contract as `Themes`: flat, never focusable (arrows stay on
   the grids), painted only in the theme's own
   `selection-background` / `selection-foreground`, hover as underline.
-- Pressing it (click) does exactly what the `I` key does (see §4.6),
+- Pressing it (click) does exactly what the `i` key does (see §4.6),
   through the same call — the button and the key cannot disagree about what
   the import popup is, the same rule `Themes`/`t` follows.
-- `HUEBOX_EDITOR_PANEL=0` (bare stack top) keeps no `Import` button; `I`
+- `HUEBOX_EDITOR_PANEL=0` (bare stack top) keeps no `Import` button; `i`
   still opens the popup. The button costs no extra row: it rides the info
   column's existing blank-fill row the same way `Themes` does.
 
@@ -72,12 +72,12 @@ into the library without dropping back to a shell per theme.
   - **Left:** the provider groups and their theme lists (§4.3).
   - **Right:** the preview of the highlighted (cursor) theme (§4.5).
   - **Footer:** hint line plus confirm/cancel — `space` toggle,
-    `Enter`/confirm button imports, `Esc`/`I` backs out without writing
+    `Enter`/confirm button imports, `Esc`/`i` backs out without writing
     anything.
 - Below the minimum size the popup keeps the editor's own fallback: the
   `terminal too small` line instead of a squeezed modal. Same `MIN_COLS` /
   `MIN_ROWS` floor, no second constant.
-- `Esc` (or `I`, or the cancel button) always backs out without writing.
+- `Esc` (or `i`, or the cancel button) always backs out without writing.
   Opening the popup is never blocked by a dirty buffer, and closing it —
   either way — never touches the buffer: importing adds library files, it
   does not retarget the session the way the picker does.
@@ -145,7 +145,7 @@ into the library without dropping back to a shell per theme.
 
 | Key | Action |
 | --- | --- |
-| `I` | open the import popup / close it (same as `Esc`, writes nothing) |
+| `i` / `I` | open the import popup / close it (same as `Esc`, writes nothing) |
 | `up` / `down` (arrows) | move the cursor one theme, across open groups |
 | `left` / `right` | collapse / expand the group under the cursor |
 | `space` | toggle the highlighted theme |
@@ -294,7 +294,7 @@ Append-only. Newest last. One line per decision, with the reason.
 
 | # | Decision | Why |
 | --- | --- | --- |
-| 1 | `Import` button sits below `Themes`, same contract (flat, unfocusable, selection-pair paint) | One column owns the top's controls; a second button anywhere else splits the surface `t`/`I` share |
+| 1 | `Import` button sits below `Themes`, same contract (flat, unfocusable, selection-pair paint) | One column owns the top's controls; a second button anywhere else splits the surface `t`/`i` share |
 | 2 | Providers are `Collapsible`s, themes a `SelectionList` multi-select, confirm once | Textual-native grouped toggle-list; matches the requested shape without inventing widgets |
 | 3 | Preview shows the cursor theme via shared `example_lines` / `sample_lines` / swatch units | No second renderer; the editor and the popup cannot disagree about what a theme looks like |
 | 4 | Confirm writes truth files only — no push, no retarget, current untouched | Import is library work, not session work; push stays on save/`use` where the write contract already lives |
