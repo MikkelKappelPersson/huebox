@@ -1876,10 +1876,12 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              + info.styles.width.value
                              + editor_panel.styles.width.value, 120)
             # One row budget: header and editor box stand `top_screen`,
-            # the info column leaves its last two rows for the buttons below.
+            # the info column leaves its last three rows for the controls
+            # below: the two buttons parted by one blank row, so they never
+            # read as one slab.
             self.assertEqual(header.styles.height.value,
                              editor_panel.styles.height.value)
-            self.assertEqual(info.styles.height.value + 2,
+            self.assertEqual(info.styles.height.value + 3,
                              header.styles.height.value)
             self.assertEqual(hsv.styles.width.value,
                              editor_outer - 2

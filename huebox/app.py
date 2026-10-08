@@ -1041,7 +1041,9 @@ class ImportScreen(ModalScreen):
     # `auto` ink, no derived washes. The modal dim is overridden to the
     # theme's own `background` (Textual's overlay colour never shows), and
     # all four `selection-list--button*` component classes bind theme slots:
-    # the cursor wears the selection pair, a toggled row reads bold.
+    # the cursor wears the selection pair, a toggled row reads bold, and an
+    # untoggled box stays muted (`$text-muted`, the frame furniture's own
+    # grey) so the bright `X` marks the picked rows alone.
     DEFAULT_CSS = """
     ImportScreen {
         background: $background;
@@ -1081,7 +1083,7 @@ class ImportScreen(ModalScreen):
     }
     ImportScreen SelectionList > .selection-list--button {
         background: $background;
-        color: $foreground;
+        color: $text-muted;
     }
     ImportScreen SelectionList > .selection-list--button-selected {
         background: $background;
@@ -1958,7 +1960,7 @@ class Editor(App):
         header_frame.styles.margin = 0
         meta_frame = Frame(meta, meta_w, name="info")
         meta_frame.styles.width = meta_w
-        meta_frame.styles.height = top_screen - 2
+        meta_frame.styles.height = top_screen - 3
         meta_frame.styles.padding = 0
         meta_frame.styles.margin = 0
         # The top's controls in this arrangement: the same flat
@@ -1980,13 +1982,14 @@ class Editor(App):
         # The top's second control (003/P4): the same flat `import` button,
         # directly below `themes` in the metadata column. Never focusable,
         # theme-closed by the same CSS, and exactly what `I` does through the
-        # same `open_import` call. It costs no row: the column's last row was
-        # blank fill, and the metadata frame above gives one back.
+        # same `open_import` call. It costs no row, and neither does the one
+        # blank row parting it from `themes`: the column's last rows were
+        # blank fill, and the metadata frame above gives two back.
         import_button = ImportButton()
         import_button.styles.width = meta_w - 2 * button_air
         import_button.styles.min_width = min(16, meta_w - 2 * button_air)
         import_button.styles.height = 1
-        import_button.styles.margin = (0, button_air)
+        import_button.styles.margin = (1, button_air, 0, button_air)
         import_button.styles.padding = 0
         meta_col = Vertical(meta_frame, button, import_button)
         meta_col.styles.width = meta_w
