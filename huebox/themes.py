@@ -505,7 +505,28 @@ def ghostty_app_pid() -> int:
     return None
 
 
+def _env_pid(name: str):
+    """A PID from the environment, or `None` when it is missing or junk."""
+    try:
+        pid = int(os.environ.get(name, ""))
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
 def reload_terminal(fmt: str) -> str:
+    """Ask `fmt`'s terminal to re-read its config; the report line, or "".
+
+    Best effort by contract: a terminal that is not there, a signal that
+    lands nowhere and a command that is not installed are all the same
+    event to the user — the colours are on disk either way — so this
+    returns "" and the caller keeps the "reload your terminal" advice.
+
+    Signals beat subprocesses wherever a terminal has one: `kitty @`
+    without a socket talks to the controlling tty through escape codes,
+    and under the editor that channel is the app's own input — the reply
+    never arrives. A signal needs no tty at all.
+    """
     """Ask `fmt`'s terminal to re-read its config; the report line, or "".
 
     Best effort by contract: a terminal that is not there, a signal that
@@ -522,6 +543,16 @@ def reload_terminal(fmt: str) -> str:
         except OSError:
             return ""
         return f"ghostty: reloaded (config re-read, pid {pid})"
+    if fmt == "kitty":
+        pid = _env_pid("KITTY_PID")
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGUSR1)
+            except OSError:
+                return ""
+            return f"kitty: reloaded (config re-read, pid {pid})"
+        # not inside a kitty window: fall through to `kitty @`, which
+        # reaches the controlling terminal when that is a kitty.
     command = RELOAD_COMMANDS.get(fmt)
     if not command:
         return ""

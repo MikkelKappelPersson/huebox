@@ -1032,10 +1032,22 @@ class TestReload(LibraryHome):
                              "ghostty: reloaded (config re-read, pid 4242)")
         kill.assert_called_once_with(4242, signal.SIGUSR2)
 
-    def test_kitty_is_asked_through_its_own_remote_control(self):
+    def test_kitty_is_asked_with_the_signal_its_own_app_handles(self):
+        # `kill -SIGUSR1 $KITTY_PID` is kitty's documented manual reload;
+        # a signal needs no tty, while `kitty @` without a socket talks
+        # through the controlling terminal's escape codes — under the
+        # editor that channel is the app's own input.
+        with mock.patch.dict(os.environ, {"KITTY_PID": "4242"}), \
+                mock.patch.object(themes.os, "kill") as kill:
+            self.assertEqual(themes.reload_terminal("kitty"),
+                             "kitty: reloaded (config re-read, pid 4242)")
+        kill.assert_called_once_with(4242, signal.SIGUSR1)
+
+    def test_kitty_without_its_pid_falls_back_to_remote_control(self):
         done = subprocess.CompletedProcess(["kitty"], 0)
-        with mock.patch.object(themes.subprocess, "run",
-                               return_value=done) as run:
+        with mock.patch.dict(os.environ, {"KITTY_PID": ""}), \
+                mock.patch.object(themes.subprocess, "run",
+                                  return_value=done) as run:
             self.assertEqual(themes.reload_terminal("kitty"),
                              "kitty: reloaded (kitty @ load-config)")
         command = run.call_args[0][0]
