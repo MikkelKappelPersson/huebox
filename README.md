@@ -1,5 +1,7 @@
 # 🎨 huebox
 
+[![PyPI](https://img.shields.io/pypi/v/huebox)](https://pypi.org/p/huebox/) [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](pyproject.toml) [![License](https://img.shields.io/github/license/MikkelKappelPersson/huebox)](LICENSE)
+
 A terminal theme editor with live preview — repaint your terminal without leaving it.
 
 `huebox` shows you the colours your terminal is actually using, and lets you change them from a keyboard-driven interface — no hex codes, no hand-editing, no restarting.
