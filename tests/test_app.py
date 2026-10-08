@@ -127,6 +127,29 @@ class TestTokenBinding(unittest.TestCase):
         self.assertIn("text", huebox_app.TOKEN_SLOTS)
         self.assertNotEqual(app.get_css_variables()["text"], "ansi_default")
 
+    def test_chrome_follows_the_buffer_not_the_opened_theme(self):
+        """Adjust keys repaint the rows from the buffer; the chrome must
+        follow or the gutters wear the opened theme while the content
+        already shows the edit."""
+        app = self._app()
+        opened = app.get_css_variables()["background"]
+        app.state.slots["background"] = "#000000"
+        app._sync_css_variables(app.state)
+        self.assertEqual(app.get_css_variables()["background"], "#000000")
+        self.assertNotEqual(opened, "#000000")
+
+    def test_unchanged_buffer_skips_the_stylesheet_recompile(self):
+        app = self._app()
+        with mock.patch.object(app.stylesheet, "reparse") as reparse:
+            app._sync_css_variables(app.state)
+        reparse.assert_not_called()
+        """The one default that bites: `$text` is generated as `ansi_default`,
+        the terminal's own foreground. A widget falling through to it paints a
+        colour that is not the theme's."""
+        app = self._app()
+        self.assertIn("text", huebox_app.TOKEN_SLOTS)
+        self.assertNotEqual(app.get_css_variables()["text"], "ansi_default")
+
     def test_the_scrollbar_is_bound_because_it_is_the_first_thing_to_leak(self):
         app = self._app()
         variables = app.get_css_variables()

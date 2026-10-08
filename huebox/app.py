@@ -2602,10 +2602,30 @@ class Editor(App):
         self._redraw_scheduled = False
         self.redraw()
 
+    def _sync_css_variables(self, state) -> None:
+        """Re-bind the compositor chrome to the live buffer.
+
+        `get_css_variables` runs once at startup, so without this every
+        `$background`/`$border` wears the theme as opened while the rows
+        already show the buffer — an adjust key would repaint everything
+        but the chrome. Only the token-bound slots are compared, and the
+        stylesheet is recompiled only when one of them moved.
+        """
+        slots = getattr(state, "slots", None) or {}
+        if not any(self.slots.get(slot) != slots.get(slot)
+                   for slot in set(TOKEN_SLOTS.values())):
+            return
+        self.slots.update(slots)
+        if self.is_running:
+            self.stylesheet.set_variables(self.get_css_variables())
+            self.stylesheet.reparse()
+            self.stylesheet.update(self, animate=False)
+
     def redraw(self) -> None:
         """Re-derive the frame at the current size and hand it to the widget."""
         width, height = self.size
         state = self.state
+        self._sync_css_variables(state)
         # §15.7 — the layout size is the window clamped to the panel maxima:
         # within them this is identity and every size lays out as before;
         # past them the grid, the folds and the row budget stop moving and
