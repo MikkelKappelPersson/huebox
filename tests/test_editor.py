@@ -1433,6 +1433,19 @@ class PickerKeys(PickerCase):
         self.assertEqual(self.library.calls,
                          [("load", "frost")])
 
+    def test_the_compositor_enter_opens_the_selected_theme(self):
+        # Textual speaks `enter` where the headless tests speak `\r` —
+        # both arrive at the same branch, so a click and the keyboard key
+        # the app actually delivers open the theme alike.
+        st = self.picker_state()
+        editor.apply_key("t", st)
+        editor.apply_key("down", st)
+        editor.apply_key("enter", st)
+        self.assertEqual(st.theme, "frost")
+        self.assertIsNone(st.overlay)
+        self.assertEqual(self.writes,
+                         [("frost", "/themes/frost.toml", st.slots)])
+
     def test_a_dirty_switch_is_blocked_with_the_exact_status(self):
         st = self.picker_state()
         editor.apply_key("w", st)                  # dirty
@@ -1616,6 +1629,238 @@ class PickerCreates(PickerCase):
         self.assertEqual(editor.head_label(st), "dusk ghostty")  # saved
 
 
+class SetupCase(PickerCase):
+    """Shared fixture: an empty library, so the first-run choice is up."""
+
+    def setup_state(self, prompts=(), problem=""):
+        st = self.picker_state(names=(), theme=None, prompts=prompts,
+                               problem=problem)
+        self.assertTrue(editor.enter_setup(st))
+        self.assertEqual(st.setup, 0)
+        return st
+
+
+class SetupKeys(SetupCase):
+    """The first-run choice: import or name-and-create, before any edit."""
+
+    def test_enter_setup_opens_on_import_and_stays_put(self):
+        st = self.picker_state(names=(), theme=None)
+        self.assertTrue(editor.enter_setup(st))
+        self.assertEqual(st.setup, 0)
+        self.assertEqual(st.status, "")
+        self.assertTrue(editor.enter_setup(st))   # idempotent
+        self.assertEqual(st.setup, 0)
+
+    def test_no_setup_when_the_library_has_themes(self):
+        st = self.picker_state()
+        self.assertFalse(editor.enter_setup(st))
+        self.assertIsNone(st.setup)
+
+    def test_no_setup_without_a_library(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None)
+        self.assertFalse(editor.enter_setup(st))
+        self.assertIsNone(st.setup)
+
+    def test_arrows_move_between_the_two_choices_and_stop_at_the_edges(self):
+        st = self.setup_state()
+        editor.apply_key("down", st)
+        self.assertEqual(st.setup, 1)
+        editor.apply_key("down", st)
+        self.assertEqual(st.setup, 1)
+        editor.apply_key("right", st)
+        self.assertEqual(st.setup, 1)
+        editor.apply_key("up", st)
+        self.assertEqual(st.setup, 0)
+        editor.apply_key("up", st)
+        self.assertEqual(st.setup, 0)
+        editor.apply_key("left", st)
+        self.assertEqual(st.setup, 0)
+        self.assertEqual(st.sel, editor.INITIAL_SEL)  # slots untouched
+
+    def test_enter_on_import_asks_the_shell_for_the_popup(self):
+        for key in ("\r", "\n", "enter"):
+            with self.subTest(key=repr(key)):
+                st = self.setup_state()
+                before = dict(st.slots)
+                editor.apply_key(key, st)
+                self.assertIsNone(st.setup)
+                self.assertTrue(st.import_pending)
+                self.assertEqual(st.slots, before)
+                self.assertFalse(st.quit)
+                self.assertEqual(st.status, "")
+
+    def test_i_imports_from_either_row(self):
+        st = self.setup_state()
+        editor.apply_key("down", st)
+        editor.apply_key("i", st)
+        self.assertIsNone(st.setup)
+        self.assertTrue(st.import_pending)
+
+    def test_n_opens_the_inline_field_and_typing_names_it(self):
+        st = self.setup_state()
+        editor.apply_key("n", st)
+        self.assertEqual(st.setup_name, "")
+        self.assertEqual(st.setup, 1)        # still choosing underneath
+        for key in ("d", "u", "s", "k"):
+            editor.apply_key(key, st)
+        self.assertEqual(st.setup_name, "dusk")
+        editor.apply_key("\r", st)
+        name, force, values = self.library.calls[0][1:]
+        self.assertEqual((name, force), ("dusk", False))
+        self.assertEqual(values, st.slots)       # the buffer, as written
+        self.assertEqual(st.theme, "dusk")
+        self.assertEqual(st.path, "/themes/dusk.toml")
+        self.assertEqual(st.created, "dusk")
+        self.assertIsNone(st.setup)
+        self.assertIsNone(st.setup_name)
+        self.assertFalse(st.import_pending)
+        self.assertFalse(st.dirty())
+        self.assertEqual(st.status, "created dusk - current now")
+        self.assertEqual(self.labels, [])        # typed, never prompted
+
+    def test_enter_on_the_new_row_names_too(self):
+        st = self.setup_state()
+        editor.apply_key("down", st)
+        editor.apply_key("\r", st)
+        self.assertEqual(st.setup_name, "")
+        editor.apply_key("enter", st)          # empty: back to the choices
+        self.assertIsNone(st.setup_name)
+        self.assertEqual(st.setup, 1)
+        self.assertEqual(st.status, "cancelled - no theme created")
+        self.assertIsNone(st.theme)
+
+    def test_esc_backs_out_of_naming_to_the_choices(self):
+        st = self.setup_state()
+        editor.apply_key("n", st)
+        editor.apply_key("d", st)
+        editor.apply_key("u", st)
+        editor.apply_key("esc", st)
+        self.assertIsNone(st.setup_name)
+        self.assertEqual(st.setup, 1)
+        self.assertEqual(st.status, "")
+        self.assertIsNone(st.theme)
+        self.assertFalse(st.quit)                # quitting stays a row away
+
+    def test_backspace_deletes_and_arrows_are_swallowed(self):
+        st = self.setup_state()
+        editor.apply_key("n", st)
+        for key in ("d", "u", "s", "k", "x"):
+            editor.apply_key(key, st)
+        editor.apply_key("backspace", st)
+        self.assertEqual(st.setup_name, "dusk")
+        before = dict(st.slots)
+        for key in ("up", "down", "left", "right", "t", SAVE, "\x03"):
+            editor.apply_key(key, st)
+        self.assertEqual(st.setup_name, "duskt")  # printables type;
+        # arrows and control codes never reach the buffer or the session
+        self.assertEqual(st.setup, 1)
+        self.assertEqual(st.slots, before)
+        self.assertFalse(st.quit)
+
+    def test_a_taken_name_stays_in_the_field_with_the_reason(self):
+        st = self.setup_state()
+        self.library.names_in.append("dusk")
+        editor.apply_key("n", st)
+        for key in ("d", "u", "s", "k"):
+            editor.apply_key(key, st)
+        editor.apply_key("\r", st)
+        self.assertEqual(self.library.calls, [])
+        self.assertEqual(st.status, "dusk exists - type another name")
+        self.assertEqual(st.setup_name, "dusk")   # kept, to fix not retype
+        self.assertEqual(st.setup, 1)
+        self.assertIsNone(st.theme)
+
+    def test_a_refusal_comes_back_as_a_status_not_an_exception(self):
+        problem = "invalid theme name (letters, digits, - and _, 64 max)"
+        st = self.setup_state(problem=problem)
+        editor.apply_key("n", st)
+        for key in ("d", "u", "s", "k"):
+            editor.apply_key(key, st)
+        editor.apply_key("\r", st)
+        self.assertEqual(st.status, problem)
+        self.assertEqual(st.setup_name, "dusk")
+        self.assertEqual(st.setup, 1)
+        self.assertIsNone(st.theme)
+        self.assertEqual(self.writes, [])
+
+    def test_esc_quits_instead_of_revealing_an_empty_editor(self):
+        for closer in ("esc", "Q", "\x03"):
+            with self.subTest(key=closer):
+                st = self.setup_state()
+                editor.apply_key(closer, st)
+                self.assertTrue(st.quit)
+                self.assertIsNone(st.setup)
+
+    def test_the_choice_swallows_the_rest_of_the_key_surface(self):
+        st = self.setup_state()
+        before = dict(st.slots)
+        for key in ("w", "e", "s", "d", "x", "c", "u", "r", "f",
+                    SAVE, "h", "t"):
+            editor.apply_key(key, st)
+        self.assertEqual(st.slots, before)
+        self.assertEqual(st.mult, 1)
+        self.assertEqual(self.writes, [])
+        self.assertFalse(st.quit)
+        self.assertEqual(st.setup, 0)
+        self.assertEqual(st.status, "")
+        self.assertIsNone(st.overlay)            # no picker behind it
+
+    def test_setup_lines_are_a_clipped_frame_with_two_clickable_rows(self):
+        rows = editor.setup_lines(0, 80, 24, slots=dict(FULL_SLOTS))
+        self.assertLessEqual(len(rows), 24)
+        for line in rows:
+            self.assertLessEqual(width(line), 80)
+        body = "\n".join(plain(line) for line in rows)
+        self.assertIn("Import themes", body)
+        self.assertIn("Create new theme", body)
+        hits = editor.setup_hits(1, 80, 24, slots=dict(FULL_SLOTS))
+        self.assertEqual([hit.slot for hit in hits], [0, 1])
+
+    def test_setup_naming_lines_show_the_field_and_no_choices(self):
+        rows = editor.setup_lines(1, 80, 24, slots=dict(FULL_SLOTS),
+                                  name="dusk")
+        self.assertLessEqual(len(rows), 24)
+        for line in rows:
+            self.assertLessEqual(width(line), 80)
+        body = "\n".join(plain(line) for line in rows)
+        self.assertIn("dusk_", body)            # the typed name + cursor
+        self.assertNotIn("Import themes", body)
+        self.assertNotIn("Create new theme", body)
+        self.assertIn("save", body)            # the field's own footer
+
+    def test_an_empty_library_drives_through_the_choice(self):
+        written = io.StringIO()
+        stream = iter(["esc"])
+        empty = editor.Library(listing=lambda: [])
+        with mock.patch.object(sys, "stdout", written):
+            st = session.drive(stream, "ghostty", "/tmp/huebox.conf",
+                               dict(FULL_SLOTS),
+                               lambda name, path, values: None,
+                               theme=None, library=empty, size=(80, 24))
+        self.assertTrue(st.quit)
+        self.assertIn("Import themes", written.getvalue())
+
+    def test_choosing_new_in_a_driven_session_names_and_adopts(self):
+        stream = iter(["n", "d", "u", "s", "k", "\r", "esc"])
+        made = {}
+
+        def creator(name, slots, force=False):
+            made[name] = dict(slots)
+            return f"/themes/{name}.toml", ""
+
+        empty = editor.Library(listing=lambda: [], creator=creator)
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            st = session.drive(stream, "ghostty", "/tmp/huebox.conf",
+                               dict(FULL_SLOTS),
+                               lambda name, path, values: None,
+                               theme=None, library=empty, size=(80, 24))
+        self.assertEqual(st.theme, "dusk")
+        self.assertEqual(made["dusk"]["palette-5"], st.slots["palette-5"])
+        self.assertEqual(st.theme, "dusk")
+        self.assertEqual(st.created, "dusk")
+        self.assertTrue(st.quit)
+
+
 class StatusBar(unittest.TestCase):
     """`<theme> ● <fmt>` and `direct:<path>` (§13.7)."""
 
@@ -1758,3 +2003,38 @@ class HitMap(unittest.TestCase):
             self.assertIsNone(editor.slot_at(hits, x, y),
                               "(%d,%d) is chrome, not a colour" % (x, y))
 
+
+
+class TopSubject(unittest.TestCase):
+    """The compositor top's `(label, path)`: name and file, separately."""
+
+    def test_a_theme_session_passes_its_head_and_file_through(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None,
+                                theme="ember", fmt="ghostty",
+                                path="/themes/ember.toml")
+        self.assertEqual(editor.top_subject(st, "ember ghostty"),
+                         ("ember ghostty", "/themes/ember.toml"))
+
+    def test_a_direct_session_prices_its_name_not_its_path(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None,
+                                theme=None, fmt="ghostty",
+                                path="/home/you/.config/kitty/kitty.conf")
+        head = "direct:/home/you/.config/kitty/kitty.conf"
+        self.assertEqual(editor.top_subject(st, head),
+                         ("direct", "/home/you/.config/kitty/kitty.conf"))
+
+    def test_a_direct_fallback_without_a_path_passes_through(self):
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None,
+                                theme=None, fmt="ghostty", path="")
+        self.assertEqual(editor.top_subject(st, "ghostty"),
+                         ("ghostty", ""))
+
+    def test_the_split_lays_out_like_a_short_named_theme(self):
+        slots = dict(FULL_SLOTS)
+        path = "/home/you/.config/kitty/kitty.conf"
+        direct = editor.top_layout(120, "direct", path, slots, 5)
+        theme = editor.top_layout(120, "ember ghostty",
+                                   "/themes/ember.toml", slots, 5)
+        self.assertIsNotNone(direct)
+        self.assertEqual(direct[0], theme[0],
+                         "the same window owes both sessions the same logo")

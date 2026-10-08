@@ -32,10 +32,12 @@ Decouples the editing session from the outside world; makes the session testable
 
 ### 4. State/View Separation
 Separates editing behaviour from the compositor; enables testing behaviour without Textual.
-- `EditorState` + `apply_key` own ALL editing behaviour — selection, adjust, undo, revert, step size, picker, save, two-armed Esc. `app` owns only keys-in, redraw, and the two prompts
+- `EditorState` + `apply_key` own ALL editing behaviour — selection, adjust, undo, revert, step size, picker, first-run setup choice, save, two-armed Esc. `app` owns only keys-in, redraw, and the two prompts
 - `app` reuses `draw_editor`'s rows (handed to Textual as `Strip`s) — it never re-renders the frame, re-implements grid geometry, or duplicates step arithmetic (`HUE_STEP` / `CHANNEL_STEP` in `color` is the single source)
 - The editor draws from the in-memory buffer every frame; disk writes happen on Ctrl+S only
-- A click resolves to a slot and goes through `apply_key` — it never touches a colour or a frame directly. Clickable cells are recorded by the rows that draw them (`draw_editor` / `theme_lines` take `hits=`), never recomputed
+- A click resolves to a slot and goes through `apply_key` — it never touches a colour or a frame directly. Clickable cells are recorded by the rows that draw them (`draw_editor` / `theme_lines` / `setup_lines` take `hits=`), never recomputed
+- Frame mounts and queries scope to the stack bottom (`_editor_screen`): `App.query` spans every screen while `App.mount` targets the active one, so an unscoped redraw under a modal tears the editor's widgets out of the default screen and mounts them into the popup. Popups mount through their own screen methods, which are already scoped.
+- An empty library opens on the first-run choice as a modal popup, not an editor with nothing to save to: `enter_setup` arms it, `SetupScreen` shows `setup_lines`' rows in a centered dialog over the dimmed editor (the screen keeps the modal dim, never an opaque fill), and `apply_key` still owns every key. `Enter`/`i` raises `import_pending` (opened after dismiss, so modals never stack); `n` opens an inline naming field typed in the popup — the terminal is never handed back — and Enter creates through the prompt-free `_setup_create`. Esc backs out of naming, quits from the choices. A popup closed still empty puts the choice back up.
 
 ## Architecture
 
@@ -55,7 +57,7 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff |
 | `huebox/preview.py` | shared palette/strip/sample units the frame and the popup both call |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode |
-| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session` |
+| `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, the first-run setup choice (`setup_lines`, `enter_setup`; `SetupScreen` shows its rows), staged save, `report_session` |
 | `huebox/import_state.py` | headless import cursor, selection, confirm mapping |
 | `huebox/app.py` | the Textual shell: one widget per block over `render`'s rows; keys, focus, resize, click and wheel |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` |

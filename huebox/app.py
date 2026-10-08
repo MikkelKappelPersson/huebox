@@ -59,10 +59,11 @@ from .color import MISSING, SLOTS
 from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
                      SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
                      SIDE_LEFT_W, EditorState,
-                     apply_key, backdrop, draw_editor, grid_geometry,
-                     head_label, report_session, session_path, side_grid,
+                     apply_key, backdrop, draw_editor, enter_setup, grid_geometry,
+                     head_label, report_session, session_path, setup_lines, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
-                     too_small_frame, top_editor_meta, top_layout, top_left_rows)
+                     too_small_frame, top_editor_meta, top_layout, top_left_rows,
+                     top_subject)
 from .preview import (example_lines, interface_pair_rows,
                        palette_interface_rows, palette_rows, sample_lines)
 from .render import (CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, chrome,
@@ -434,6 +435,163 @@ class Picker(Frame):
     """
 
     can_focus = True
+
+
+class SetupScreen(ModalScreen):
+    """The first-run choice as a modal popup over the editor (empty library).
+
+    The dialog's rows are `editor.setup_lines` at the dialog width — the same
+    rows the headless session draws full-frame, so the two cannot disagree
+    about what the choice says. Behaviour stays in `EditorState` + `apply_key`
+    (the `import_state`/`ImportScreen` split, repeated): keys arrive already
+    translated from `Editor.on_key` and go straight to the one key surface,
+    and every outcome already lives on the state (`quit`, `import_pending`,
+    or the choice simply closing on create). The dialog is positioned with
+    explicit margins rather than `align`, so its origin is exactly what
+    `click_at` recomputes — no stored geometry to drift. Import opens only
+    after this dismisses, so modals never stack; a popup closed still empty
+    puts the choice back up (the app's `_setup_closed` re-opens it).
+    """
+
+    #: The dialog's content width: holds the longest choice row with the hint
+    #: footer folded to two lines. Clamped to narrow screens in `_fill`.
+    DIALOG_W = 44
+
+    #: The dialog content's narrowest honest width: below this even the
+    #: choice rows clip, so the dialog never shrinks past it.
+    DIALOG_MIN_W = 24
+
+    DEFAULT_CSS = """
+    SetupScreen {
+        /* No background of its own: the modal dim (`$background` at 60%)
+        stays, so the editor frame shows through behind the dialog.
+        Painting this opaque would hide the session the choice belongs
+        to — which is exactly what the first version did. */
+        padding: 0;
+    }
+    SetupScreen .setup-dialog {
+        background: $background;
+        border: round $border;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._dlg_w = 0               # content width from the last `_fill`
+        self._dlg_h = 0               # content height from the last `_fill`
+        self._hits: list = []         # their clickable cells, content coords
+        self._body = None             # the `Frame` carrying the rows
+        self._dialog = None           # the bordered container
+
+    def compose(self) -> ComposeResult:
+        # Nothing here: the dialog's width comes from the compositor, and
+        # the size it reports decides the clamp. Shells mount in `_fill`
+        # once the tree exists — the same shape as `Editor.compose`.
+        return iter(())
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._fill)
+
+    def on_resize(self, event) -> None:
+        # The rows are fixed-width, but the clamp and the centering are
+        # not: re-lay rather than repaint.
+        if not self.is_running:
+            return
+        self.call_after_refresh(self._fill)
+
+    def _origin(self):
+        """The dialog's top-left, in screen coords.
+
+        The dialog is the screen's only child and carries its centering as
+        explicit margins (set in `_fill`), so this recomputes to exactly
+        where it was mounted — the click map never drifts from the paint.
+        """
+        width, height = self.size
+        return ((width - (self._dlg_w + 2)) // 2,
+                (height - (self._dlg_h + 2)) // 2)
+
+    def _fill(self) -> None:
+        """Mount the dialog at the current size, centered with margins."""
+        for child in list(self.children):
+            child.remove()
+        st = self.app.state
+        width, _height = self.size
+        dlg_w = max(self.DIALOG_MIN_W,
+                    min(self.DIALOG_W, width - 2))
+        self._hits = []
+        rows = [backdrop(line, st.slots, dlg_w)
+                for line in setup_lines(st.setup or 0, dlg_w, 99,
+                                        st.status, st.slots, hits=self._hits,
+                                        name=st.setup_name)]
+        self._dlg_w = dlg_w
+        self._dlg_h = len(rows)
+        body = Frame(rows, dlg_w, name="setup-body")
+        body.styles.width = dlg_w
+        body.styles.height = len(rows)
+        body.styles.padding = 0
+        body.styles.margin = 0
+        dialog = Vertical(body, classes="setup-dialog")
+        dialog.styles.width = dlg_w + 2
+        dialog.styles.height = len(rows) + 2
+        dialog.styles.padding = 0
+        ox, oy = self._origin()
+        dialog.styles.margin = (oy, 0, 0, ox)
+        self.mount(dialog)
+        self._body = body
+        self._dialog = dialog
+
+    def _repaint(self) -> None:
+        """Repaint the dialog in place: new rows, same widgets.
+
+        The choice never moves rows (only the `>` mark and the status line),
+        so the dialog keeps its size and its margins — a repaint cannot
+        misplace a click.
+        """
+        if self._body is None or not self._body.is_mounted:
+            return              # mounts still queued; `_fill` paints them
+        st = self.app.state
+        self._hits = []
+        rows = [backdrop(line, st.slots, self._dlg_w)
+                for line in setup_lines(st.setup or 0, self._dlg_w, 99,
+                                        st.status, st.slots, hits=self._hits,
+                                        name=st.setup_name)]
+        self._body.update_rows(rows, self._dlg_w)
+
+    def setup_key(self, key: str) -> None:
+        """One keypress while this screen is top, from `Editor.on_key`.
+
+        The key arrives translated; everything routes to the one key
+        surface. Terminal outcomes (`quit`, `import_pending`, or the choice
+        closing on create) dismiss — the app routes from the state — and
+        anything else repaints the dialog in place.
+        """
+        st = self.app.state
+        apply_key(key, st)
+        if st.quit or st.import_pending or st.setup is None:
+            self.dismiss(None)
+        else:
+            self._repaint()
+
+    def click_at(self, fx: int, fy: int) -> None:
+        """A click while this screen is top: a choice row confirms.
+
+        The origin is derived live from the screen size, so resizes need no
+        stored geometry. A click on the border or outside the dialog is
+        chrome and selects nothing — like every other frame, clicking
+        nothing is not an error.
+        """
+        ox, oy = self._origin()
+        lx, ly = fx - ox - 1, fy - oy - 1
+        if not (0 <= lx < self._dlg_w and 0 <= ly < self._dlg_h):
+            return
+        target = slot_at(self._hits, lx, ly)
+        if target is None:
+            return
+        st = self.app.state
+        st.setup = target
+        self.setup_key("\r")
 
 
 #: Which widget draws which block. Everything not named here is a plain `Frame`:
@@ -1714,6 +1872,11 @@ class Editor(App):
             state.overlay = names
             state.overlay_index = min(int(os.environ.get("HUEBOX_PICKER_INDEX",
                                                          "0")), len(names) - 1)
+        if state.overlay is None:
+            # An empty library opens on the first-run choice instead of an
+            # editor with nothing to save to: import or name-and-create,
+            # chosen before a single colour key can fire.
+            enter_setup(state)
         self.state = state
         return state
 
@@ -1842,13 +2005,14 @@ class Editor(App):
                                    hits=self.hits, regions=self.regions)
         if not self._panels_on and not self._side_on:
             self.rows_text = rows_text
-            for child in list(self.query(Panel)):
+            surface = self._editor_screen()
+            for child in list(surface.query(Panel)):
                 child.remove()
-            for child in list(self.query(Frame)):
+            for child in list(surface.query(Frame)):
                 child.remove()
-            for child in list(self.query(Live)):
+            for child in list(surface.query(Live)):
                 child.remove()
-            for child in list(self.query(Horizontal)):
+            for child in list(surface.query(Horizontal)):
                 child.remove()
             # §5.6 — one widget per block of the frame. The blocks are the rows
             # `draw_editor` reported, in order and without gaps, so the widgets stack
@@ -1863,9 +2027,11 @@ class Editor(App):
             # is below it rides up, and the empty rows at the bottom stand on
             # the screen's own background. Panels and side-by-side do their own
             # grouping, so the collapsibles only apply to the bare stack.
-            named = ([("picker", 0, len(rows_text))] if picker is not None
-                     else list(self.regions)
-                     or [("frame", 0, len(rows_text))])
+            if picker is not None:
+                named = [("picker", 0, len(rows_text))]
+            else:
+                named = (list(self.regions)
+                         or [("frame", 0, len(rows_text))])
             if (collapsible_enabled() and picker is None
                     and not (width < MIN_COLS or height < MIN_ROWS)
                     and any(entry[0] in LIVE_BLOCKS for entry in named)):
@@ -1908,8 +2074,7 @@ class Editor(App):
         """
         slots = state.slots
         sel = state.sel
-        label = self.head_for(state) or self.fmt
-        path = session_path(state)
+        label, path = top_subject(state, self.head_for(state) or self.fmt)
         # One arrangement at every size it fits (`editor.top_layout` owns
         # the shares): logo bare, info metadata only, the readout and the
         # bars in `editor`. No merge step below this — past the tightest
@@ -2055,8 +2220,9 @@ class Editor(App):
         if (editor_panel_enabled()
                 and os.environ.get("HUEBOX_TOP", "1") != "0"):
             try:
-                label = self.head_for(state) or self.fmt
-                lay = top_layout(width, label, session_path(state),
+                label, path = top_subject(state,
+                                          self.head_for(state) or self.fmt)
+                lay = top_layout(width, label, path,
                                  state.slots, state.sel, pad=pad)
             except Exception:
                 lay = None
@@ -2064,7 +2230,7 @@ class Editor(App):
                 try:
                     left_raw = top_left_rows(state.slots, lay[0])
                     _meta, head, _w = top_editor_meta(
-                        label, session_path(state), state.slots,
+                        label, path, state.slots,
                         state.sel, meta_w=lay[1], stacked=lay[3])
                     head_w = max(visible(row) for row in head)
                 except Exception:
@@ -2191,13 +2357,14 @@ class Editor(App):
         by the widget would leave two columns on the terminal's own background
         (§8.2) — the pad has no style of its own.
         """
-        for child in list(self.query(Panel)):
+        surface = self._editor_screen()
+        for child in list(surface.query(Panel)):
             child.remove()
-        for child in list(self.query(Frame)):
+        for child in list(surface.query(Frame)):
             child.remove()
-        for child in list(self.query(Live)):
+        for child in list(surface.query(Live)):
             child.remove()
-        for child in list(self.query(Horizontal)):
+        for child in list(surface.query(Horizontal)):
             child.remove()
         inner_w = width - 2 - 2 * pad
         by_name = {name: (first, count) for name, first, count in named}
@@ -2305,14 +2472,14 @@ class Editor(App):
             # everything below rides where it did and the click map never
             # moves. A click in the top selects nothing, because the top
             # names no slot (§4.3.2).
-            self.mount(top_row)
+            surface.mount(top_row)
         else:
             for name, first, count in header:
-                self.mount(mount_block(name, first, count, width))
+                surface.mount(mount_block(name, first, count, width))
         for name, first, count in extra:
             # `extra` unknown rows sit with the header chrome: full-width,
             # never inside a panel whose title would misname them.
-            self.mount(mount_block(name, first, count, width))
+            surface.mount(mount_block(name, first, count, width))
         if control_inners:
             inners = [widget for widget, _ in control_inners]
             panel = Panel(PANEL_TITLES["controls"], *inners, name="controls")
@@ -2320,7 +2487,7 @@ class Editor(App):
             panel.styles.height = controls_h + 2
             panel.styles.padding = (0, pad)
             panel.styles.margin = 0
-            self.mount(panel)
+            surface.mount(panel)
         if example_inners:
             inners = [widget for widget, _ in example_inners]
             panel = Panel(PANEL_TITLES["examples"], *inners, name="examples")
@@ -2328,9 +2495,9 @@ class Editor(App):
             panel.styles.height = examples_h + 2
             panel.styles.padding = (0, pad)
             panel.styles.margin = 0
-            self.mount(panel)
+            surface.mount(panel)
         for name, first, count in hints:
-            self.mount(mount_block(name, first, count, width))
+            surface.mount(mount_block(name, first, count, width))
 
     def _try_side(self, width: int, height: int, state) -> bool:
         """The side-by-side layout, or `False` to keep the stacked one.
@@ -2424,25 +2591,26 @@ class Editor(App):
             widget.styles.margin = 0
             return widget
 
-        for child in list(self.query(Panel)):
+        surface = self._editor_screen()
+        for child in list(surface.query(Panel)):
             child.remove()
-        for child in list(self.query(Frame)):
+        for child in list(surface.query(Frame)):
             child.remove()
-        for child in list(self.query(Live)):
+        for child in list(surface.query(Live)):
             child.remove()
-        for child in list(self.query(Horizontal)):
+        for child in list(surface.query(Horizontal)):
             child.remove()
         slots = state.slots
         top_h = header_h + sel_h
         top_row, top_screen = self._top_side_row(width, state, top_h,
                                                  top_pad)
         if top_row is not None:
-            self.mount(top_row)
+            surface.mount(top_row)
         else:
             top_screen = top_h
             for name in ("header", "selected"):
                 first, count = by_name[name]
-                self.mount(block(name, full[first:first + count], width))
+                surface.mount(block(name, full[first:first + count], width))
         # The palette is always the title plus its 8 pair-rows; the
         # interface is whatever rows the variant draws after the blank.
         left_children = [block("palette", left[0:9], left_w),
@@ -2495,12 +2663,12 @@ class Editor(App):
         row.styles.height = content_h + 2
         row.styles.padding = 0
         row.styles.margin = 0
-        self.mount(row)
+        surface.mount(row)
         bottom0 = top_screen + content_h + 2
         for name in ("hints", "status"):
             if name in by_name:
                 first, count = by_name[name]
-                self.mount(block(name, full[first:first + count], width))
+                surface.mount(block(name, full[first:first + count], width))
         # Coordinate spaces, because there are two panels now: chrome blocks
         # are full-frame rows, `palette` / `interface` are left-content rows
         # (what `self.hits` is announced in), the live blocks right-content
@@ -2623,6 +2791,7 @@ class Editor(App):
 
     def _mount_bare(self, width: int, rows_text: list, named: list) -> None:
         """Mount every block as its own widget, with no collapsible."""
+        surface = self._editor_screen()
         for name, first, count in named:
             rows_here = rows_text[first:first + count]
             kind = BLOCK_WIDGETS.get(name, Frame) if name != "picker" \
@@ -2634,7 +2803,7 @@ class Editor(App):
             block.styles.height = len(rows_here)
             block.styles.padding = 0
             block.styles.margin = 0
-            self.mount(block)
+            surface.mount(block)
 
     def _mount_collapsible(self, width: int, rows_text: list,
                            named: list) -> None:
@@ -2648,6 +2817,7 @@ class Editor(App):
         the live area and the hints name no slot.
         """
         by_name = {name: (first, count) for name, first, count in named}
+        surface = self._editor_screen()
 
         def mount_block(name, rows_here):
             kind = BLOCK_WIDGETS.get(name, Frame)
@@ -2670,8 +2840,8 @@ class Editor(App):
             child.styles.height = len(body)
             child.styles.padding = 0
             child.styles.margin = 0
-            self.mount(Live(LIVE_TITLES[name], child,
-                            collapsed=name in self._collapsed, name=name))
+            surface.mount(Live(LIVE_TITLES[name], child,
+                                collapsed=name in self._collapsed, name=name))
 
         order = [name for name, _, _ in named]
         live_at = min((order.index(name) for name in LIVE_BLOCKS
@@ -2680,7 +2850,7 @@ class Editor(App):
             if name in LIVE_BLOCKS:
                 continue
             if order.index(name) < live_at:
-                self.mount(mount_block(
+                surface.mount(mount_block(
                     name, rows_text[first:first + count]))
         for name in LIVE_BLOCKS:
             if name in by_name:
@@ -2691,7 +2861,7 @@ class Editor(App):
                 seen_live = True
                 continue
             if seen_live:
-                self.mount(mount_block(
+                surface.mount(mount_block(
                     name, rows_text[first:first + count]))
 
     def place_focus(self, picker_up: bool, sel: int) -> None:
@@ -2755,6 +2925,11 @@ class Editor(App):
     def on_mount(self) -> None:
         self.title = "huebox"
         self.redraw()
+        if self.state.setup is not None:
+            # Pushing a screen needs a running app, so the first-run popup
+            # waits for the refresh after mount — the same shape as every
+            # other focus this shell places.
+            self.call_after_refresh(self.open_setup)
 
     def on_resize(self, event) -> None:
         # The frame is laid out from `self.size`, and during `on_resize` that is
@@ -2766,6 +2941,8 @@ class Editor(App):
         if self._import_screen() is not None:
             return          # the popup owns the surface: it re-lays itself
                             # out, and the frame behind it redraws on close
+        if self._setup_screen() is not None:
+            return          # the choice dialog re-lays itself the same way
         if self.state is not None:
             self.call_after_refresh(self.redraw)
 
@@ -2786,6 +2963,13 @@ class Editor(App):
         if self._import_screen() is not None:
             event.stop()
             self.screen.import_key(translate(event.key))
+            return
+        if self._setup_screen() is not None:
+            # The first-run popup owns the surface: every key goes to the
+            # one key surface through the screen, which routes outcomes
+            # (repaint, import, quit) from the state.
+            event.stop()
+            self.screen.setup_key(translate(event.key))
             return
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
@@ -2837,6 +3021,71 @@ class Editor(App):
         else:
             self.redraw()
 
+    def _setup_screen(self):
+        """The first-run popup, if it is the top screen — else `None`.
+
+        One guard for every setup check in this shell, mirroring
+        `_import_screen`. `is_running` comes first for the same reason: a
+        frame drawn outside Textual has no screen stack at all.
+        """
+        if not self.is_running:
+            return None
+        screen = self.screen
+        return screen if isinstance(screen, SetupScreen) else None
+
+    def open_setup(self) -> None:
+        """Push the first-run popup: import or name-and-create.
+
+        Called once the session is up (never from `build_state` — pushing a
+        screen needs a running app, so `on_mount` defers here), and again
+        when the import popup closes still empty. Takeovers never stack:
+        the picker owns the surface while it is up, and a second open while
+        the popup is up is a no-op.
+        """
+        if self.state.setup is None:
+            return
+        if self.state.overlay is not None:
+            return
+        if self._setup_screen() is not None:
+            return
+        if self._import_screen() is not None:
+            return
+        self.push_screen(SetupScreen(), self._setup_closed)
+
+    def _setup_closed(self, result) -> None:
+        """The popup dismissed: route the outcome the state already holds.
+
+        `result` is always `None` — the choice writes its outcomes onto the
+        state before dismissing, so this only routes: quit exits, an import
+        choice opens the import popup (after this one is gone, so modals
+        never stack), and anything else — a create, or a dialog that only
+        ever repainted — paints the editor behind it.
+        """
+        if not self.is_running:
+            return
+        if self.state.quit:
+            self.exit()
+        elif self.state.import_pending:
+            self.state.import_pending = False
+            self.open_import()
+        else:
+            self.redraw()
+
+    def _editor_screen(self):
+        """The screen the editor frame lives on: the stack bottom.
+
+        `redraw` can run while a modal is top (a resize scheduled before the
+        push lands after it): `App.query` spans every screen while `App.mount`
+        targets the active one, so an unscoped redraw tears the editor's
+        widgets out of the default screen and mounts them into the modal —
+        which is how the choice dialog once stood over a blank frame.
+        Every query and mount below goes through this; headless sessions
+        (never running, mocks for `query`/`mount`) keep today's behaviour.
+        """
+        if self.is_running:
+            return self.screen_stack[0]
+        return self
+
     def _import_screen(self):
         """The import popup, if it is the top screen — else `None`.
 
@@ -2857,11 +3106,14 @@ class Editor(App):
         close retargets the session: importing adds library files, it never
         touches the buffer the way the picker does. Takeovers never stack —
         the picker owns the surface while it is up, and a second `i` while
-        the popup is up is a no-op. The provider order comes from the
+        the popup is up is a no-op. The first-run choice owns the surface the
+        same way: `i` behind it is swallowed by the choice (its own `i`
+        branch asks for the popup instead), so opening from here re-checks
+        both. The provider order comes from the
         injected library's formats (P5 builds it; `None` lists nothing, so
         a bare popup renders empty groups and never crashes).
         """
-        if self.state.overlay is not None:
+        if self.state.overlay is not None or self.state.setup is not None:
             return
         if self._import_screen() is not None:
             return
@@ -2929,6 +3181,17 @@ class Editor(App):
                                           "in library")
             elif self.import_notes:
                 self.state.status = "nothing imported - see session notes"
+        if (self.state.setup is None and self.library is not None
+                and not self.library.names()):
+            # Still nothing to edit: the choice the popup was opened from
+            # — or the empty session `i` was pressed in — is owed again.
+            # A library that landed themes stays in the editor, where `t`
+            # opens them.
+            enter_setup(self.state)
+        if self.state.setup is not None:
+            # The popup, not the frame: the editor behind stays as the
+            # import found it, and the choice opens over it.
+            self.open_setup()
         self.redraw()
 
     def on_collapsible_collapsed(self, event) -> None:
@@ -2990,6 +3253,11 @@ class Editor(App):
         fy = getattr(event, "screen_y", None)
         if fx is None or fy is None:
             fx, fy = event.offset.x, event.offset.y
+        if self._setup_screen() is not None:
+            # The popup answers its own clicks against its own cells — the
+            # editor's panels and layout maxima are behind it, not under it.
+            self.screen.click_at(fx, fy)
+            return
         # §15.7 — past the layout maxima the screen is fill, not a panel:
         # a click out there names no slot, like any other chrome click.
         layout_w = getattr(self, "_layout_w", None)
@@ -3054,7 +3322,11 @@ class Editor(App):
 
         Only in the picker: the editor frame itself does not scroll, so a wheel
         notch does nothing a user could misread as having moved the colours.
+        Either popup owns the wheel while it is up — the import lists stop
+        their own events, and the two-row choice has nothing to walk.
         """
+        if self._setup_screen() is not None:
+            return
         event.stop()
         if self.state.overlay is None:
             return

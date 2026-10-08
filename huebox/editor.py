@@ -53,7 +53,9 @@ INITIAL_SEL = 5
 ARROWS = ("up", "down", "left", "right")
 QUIT_KEYS = ("esc", "Q", "\x03")
 SAVE_KEY = "\x13"
-ENTER_KEYS = ("\r", "\n")
+ENTER_KEYS = ("\r", "\n", "enter")
+#: `import_state` keeps the same three: the headless tests speak `\r`, the
+#: compositor speaks `enter`, and both arrive at the same branch.
 
 # §13.7 — the picker takes the frame over while it is up (decision 19), so
 # it shares the editor's minimum size and header width instead of adding a
@@ -64,6 +66,23 @@ DIRTY_MARK = "●"
 # the label it belongs to
 THEME_HINTS = [("arrows", "move"), ("Enter", "use"), ("n", "new from buffer"),
                ("N", "save as new"), ("t / Esc", "back")]
+
+#: First-run setup: the two ways out of an empty library. `import` opens the
+#: import popup, `new` asks for a name and writes the buffer as that theme —
+#: the same two seams (`import_pending` for the popup, `Library.create` via
+#: `_create_theme`) the `i` key and `N` use once a library exists.
+SETUP_CHOICES = ("import", "new")
+SETUP_LABELS = {"import": "Import themes", "new": "Create new theme"}
+SETUP_KEYS = {"import": "i", "new": "n"}
+SETUP_HINTS = [("arrows", "move"), ("Enter", "choose"), ("i", "import"),
+               ("n", "new"), ("Esc", "quit")]
+#: The footer while naming the new theme: a one-line field, typed inline.
+SETUP_NAME_HINTS = [("type", "name"), ("Enter", "save"),
+                    ("Esc", "back")]
+#: The longest name the field accepts: the library's own rule (letters,
+#: digits, `-` and `_`, 64 max) — `editor` never imports `themes`, so the
+#: number is pinned here and the writer still has the last word.
+SETUP_NAME_MAX = 64
 
 # §15 — what a short terminal spends, in order. The frame sheds its
 # decoration (the palette legend, then the blank separators nearest the
@@ -354,6 +373,24 @@ def session_path(st) -> str:
     return st.path if st.theme is not None else ""
 
 
+def top_subject(st, head: str):
+    """The compositor top's `(label, path)`: name and file, separately.
+
+    Theme sessions already split that way (`head_label` names the theme,
+    `session_path` its file). Direct sessions arrive as one long
+    `direct:<path>` label, which prices the config path's length into the
+    logo ladder — the same window shows a smaller logo with no theme than
+    with one, and the logo pops up a rung the moment a theme is named.
+    Splitting hands the ladder the six-letter name (and the meta the
+    truncatable path, like every theme file), so both sessions lay out
+    alike. The bare header keeps the long label: it prints what fits and
+    drops the path, rather than pricing it.
+    """
+    if st.theme is None and head.startswith("direct:"):
+        return "direct", head[len("direct:"):]
+    return head, session_path(st)
+
+
 def _theme_row(name: str, selected: bool, current: bool, slots: dict) -> str:
     """One picker row: `> name`, `*` on the library's current theme.
 
@@ -465,6 +502,83 @@ def slot_at(hits, x: int, y: int):
         if hit.y == y and hit.x0 <= x <= hit.x1:
             return hit.slot
     return None
+
+
+def _setup_row(choice: str, selected: bool, slots: dict) -> str:
+    """One setup row: `> label (key)`, the selected choice marked.
+
+    The same two columns in front of the label the picker rows keep, so the
+    choices line up and the mark reads the same way. The key in parentheses
+    is the row's direct spelling — `i` imports from either row, `n` creates.
+    """
+    mark = chrome(">", "foreground", slots, bold=True) if selected else " "
+    painted = chrome(f"{SETUP_LABELS[choice]}  ({SETUP_KEYS[choice]})",
+                       "foreground", slots, bold=selected)
+    return f"  {mark} {painted}"
+
+
+def setup_lines(index, cols, rows, status="", slots=None, hits=None,
+                name=None):
+    """The first-run choice as a frame of lines: import or create.
+
+    Pure, like `theme_lines`: the wordmark plus a `welcome` title, one muted
+    line saying why this is up, the two choices with the selected one marked
+    `>`, and the hint footer folded through `pack` so it can never widen the
+    frame. Every line is `clip`ped to `cols` and the frame to `rows`, with the
+    footer never the part that gets cut. Clickable cells are announced by the
+    rows that draw them (`hits=`), the same rule as every other frame.
+
+    `name is not None` is the naming mode: the choices step aside for the
+    one-line field (the typed name plus a `_` cursor) and the footer names
+    its own keys. Nothing is clickable there, so `hits` stays empty and a
+    click falls through to chrome.
+    """
+    slots = slots or {}
+    if name is not None:
+        footer = ["  " + line
+                  for line in hint_line(slots, SETUP_NAME_HINTS, cols - 2)]
+        if status:
+            footer.append(f"  {BOLD}{status}{RESET}")
+        out = ["  " + wordmark(slots) + "  " + title("welcome", slots),
+               "",
+               "  " + chrome("name the new theme - Enter saves it",
+                                CHROME_MUTED, slots),
+               "",
+               "  > " + chrome(name + "_", "foreground", slots,
+                                  bold=True),
+               ""]
+        out.extend(footer)
+        if len(out) > rows:
+            out = out[:len(out) - len(footer)] + footer
+        return [clip(line, cols) for line in out[:rows]]
+    index = max(0, min(index, len(SETUP_CHOICES) - 1))
+    out = ["  " + wordmark(slots) + "  " + title("welcome", slots), "",
+           "  " + chrome("no themes yet - pick one to start",
+                            CHROME_MUTED, slots), ""]
+    for row, choice in enumerate(SETUP_CHOICES):
+        if hits is not None:
+            hits.append(Hit(len(out), 2, cols - 1, row))
+        out.append(_setup_row(choice, row == index, slots))
+    out.append("")
+    footer = ["  " + line
+              for line in hint_line(slots, SETUP_HINTS, cols - 2)]
+    if status:
+        footer.append(f"  {BOLD}{status}{RESET}")
+    out.extend(footer)
+    if len(out) > rows:                    # belt and braces: keep the footer
+        out = out[:len(out) - len(footer)] + footer
+    return [clip(line, cols) for line in out[:rows]]
+
+
+def setup_hits(index, cols, rows, slots=None, status="") -> list:
+    """Every setup row, as `Hit`s whose `slot` is the choice index.
+
+    The mirror of `theme_hits`: ask this at the moment the frame is up, so a
+    click and the row cannot disagree about which choice is where.
+    """
+    found: list = []
+    setup_lines(index, cols, rows, status=status, slots=slots, hits=found)
+    return found
 
 
 # `swatch_cell`, `named_cell_width` and `named_cell` are `preview.py`'s
@@ -1248,6 +1362,9 @@ class EditorState:
         self.created = None                 # name created via n/N this session
         self.overlay = None                 # [name, ...] while the picker is up
         self.overlay_index = 0
+        self.setup = None                   # 0/1 while the first-run choice is up
+        self.setup_name = None              # typed name while naming (modal input line)
+        self.import_pending = False         # setup chose import: shell opens it
         self.grid = grid_geometry(FALLBACK_COLS)   # refreshed every frame
 
     def dirty(self) -> bool:
@@ -1515,6 +1632,141 @@ def _overlay_key(key, st) -> None:
         st.overlay = None
 
 
+def needs_setup(st) -> bool:
+    """Whether the first-run choice is owed: a library with no themes.
+
+    No library — or no `names` seam on it — means nothing to create
+    through, so there is nothing to choose with: the session stays a plain
+    editor, exactly as before.
+    """
+    names = getattr(st.library, "names", None)
+    if not callable(names):
+        return False
+    return not names()
+
+
+def enter_setup(st) -> bool:
+    """Put the first-run choice up, when the library is empty.
+
+    Returns whether it opened. Called once per session start (and again when
+    the import popup closes still empty), never over an open choice or an
+    open picker — the harnesses that pin a picker keep it.
+    """
+    if st.setup is not None or st.overlay is not None:
+        return st.setup is not None
+    if not needs_setup(st):
+        return False
+    st.setup = 0
+    st.status = ""
+    return True
+
+
+def _setup_confirm(st) -> None:
+    """Choose on the first-run choice: import, or start naming.
+
+    Import closes the choice and raises `import_pending` for the shell — the
+    popup is the compositor's, so the state only asks for it, the same split
+    the `i` key keeps. New opens the inline naming field instead of a
+    prompt, so the name is typed in the popup and the terminal is never
+    handed back mid-session.
+    """
+    if st.setup == 1:
+        st.setup_name = ""
+        st.status = ""
+        return
+    st.setup = None
+    st.import_pending = True
+    st.status = ""
+
+
+def _setup_create(st) -> None:
+    """Enter in naming mode: create the buffer under the typed name.
+
+    No prompts — the name arrives typed, so this is the prompt-free half of
+    `_create_theme`: empty goes back to the choices, a taken name stays in
+    the field with the reason on the status line, and only a written theme
+    adopts and closes. A refusal from the library keeps the typed name, so
+    fixing a character does not mean retyping the rest.
+    """
+    name = (st.setup_name or "").strip()
+    if st.library is None:
+        st.setup_name = None
+        st.status = "no theme library in this session"
+        return
+    if not name:
+        st.setup_name = None
+        st.status = "cancelled - no theme created"
+        return
+    if _taken(st, name):
+        st.status = f"{name} exists - type another name"
+        return
+    path, problem = st.library.create(name, st.slots, False)
+    if problem:
+        st.status = problem
+        return
+    _adopt(st, name, st.slots, path)
+    st.created = name
+    st.setup = None
+    st.setup_name = None
+    st.status = f"created {name} - current now"
+
+
+def _setup_name_key(key, st) -> None:
+    """Keys while naming the new theme: a one-line field, typed inline.
+
+    Single characters (and `space`, which Textual names rather than sends)
+    append up to the library's length rule; `backspace` deletes; Enter
+    creates; Esc backs out to the choices. Everything else — arrows, colour
+    keys, quit keys — is swallowed: the field has no cursor to move and no
+    edit to guard, and quitting stays two Escapes away (field, then choice).
+    """
+    if key in ENTER_KEYS:
+        _setup_create(st)
+    elif key in ("esc", "escape"):
+        st.setup_name = None
+        st.status = ""
+    elif key == "backspace":
+        st.setup_name = st.setup_name[:-1]
+        st.status = ""
+    elif key == "space" or (len(key) == 1 and key.isprintable()):
+        # `space` arrives named, the rest as themselves; control codes
+        # (`\x13` from Ctrl+S included) are not name characters.
+        if len(st.setup_name) < SETUP_NAME_MAX:
+            st.setup_name += " " if key == "space" else key
+            st.status = ""
+
+
+def _setup_key(key, st) -> None:
+    """Keys while the first-run choice is up: it owns the surface.
+
+    Nothing else can fire — no colour changes, no save, no picker, no quit
+    behind the choice — so a key meant for the editor cannot do damage
+    before the session has a theme. `Esc`, `Q` and Ctrl+C quit outright:
+    there is no editor behind the choice to return to. While naming (the
+    inline field), keys go to the field instead — see `_setup_name_key`.
+    """
+    st.armed = False
+    if st.setup_name is not None:
+        _setup_name_key(key, st)
+        return
+    st.status = ""
+    if key in ("up", "left"):
+        st.setup = max(0, st.setup - 1)
+    elif key in ("down", "right"):
+        st.setup = min(len(SETUP_CHOICES) - 1, st.setup + 1)
+    elif key in ENTER_KEYS:
+        _setup_confirm(st)
+    elif key == "i":
+        st.setup = 0
+        _setup_confirm(st)
+    elif key in ("n", "N"):
+        st.setup = 1
+        _setup_confirm(st)
+    elif key in QUIT_KEYS:
+        st.setup = None
+        st.quit = True
+
+
 def _save_as_new(st) -> None:
     """`N` — the buffer becomes a new theme, and then it is saved (§13.7).
 
@@ -1539,9 +1791,14 @@ def apply_key(key, st):
     mode for one line — so the key surface itself is testable without a
     terminal. Sets `st.quit` when the session is done: a clean Esc (or
     Ctrl+C) quits at once, a dirty one arms and takes a second press. An
-    open picker takes the whole key surface first, so quitting and colour
-    edits cannot happen behind it.
+    open picker takes the whole key surface first, and an open first-run
+    choice before that, so quitting and colour edits cannot happen behind
+    either.
     """
+    if st.setup is not None:
+        _setup_key(key, st)
+        return
+
     if st.overlay is not None:
         _overlay_key(key, st)
         return

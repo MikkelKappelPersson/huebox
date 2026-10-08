@@ -383,6 +383,173 @@ class TheMouse(unittest.TestCase):
         self.assertEqual(editor.state.overlay_index, 0)
 
 
+@needs_app
+class FirstRunSetup(unittest.IsolatedAsyncioTestCase):
+    """An empty library opens on the import-or-create popup.
+
+    The shell enters what `editor.enter_setup` owes and pushes a modal
+    dialog over the dimmed editor — the import popup's shape, asserted at
+    the seam and through compositor runs.
+    """
+
+    def _editor(self, cols=80, rows=24, **kw):
+        from textual.geometry import Offset
+
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        patcher = mock.patch.object(
+            huebox_app.Editor, "size",
+            new_callable=mock.PropertyMock, return_value=Offset(cols, rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            editor = huebox_app.Editor(**kw)
+        editor.query = lambda *a, **k: ()
+        editor.mount = lambda *a, **k: None
+        editor.redraw()
+        return editor
+
+    def _empty_library(self):
+        from huebox.editor import Library
+        return Library(listing=lambda: [])
+
+    async def _running(self, **kw):
+        path = _slots_file(harness.FIXTURES["distinct"]["slots"])
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
+            return huebox_app.Editor(**kw)
+
+    def test_an_empty_library_opens_on_the_choice(self):
+        editor = self._editor(library=self._empty_library())
+        self.assertEqual(editor.state.setup, 0)
+        self.assertFalse(editor.state.quit)
+
+    def test_a_library_with_themes_opens_on_the_editor(self):
+        from huebox.editor import Library
+        editor = self._editor(library=Library(
+            listing=lambda: ["ember"]))
+        self.assertIsNone(editor.state.setup)
+
+    async def test_the_choice_opens_as_a_popup_over_the_editor(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            screen = editor.screen
+            self.assertIsInstance(screen, huebox_app.SetupScreen,
+                                  "the choice is a popup, not a frame takeover")
+            body = "\n".join(screen._body.rows_text)
+            self.assertIn("Import themes", body)
+            self.assertIn("Create new theme", body)
+            behind = "\n".join(editor.rows_text)
+            self.assertIn("Palette", behind,
+                          "the dimmed editor frame stays behind the popup")
+            self.assertTrue(list(editor.screen_stack[0].children),
+                            "a redraw under the modal cleared the editor")
+
+    async def test_the_dialog_clamps_to_narrow_screens(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(40, 20)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            screen = editor.screen
+            self.assertIsInstance(screen, huebox_app.SetupScreen)
+            self.assertLessEqual(screen._dlg_w + 2, 40)
+
+    async def _press(self, app, pilot, *keys):
+        from textual import events
+
+        for key in keys:
+            event = events.Key(key, None)
+            event.set_sender(app)
+            app.post_message(event)
+            await pilot.pause()
+
+    async def test_arrows_move_the_choice_in_the_running_app(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertEqual(editor.state.setup, 0)
+            await self._press(editor, pilot, "down")
+            self.assertEqual(editor.state.setup, 1)
+            await self._press(editor, pilot, "up")
+            self.assertEqual(editor.state.setup, 0)
+
+    async def test_enter_opens_the_import_popup(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await self._press(editor, pilot, "enter")
+            self.assertIsNone(editor.state.setup)
+            self.assertIsInstance(editor.screen,
+                                  huebox_app.ImportScreen)
+
+    def _click_at(self, editor, fx, fy):
+        from textual.events import Click
+
+        editor.on_click(Click(widget=None, x=fx, y=fy, delta_x=0, delta_y=0,
+                              button=1, shift=False, meta=False, ctrl=False))
+
+    def _dialog_point(self, editor, slot):
+        """Screen coords of a dialog choice: centered origin, one border."""
+        screen = editor.screen
+        width, height = screen.size
+        ox = (width - (screen._dlg_w + 2)) // 2
+        oy = (height - (screen._dlg_h + 2)) // 2
+        hit = next(h for h in screen._hits if h.slot == slot)
+        return ox + 1 + hit.x0 + 1, oy + 1 + hit.y
+
+    async def test_a_click_on_a_choice_confirms_it(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            self._click_at(editor, *self._dialog_point(editor, 0))
+            await pilot.pause()
+            self.assertIsNone(editor.state.setup)
+            self.assertIsInstance(editor.screen,
+                                  huebox_app.ImportScreen,
+                                  "clicking import did not open the popup")
+
+    async def test_cancelling_the_import_returns_to_the_choice(self):
+        editor = await self._running(library=self._empty_library())
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await self._press(editor, pilot, "enter")
+            self.assertIsInstance(editor.screen,
+                                  huebox_app.ImportScreen)
+            await self._press(editor, pilot, "escape")
+            self.assertIsInstance(editor.screen,
+                                  huebox_app.SetupScreen,
+                                  "an import closed still empty owes the choice"
+                                  " again")
+
+    async def test_naming_in_the_popup_creates_without_leaving(self):
+        from huebox.editor import Library
+        made = {}
+
+        def creator(name, slots, force=False):
+            made[name] = dict(slots)
+            return f"/themes/{name}.toml", ""
+
+        editor = await self._running(library=Library(listing=lambda: [],
+                                                     creator=creator))
+        async with editor.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await self._press(editor, pilot, "n", "d", "u", "s", "k")
+            self.assertEqual(editor.state.setup_name, "dusk")
+            body = "\n".join(editor.screen._body.rows_text)
+            self.assertIn("dusk_", body,
+                          "the typed name never reached the dialog")
+            await self._press(editor, pilot, "enter")
+            self.assertEqual(editor.state.theme, "dusk")
+            self.assertNotIsInstance(editor.screen,
+                                     huebox_app.SetupScreen)
+        self.assertEqual(set(made), {"dusk"})
+
+
 class _Event:
     def stop(self):
         pass
@@ -504,8 +671,14 @@ class TheFrameIsWidgets(unittest.TestCase):
                   if isinstance(w, huebox_app.Panel)]
         self.assertEqual([p.border_title for p in panels],
                          ["THEME", "EXAMPLES"])
+        # The compositor top splits the bare header three ways (logo,
+        # info, `editor`), so the mounted blocks outnumber the bare
+        # regions by two — one widget per block still, counted where
+        # the blocks actually mount.
         frames = self._frames(mounted)
-        self.assertEqual(len(frames), len(regions))
+        self.assertEqual([f.name for f in frames],
+                         ["header", "info", "editor-hsv", "palette",
+                          "interface", "sample", "hints"])
         self.assertGreater(len(frames), 3,
                            "the frame collapsed back into a single widget")
         names = [name for name, _, _ in regions]
@@ -518,44 +691,46 @@ class TheFrameIsWidgets(unittest.TestCase):
 
         That is not a hypothetical: seven of Textual's 168 design tokens exist
         only for scrollbars, and I2's whole job is to reject a colour that was
-        not the theme's. The blocks tile the frame exactly (tested in
-        `test_editor.Regions`), so their heights must too — plus one border
-        row top and bottom per panel row. At 80x24 the top is the bare stack
-        (the long direct-slots label leaves no `editor` share, decision 40),
-        so nothing overlaps: every bare row mounts exactly once."""
+        not the theme's. The mounted zones tile the screen exactly: the top
+        row stands its own height once (logo, info and `editor` share it,
+        they never stack), then a border row top and bottom per panel row
+        below. At 80x24 that is 6 + 9 + 7 + 2 — one row more would scroll."""
         editor, mounted = self._mounted()
-        frames = self._frames(mounted)
-        panels = [w for w in mounted
-                  if isinstance(w, huebox_app.Panel)]
-        total = sum(len(block.rows_text) for block in frames)
-        self.assertEqual(total, len(editor.rows_text),
-                         "the frames do not tile the frame exactly once")
-        self.assertLessEqual(total + 2 * len(panels), 24,
-                             "the stack is taller than the screen")
+        from textual.containers import Horizontal
+        self.assertEqual(len(mounted), 4)
+        top, controls, examples, hints = mounted
+        self.assertIsInstance(top, Horizontal)
+        self.assertEqual([p.border_title for p in (controls, examples)],
+                         ["THEME", "EXAMPLES"])
+        heights = [top.styles.height.value, controls.styles.height.value,
+                   examples.styles.height.value, hints.styles.height.value]
+        self.assertEqual(heights, [6, 9, 7, 2])
+        self.assertEqual(sum(heights), 24,
+                         "the stack is taller than the screen")
 
     def test_every_block_paints_only_its_own_rows(self):
         editor, mounted = self._mounted()
-        frames = self._frames(mounted)
-        # §8.1 (decision 40) — at 80x24 the top is the bare stack itself
-        # (no `editor` share for the long direct-slots label), so the
-        # header blocks mount full-width as chrome and everything below
-        # must reassemble the frame's own rows in order.
-        top_h = editor._panel_geom["header_h"]
-        top = frames[:2]
-        self.assertEqual([block.name for block in top],
-                         ["header", "selected"])
-        self.assertEqual([block.styles.width.value for block in top],
-                         [80, 80])
-        rest = frames[2:]
-        painted = [row for block in rest for row in block.rows_text]
-        wanted = editor.rows_text[top_h:]
-        from rich.text import Text as _Text
-        plain = [_Text.from_ansi(row).plain for row in painted]
-        wanted_plain = [_Text.from_ansi(row).plain for row in wanted]
-        self.assertEqual(len(plain), len(wanted_plain))
-        for got, want in zip(plain, wanted_plain):
-            self.assertTrue(got.startswith(want) or want.startswith(got),
-                            "the blocks do not reassemble the frame in order")
+        from textual.containers import Horizontal
+        # The share top replaces the bare header chrome: one top row of
+        # logo, info and `editor` instead of full-width header blocks —
+        # the bare rows it stands in for are drawn but never mounted.
+        top, controls, examples, hints = mounted
+        self.assertIsInstance(top, Horizontal)
+        top_frames = [b.name for b in self._frames([top])]
+        self.assertEqual(top_frames, ["header", "info", "editor-hsv"])
+        self.assertEqual(controls.border_title, "THEME")
+        self.assertEqual(examples.border_title, "EXAMPLES")
+        inner = lambda panel: [
+            c.name for c in getattr(panel, "_pending_children", [])]
+        self.assertEqual(inner(controls), ["palette", "interface"])
+        self.assertEqual(inner(examples), ["sample"])
+        self.assertEqual(hints.name, "hints")
+        self.assertEqual(hints.styles.width.value, 80)
+        # Chrome below both panels mounts full-width, like the bare
+        # frame it stands in for.
+        rest = self._frames([controls, examples, hints])
+        self.assertEqual([b.name for b in rest],
+                         ["palette", "interface", "sample", "hints"])
 
 
 @needs_app
@@ -1204,15 +1379,14 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
                 app = huebox_app.Editor()
             # 80x24 is the stacked layout; 100x30 and up go side-by-side
-            # (`SideBySide`). The top is bare chrome there — the unified
-            # `editor` top cannot hold its readout plus bars in the six
-            # rows the budget pays, so no top panel mounts and `info`
-            # never carries the editor's controls to buy one (decision
-            # 40): just the two stacked panels.
+            # (`SideBySide`). The short `direct` name leaves the unified
+            # `editor` top fitting the row budget there, so the top panel
+            # mounts beside the two stacked panels: logo, info and
+            # `editor` above, controls below examples.
             async with app.run_test(size=(80, 24)) as pilot:
                 await pilot.pause()
                 self.assertTrue(app._panels_on)
-                self.assertEqual(len(list(app.query(huebox_app.Panel))), 2)
+                self.assertEqual(len(list(app.query(huebox_app.Panel))), 3)
 
     async def test_zero_opts_out_to_no_panels(self):
         path = _slots_file(harness.FIXTURES["distinct"]["slots"])
@@ -1232,13 +1406,12 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertTrue(app._panels_on)
             panels = list(app.query(huebox_app.Panel))
-            # No top panel at 80x24: the `editor` top does not fit the
-            # row budget there, and the fallback is the bare stack —
-            # never an `info` panel carrying editor controls (decision
-            # 40). Just controls below examples.
-            self.assertEqual(len(panels), 2)
+            # The `editor` top fits the row budget here, so it mounts
+            # with the stack — never an `info` panel carrying editor
+            # controls (decision 40). Controls below examples, top above.
+            self.assertEqual(len(panels), 3)
             self.assertEqual([p.border_title for p in panels],
-                             ["THEME", "EXAMPLES"])
+                             ["EDITOR", "THEME", "EXAMPLES"])
             self.assertEqual(app.screen.max_scroll_y, 0)
 
     async def test_borders_are_theme_closed(self):
@@ -1390,9 +1563,8 @@ class ThemesButton(unittest.TestCase):
         self.addCleanup(patcher.stop)
         # Default product: the unified `editor` top wins where its shares
         # fit, and these guard the info column's button. Callers pin a
-        # short head where they need the top at 80x24 — the direct-slots
-        # label is longer than a theme name, which is what decides wide
-        # against stacked there.
+        # short head where they need the top at 80x24 — a theme name, or
+        # `direct`, whose config path prices separately and truncates.
         with mock.patch.dict(os.environ, {"HUEBOX_SLOTS": path}):
             editor = huebox_app.Editor(**kw)
         editor.query = lambda *a, **k: ()
@@ -1811,7 +1983,8 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                         if b.name == "info")
             mounted = [_Text.from_ansi(row).plain
                        for row in info.rows_text]
-            label = app.head_for(app.state) or app.fmt
+            label, _path = huebox_app.top_subject(
+                app.state, app.head_for(app.state) or app.fmt)
             self.assertTrue(any(label in row for row in mounted),
                             "the info column lost the theme")
             self.assertFalse(any(_MARK in row for row in mounted),
@@ -1842,7 +2015,7 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
         """
         from textual.containers import Horizontal
 
-        from huebox.editor import session_path, top_layout
+        from huebox.editor import top_layout, top_subject
 
         app = await self._app()
         async with app.run_test(size=(120, 30)) as pilot:
@@ -1861,10 +2034,14 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                        if b.name == "editor-hsv")
             editor_panel = panels[0]
             # One implementation of the shares: the mounted widths are
-            # what the allocator says for this session's own label.
-            label = app.head_for(app.state) or app.fmt
-            lay = top_layout(120, label, session_path(app.state),
-                             app.state.slots, app.state.sel)
+            # what the allocator says for this session's own subject —
+            # the short `direct` name, never the priced config path —
+            # at the same decision-45 air the box mounts with.
+            label, path = top_subject(app.state,
+                                      app.head_for(app.state) or app.fmt)
+            lay = top_layout(120, label, path,
+                             app.state.slots, app.state.sel,
+                             pad=app._side_geom.get("top_pad", 0))
             self.assertIsNotNone(lay, "no top share at 120")
             left_w, meta_w, editor_outer, _stacked = lay
             self.assertEqual((header.styles.width.value,

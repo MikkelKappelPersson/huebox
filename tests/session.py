@@ -60,6 +60,11 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
                                    fmt=fmt, library=library, path=path)
         state.prompt_name = prompt
         state.write = lambda values: write(state.theme, state.path, values)
+        if state.overlay is None:
+            # An empty library opens on the first-run choice, like the
+            # shell does — a headless session with nothing to save to
+            # chooses first and edits after.
+            editor.enter_setup(state)
         while True:
             # §15.2 — one geometry per frame, read by the frame and by the keys:
             # what is drawn and what the arrows step through cannot disagree
@@ -68,7 +73,15 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
             # points, which is how the suites capture it — `editor.edit` wrote to
             # the real stdout too, and swallowing it into a throwaway would make
             # every status-line assertion see nothing.
-            if state.picker_frame() is not None:
+            if state.setup is not None:
+                # The first-run choice is its own frame, like the picker:
+                # `setup_lines`, then `backdrop` — naming mode included.
+                for line in editor.setup_lines(state.setup, size[0], size[1],
+                                               state.status, state.slots,
+                                               name=state.setup_name):
+                    sys.stdout.write(editor.backdrop(line, state.slots, size[0])
+                                     + "\r\n")
+            elif state.picker_frame() is not None:
                 # §13.7 — the picker is its own frame since phase 5, and this
                 # harness paints whichever frame is up, exactly as the shell
                 # does. `app.Picker`: `theme_lines`, then `backdrop`.
