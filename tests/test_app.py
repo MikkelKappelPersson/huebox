@@ -1439,9 +1439,9 @@ class ThemesButton(unittest.TestCase):
         """The `Themes` button rides the info column, never a panel.
 
         One top row: bare logo, the info column (theme plus the flat
-        button), the bordered `editor` panel. `info` and `editor` stay
-        separate boxes — no `info` panel anywhere, and the button is the
-        top's one control (decision 40).
+        buttons), the bordered `editor` panel. `info` and `editor` stay
+        separate boxes — no `info` panel anywhere, and the buttons are the
+        top's two controls: `Themes` over `Import` (decision 40, 003 §4.1).
         """
         from textual.containers import Horizontal, Vertical
 
@@ -1466,6 +1466,10 @@ class ThemesButton(unittest.TestCase):
                    if isinstance(c, huebox_app.ThemesButton)]
         self.assertEqual(len(buttons), 1,
                          "the info column holds no `themes` button")
+        imports = [c for c in getattr(cols[0], "_pending_children", [])
+                   if isinstance(c, huebox_app.ImportButton)]
+        self.assertEqual(len(imports), 1,
+                         "the info column holds no `import` button")
 
     def test_the_editor_top_mounts_the_button_in_the_metadata_column(self):
         from textual.containers import Horizontal, Vertical
@@ -1494,9 +1498,17 @@ class ThemesButton(unittest.TestCase):
                    if isinstance(c, huebox_app.ThemesButton)]
         self.assertEqual(len(buttons), 1,
                          "the metadata column holds no `themes` button")
-        # The column's last row was blank fill, so the button costs no row:
-        # readout above, one-row button below, column exactly the row height.
+        imports = [c for c in children
+                   if isinstance(c, huebox_app.ImportButton)]
+        self.assertEqual(len(imports), 1,
+                         "the metadata column holds no `import` button")
+        self.assertEqual(str(imports[0].label), "Import")
+        self.assertEqual(imports[0].id, "import-button")
+        # The column's last rows were blank fill, so the buttons cost no
+        # row: readout above, two one-row buttons below, column exactly
+        # the row height.
         self.assertEqual(buttons[0].styles.height.value, 1)
+        self.assertEqual(imports[0].styles.height.value, 1)
         self.assertEqual(cols[0].styles.height.value, screen_h)
 
     def test_pressing_the_button_opens_the_picker_like_t(self):
@@ -1821,8 +1833,8 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
         The selected readout and the HSV bars alone get the border — logo
         and theme metadata stay bare chrome, while the chip row plus the
         three equal HSV bars ride in `Panel("editor")`. The info column
-        owns the top's one control: the flat `themes` button under the
-        theme subject. The shares come from `editor.top_layout` — logo
+        owns the top's two controls: the flat `themes` button under the
+        theme subject and the flat `import` button below it. The shares come from `editor.top_layout` — logo
         steps down first, then info truncates its path — so the widths
         meet at the window edge with no air between them, and the row
         stands one `top_screen` height, so everything below rides where
@@ -1864,19 +1876,22 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
                              + info.styles.width.value
                              + editor_panel.styles.width.value, 120)
             # One row budget: header and editor box stand `top_screen`,
-            # the info column leaves its last row for the button below it.
+            # the info column leaves its last two rows for the buttons below.
             self.assertEqual(header.styles.height.value,
                              editor_panel.styles.height.value)
-            self.assertEqual(info.styles.height.value + 1,
+            self.assertEqual(info.styles.height.value + 2,
                              header.styles.height.value)
             self.assertEqual(hsv.styles.width.value,
                              editor_outer - 2
                              - 2 * huebox_app.EDITOR_PAD_X
                              - 2 * app._side_geom.get("top_pad", 0))
-            # The info column owns the top's one control.
+            # The info column owns the top's two controls.
             buttons = list(top.query(huebox_app.ThemesButton))
             self.assertEqual(len(buttons), 1)
             self.assertEqual(str(buttons[0].label), "Themes")
+            imports = list(top.query(huebox_app.ImportButton))
+            self.assertEqual(len(imports), 1)
+            self.assertEqual(str(imports[0].label), "Import")
 
     async def test_arrows_walk_pairs_not_rows(self):
         app = await self._app()

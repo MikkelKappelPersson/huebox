@@ -29,6 +29,9 @@ from typing import NamedTuple
 
 from .color import (MISSING, NAMED, PALETTE, SLOTS, hex_to_rgb, is_hex,
                     normalize_hex, readable_fg, rgb_to_hsv, step_hsv)
+from .preview import (CELL_FULL, CELL_MIN, NAMED_ABBR, NAMED_ABBR_W,
+                      NAMED_COL_W, NAMED_MIN_W, interface_rows, named_cell,
+                      named_cell_width, palette_rows, swatch_cell)
 from .render import (BOLD, CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, RESET, backdrop,
                      banner_lines, bg, chrome, clip,
                      diff_lines, example_lines, fg, hint_line, hsv_axis, hsv_numbers,
@@ -83,24 +86,10 @@ WIDGET_BUDGET = EXAMPLES_ROWS + SAMPLE_FLOOR + 1
 # a state starts at the width `term_size()` falls back to; the draw loop
 # replaces it with the real geometry on every frame (§4.3)
 FALLBACK_COLS = 80
-# a palette swatch, with and without its hex value; the frame drops the hex
-# before it drops a swatch, and gives up cells before width (§15.2)
-CELL_FULL, CELL_MIN = 13, 6
-# the width of one interface cell: `mark name hex`, the name padded to 21
-NAMED_COL_W = 32
-#: Two-letter abbreviations for the interface slots, for the narrow rungs
-#: of the width ladder (§15.2): the full names are what make a bare cell 32
-#: wide, so below 68 columns the frame holds two cells abreast by printing
-#: these instead — `background` is back+ground, `foreground` fore+ground,
-#: the rest read off the words. The hex goes last, past what any frame at
-#: or above `MIN_COLS` reaches.
-NAMED_ABBR = {"background": "BG", "foreground": "FG",
-              "cursor-color": "CC", "cursor-text": "CT",
-              "selection-background": "SB",
-              "selection-foreground": "SF"}
-#: an abbreviated interface cell with its hex (`mark abbr hex`), and
-#: without: the floor rung, past the narrowest frame the editor draws.
-NAMED_ABBR_W, NAMED_MIN_W = 13, 4
+# Cell geometry and the swatch-cell family live in `preview.py` (spec 003 §6:
+# one rendering of a theme, asked from the editor frame and the import
+# popup alike) and are re-exported here so `editor.swatch_cell` and friends
+# keep working for existing callers and tests.
 # the side-by-side top block (§8.1, decision 36): the wordmark stands in a
 # fixed left column and the theme subject plus the selected readout in the
 # right one. `TOP_LEFT_W` is the indent, the six letters and the gap between
@@ -477,50 +466,9 @@ def slot_at(hits, x: int, y: int):
     return None
 
 
-def swatch_cell(slots, index, sel, show_hex, width=None):
-    """One palette swatch: `> 4 #rrggbb` in its own colours.
-
-    The same expression `draw_editor` always painted, hoisted so the
-    side-by-side left panel cannot drift from it — one implementation of
-    what a swatch says, asked from two layouts. `width` pads the swatch
-    past its own cell (the pad rides inside the painted span, so the
-    colour field grows): the side layout passes the interface cell width
-    so both grids stand in the same two columns. The text stays
-    left-aligned in the field, so the `>` marks line up down the column.
-    """
-    value = slots.get(f"palette-{index}", MISSING)
-    mark = ">" if sel == index else " "
-    cellw = width or (CELL_FULL if show_hex else CELL_MIN)
-    label = (f" {mark}{index:>2} {value} " if show_hex
-             else f" {mark}{index:>2}")
-    return (f"{bg(value)}{fg(readable_fg(value))}"
-            f"{BOLD if sel == index else ''}{label.ljust(cellw)}{RESET}")
-
-
-def named_cell_width(abbrev=False, show_hex=True):
-    """The painted width of one interface cell (§15.2)."""
-    if not abbrev:
-        return NAMED_COL_W
-    return NAMED_ABBR_W if show_hex else NAMED_MIN_W
-
-
-def named_cell(slots, key, sel, abbrev=False, show_hex=True):
-    """One interface cell: `mark name hex`, the name padded to 21.
-
-    Same hoist as `swatch_cell`: the side layout's `background/foreground`
-    rows are these cells, not a second rendering of them. `abbrev` prints
-    the two-letter `NAMED_ABBR` form and `show_hex` the value — the narrow
-    rungs of the width ladder, asked from the grid, never re-derived here.
-    """
-    index = SLOTS.index(key)
-    value = slots.get(key, MISSING)
-    mark = ">" if sel == index else " "
-    style = BOLD if sel == index else ""
-    name = NAMED_ABBR[key] if abbrev else f"{key:<21}"
-    label = (f" {mark}{name} {value} " if show_hex
-             else f" {mark}{name}")
-    return (f"{bg(value)}{fg(readable_fg(value))}{style}"
-            f"{label.ljust(named_cell_width(abbrev, show_hex))}{RESET}")
+# `swatch_cell`, `named_cell_width` and `named_cell` are `preview.py`'s
+# (re-exported through this module's `preview` import above): one
+# implementation of what a cell says, asked from every layout.
 
 
 #: One side-layout interface cell: `mark name` over the hex, both rows
@@ -1020,16 +968,20 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
 
     marks.append(("palette", at_body()))
     body.append(indent + title("Palette", slots))
-    for start in range(0, len(PALETTE), per_row):
-        # `len(body)` is this row's index in the frame: `out` is `body` plus
-        # whatever follows, so the index holds. Announcing the cell here rather
-        # than recomputing it elsewhere is what keeps a click and a swatch from
-        # disagreeing about where one is.
+    # The rows are `preview.palette_rows`' — the same unit the import popup
+    # calls at its own width — with this frame's grid shares. Only the
+    # indent, the hit announcement and the row index stay here: `len(body)`
+    # is this row's index in the frame, and announcing the cell here rather
+    # than recomputing it elsewhere is what keeps a click and a swatch from
+    # disagreeing about where one is.
+    for number, row in enumerate(palette_rows(slots, sel, per_row,
+                                              show_hex)):
         y = len(body)
-        cells = [i for i in range(start, start + per_row) if i < len(PALETTE)]
-        body.append((indent + "".join(
-            swatch_cell(slots, i, sel, show_hex) for i in cells)).rstrip())
+        body.append((indent + row).rstrip())
         if hits is not None:
+            start = number * per_row
+            cells = [i for i in range(start, start + per_row)
+                     if i < len(PALETTE)]
             for column, index in enumerate(cells):
                 x0 = len(indent) + column * cellw
                 hits.append(Hit(y, x0, x0 + cellw - 1, index))
@@ -1041,14 +993,15 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     per = grid.named_cols
     ncellw = named_cell_width(grid.named_abbrev, grid.named_show_hex)
     body.append(indent + title("Interface", slots))
-    for start in range(0, len(NAMED), per):
+    # Same shared-unit rule as the palette above: `preview.interface_rows`
+    # assembles the cells, this loop only indents and announces them.
+    for number, row in enumerate(interface_rows(
+            slots, sel, per, grid.named_abbrev, grid.named_show_hex)):
         y = len(body)
-        cells = [named_cell(slots, key, sel,
-                            grid.named_abbrev, grid.named_show_hex)
-                 for key in NAMED[start:start + per]]
-        body.append((indent + "  ".join(cells)).rstrip())
+        start = number * per
+        body.append((indent + row).rstrip())
         if hits is not None:
-            for column in range(len(cells)):
+            for column in range(len(NAMED[start:start + per])):
                 x0 = len(indent) + column * (ncellw + 2)
                 hits.append(Hit(y, x0, x0 + ncellw - 1,
                                 len(PALETTE) + start + column))

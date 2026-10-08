@@ -17,14 +17,16 @@ Isolates responsibilities so changes in one module don't cascade; enables indepe
 ### 2. Facade Pattern
 Shields callers from subsystem complexity; lets internals evolve without breaking consumers.
 - The `FORMATS` registry (`FORMATS[fmt]["read"]` / `["write"]`) is the facade for terminal formats — the push reuses it, never invents a key
-- `themes.save` / `themes.push` is the facade for writing theme files and pushing to terminals
+- The `PROVIDERS` registry (`PROVIDERS[name]["list"]` / `["read"]`) is the facade for provider themes — the import popup lists and reads through it, never a directory walk of its own
+- `themes.save` / `themes.push` is the facade for writing theme files and pushing to terminals; `themes.create` is the facade for new library files — the import confirm writes through it, never a file of its own
 - `detect.resolve()` is the facade for finding the push target — the push resolves its target through the same `resolve()` the CLI does
 - `app` / `cli` never reach into format internals or config parsing directly — use the facades
 
 ### 3. Dependency Injection
 Decouples the editing session from the outside world; makes the session testable without a compositor.
-- `editor` reaches outside only through injected callables that `cli` builds: the save callback (`write(theme, path, slots)` — handed the subject every time, since a picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one prompt pattern), and the `Library` object (`list` / `load` / `create`) behind the theme picker
+- `editor` reaches outside only through injected callables that `cli` builds: the save callback (`write(theme, path, slots)` — handed the subject every time, since a picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one prompt pattern), the `Library` object (`list` / `load` / `create`) behind the theme picker, and the import popup's `ImportLibrary` (`list` / `read` per provider) plus its `themes.create` writer
 - NEVER import `themes` or `detect` into `editor` to save a parameter
+- The import flow follows the same rule: `import_state` takes an injected `ImportLibrary`, `app` takes an injected writer — neither imports `themes` or `detect`
 - `cli` is the composition root: `_run_editor` takes a `driver` defaulting to `app.run`, so tests drive a session without a compositor (`tests/session.py`)
 - The `app` import stays late inside `_run_editor` (cold-start time for commands that never open the editor); the tty check runs before the import so a piped session reports the real problem
 
@@ -47,19 +49,25 @@ terminal config → canonical slots → edit buffer → truth file → push to t
 | --- | --- |
 | `huebox/color.py` | 22-slot model, hex/rgb/hsv maths, luminance, step sizes |
 | `huebox/formats/` | `base` (rule machinery, flat read/write) + `ghostty`, `kitty`, `alacritty`; registry in `__init__` |
+| `huebox/providers.py` | provider theme dirs, `FORMATS` reads, slugify mapping |
 | `huebox/detect.py` | probes and env overrides, candidate paths, Ghostty `config-file` includes / `theme =` reads, pointer writer, `resolve()` |
 | `huebox/themes.py` | home, `state.toml`, theme files, canonical writer + subset reader, `push`, post-push reload, Ghostty native export, `RAMP` |
 | `huebox/render.py` | `clip` / `pack` / `visible`, frame typography (`chrome` / `title` / `wordmark`), samples, static preview, examples strip, live diff |
+| `huebox/preview.py` | shared palette/strip/sample units the frame and the popup both call |
 | `huebox/tui.py` | `term_size`, and nothing else: Textual owns input, resize and raw mode |
 | `huebox/editor.py` | the session: `EditorState`, `apply_key`, the picker, staged save, `report_session` |
+| `huebox/import_state.py` | headless import cursor, selection, confirm mapping |
 | `huebox/app.py` | the Textual shell: one widget per block over `render`'s rows; keys, focus, resize, click and wheel |
 | `huebox/cli.py` | argparse, dispatch, theme commands, exit codes; `main()` |
 
 Dependency rule, no exceptions: `color` and `tui` import nothing intra-package;
-`formats` imports `color` only; `detect` imports `formats`;
+`formats` imports `color` only; `providers` imports `formats` only;
+`detect` imports `formats`;
 `themes` imports `color` + `formats` + `detect`; `render` imports `color`;
-`editor` imports `render` + `tui` + `color`;
-`app` imports `render` + `tui` + `color` + `editor`; `cli` imports everything.
+`preview` imports `render` + `color`;
+`editor` imports `render` + `tui` + `color` + `preview`;
+`import_state` imports `providers` only;
+`app` imports `render` + `tui` + `color` + `editor` + `preview` + `import_state`; `cli` imports everything.
 No cycles.
 
 ## Coding Notes

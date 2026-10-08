@@ -47,12 +47,14 @@ from rich.segment import Segment
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.strip import Strip
 from textual.style import Style
 from textual.widget import Widget
-from textual.widgets import Button, Collapsible
+from textual.widgets import Button, Collapsible, SelectionList, Static
 
+from . import import_state
 from .color import MISSING, SLOTS
 from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
                      SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
@@ -61,7 +63,9 @@ from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROW
                      head_label, report_session, session_path, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
                      too_small_frame, top_editor_meta, top_layout, top_left_rows)
-from .render import HSV_FIELD, MIN_COLS, MIN_ROWS, visible, hsv_axis
+from .preview import example_lines, palette_rows, sample_lines
+from .render import (CHROME_MUTED, HSV_FIELD, MIN_COLS, MIN_ROWS, chrome,
+                     hint_line, hsv_axis, title, visible)
 
 #: Textual's key vocabulary → huebox's. The only seam between them.
 #: The blocks a click and an arrow both act on — the two grids. They are one
@@ -245,6 +249,22 @@ class Frame(Widget):
                                markup=False, highlight=False)
         self.rows_text = rows_text
         self._cache = [Text.from_ansi(row) for row in rows_text]
+
+    def update_rows(self, rows_text, width=None):
+        """Repaint this block in place: new rows, same widget.
+
+        The import popup's preview and footer repaint on every cursor move
+        and toggle; removing and remounting a widget per repaint would churn
+        focus and scroll, so the rows (and their parse) are swapped under the
+        mounted widget instead. Editor blocks never call this — their rows
+        are rebuilt by `redraw`.
+        """
+        self.rows_text = rows_text
+        self._cache = [Text.from_ansi(row) for row in rows_text]
+        self.styles.height = len(rows_text)
+        if width is not None:
+            self.styles.width = width
+        self.refresh()
 
     def selection_for(self, y: int):
         """The theme's selection style over this row's selected span, or None.
@@ -700,6 +720,122 @@ class ThemesButton(Button):
                          name="themes", **kwargs)
 
 
+class ImportButton(Button):
+    """The `Import` button: a mouse mirror of `I` (003 spec §4.1).
+
+    The info column's second control, directly below `Themes`: the same flat
+    contract (never focusable, so the arrows stay on the grids; painted only
+    in the theme's own `selection-background` / `selection-foreground`, hover
+    as underline) and the same blank-fill row discipline (it rides the
+    column's existing fill, so the row budget never moves). Pressing it does
+    exactly what `I` does, through the same `Editor.open_import` call — the
+    button and the key cannot disagree about what the popup is, the same rule
+    `Themes`/`t` follows. Bare-stack mode (`HUEBOX_EDITOR_PANEL=0`) mounts no
+    top and keeps no button; `I` still works.
+    """
+
+    can_focus = False
+
+    DEFAULT_CSS = """
+    ImportButton {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold;
+        width: auto;
+        height: 1;
+        min-width: 16;
+        margin: 0;
+        padding: 0;
+        content-align: center middle;
+    }
+    ImportButton:hover {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold underline;
+    }
+    ImportButton:focus {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold underline;
+    }
+    ImportButton.-active {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        tint: transparent !important;
+    }
+    ImportButton:disabled {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        # Default variant, flat look from the CSS above — the same reason as
+        # `ThemesButton`: the flat variant's `color: auto 90%` reroutes the
+        # label past the explicit colour, and `auto-color` is not a property
+        # any rule can switch back.
+        super().__init__("Import", id="import-button",
+                         name="import", **kwargs)
+
+
+class ImportFooterButton(Button):
+    """The popup's confirm/cancel: click only, never focus (003 spec §4.7).
+
+    The footer answers to its keys without holding focus, so tab-trapping is
+    impossible by construction: `Enter`/`Esc` arrive through the screen-level
+    bindings `ImportScreen` owns, and these buttons answer to clicks alone.
+    Theme-closed like `ThemesButton`: the default variant's base states name
+    tokens `TOKEN_SLOTS` never mapped (`$button-foreground`, derived
+    `$surface-*` washes), so every state carries the selection pair with
+    `!important`, the same armor — hover as underline, never a wash.
+    """
+
+    can_focus = False
+
+    DEFAULT_CSS = """
+    ImportFooterButton {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold;
+        width: auto;
+        height: 1;
+        min-width: 12;
+        margin: 0 1;
+        padding: 0 1;
+        content-align: center middle;
+    }
+    ImportFooterButton:hover {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold underline;
+    }
+    ImportFooterButton:focus {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        text-style: bold;
+    }
+    ImportFooterButton.-active {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+        tint: transparent !important;
+    }
+    ImportFooterButton:disabled {
+        background: $screen-selection-background !important;
+        color: $screen-selection-foreground !important;
+        border: none !important;
+    }
+    """
+
+
 #: The live blocks, each collapsible on its own (§14.1): the strip, the
 #: hunk and the code sample. Three blocks, three toggles — a collapsed strip
 #: never takes the diff and the sample with it.
@@ -788,6 +924,642 @@ class Live(Collapsible):
                          name=name, **kwargs)
 
 
+#: The import popup's list column: wide enough for provider titles plus theme
+#: names, narrow enough to leave the preview its palette at `MIN_COLS`.
+#: The `#import-left` rule below carries the same number — one width, one
+#: place it is derived.
+IMPORT_LEFT_W = 34
+
+#: Keys the popup answers itself (screen-level priority bindings) or that a
+#: focused `SelectionList` binds natively. `Editor.on_key` steps over all of
+#: them while the popup is top — one handler per key. `up`/`down`/`space`
+#: need the priority binding (a focused list starves plain screen bindings —
+#: reproduced for `enter` in P0, same mechanism); `home`/`end`/`pagedown` /
+#: `pageup` stay native within their list, adopted through `highlighted`.
+IMPORT_WIDGET_KEYS = ("up", "down", "home", "end", "pagedown",
+                      "pageup", "space")
+
+#: The popup footer's hint pairs, painted through `hint_line` like every
+#: footer huebox draws.
+IMPORT_HINTS = [("space", "toggle"), ("a", "all visible"),
+                ("n", "clear"), ("arrows", "move"),
+                ("Enter", "import"), ("Esc", "cancel")]
+
+
+class ImportList(SelectionList):
+    """One provider's theme list (003/P4: candidate A, P0 verdict).
+
+    A stock `SelectionList` with one behaviour added: the wheel moves the
+    highlight ±1 per detent instead of scrolling the viewport (native scroll
+    never moves the highlight — reproduced in the P0 spike), and the event is
+    stopped so the list column does not scroll underneath the cursor. The
+    highlight change routes through the state (`ImportScreen.scroll_import`),
+    so wheel, arrows and clicks share one cursor like the picker does.
+    Toggle marks, `space` toggling and the `SelectedChanged` stream stay
+    stock: the screen reconciles the state's toggled set from them.
+    """
+
+    def on_mouse_scroll_up(self, event) -> None:
+        event.stop()
+        self.screen.scroll_import(-1)
+
+    def on_mouse_scroll_down(self, event) -> None:
+        event.stop()
+        self.screen.scroll_import(+1)
+
+
+def import_preview_rows(name, slots, width):
+    """The popup's right column for the highlighted theme (003 spec §4.5).
+
+    Pure like every preview unit: the theme name as a bold-`foreground`
+    header, the compact 16-slot palette (`palette_rows`, all readable at
+    once), the interface-text examples strip (`example_lines`), and the live
+    code sample (`sample_lines`) — the same units the editor frame calls, so
+    the two cannot disagree about what a theme looks like. Every row stands
+    on the previewed theme's own `background` (`backdrop`, §8.2), never the
+    terminal's. Shedding is tail-first by construction: the sample is last,
+    so a short column clips it before the strip, which keeps its floor.
+    `{}` slots preview as one muted row rather than the last theme's.
+    """
+    if not slots:
+        note = (title(name, slots) if name
+                else chrome("no themes found", CHROME_MUTED, slots or {}))
+        return [backdrop(note, slots or {}, width)]
+    rows = [title(name, slots), ""]
+    rows.extend(palette_rows(slots, sel=-1))
+    rows.append("")
+    rows.extend(example_lines(slots, cols=width, indent=""))
+    code = [line for line, _ in sample_lines(slots)]
+    if code and not visible(code[-1]):
+        code.pop()               # the lexer's trailing newline, not a line
+    rows.append("")
+    rows.extend(code)
+    return [backdrop(line, slots, width) for line in rows]
+
+
+class ImportScreen(ModalScreen):
+    """The theme-import popup: list left, preview right, confirm footer.
+
+    003 spec §§4–5, P0 verdict followed without re-litigating: one
+    `ModalScreen`, pushed with `push_screen` and closed with
+    `dismiss(result)` — the picker's mounted-takeover path is untouched, and
+    the app routes popup keys here by guarding on this screen's type (it
+    still sees keys under a modal). Inside: one `Collapsible` per provider
+    (title `Name (count)`, collapsed set from the state's `expanded`) each
+    holding one `ImportList` of `(display, display)` rows, the preview column
+    (`import_preview_rows` in a `Frame` carrier), and a footer of hints plus
+    a live count plus confirm/cancel buttons.
+
+    The state (`import_state.ImportState`) owns the behaviour — cursor over
+    open groups, expanded set, toggled set, confirm mapping — and this screen
+    is a thin shell over it: widget messages reconcile into the state, state
+    transitions mirror back out, and exactly one list holds focus, moving
+    with the cursor. `Enter` confirms the whole set through the priority
+    binding below (a focused list starves plain `enter` — reproduced in P0 —
+    and toggle stays `space`'s job alone, so confirm never double-fires).
+    """
+
+    BINDINGS = [Binding("enter", "confirm_import", "Import", show=False,
+                        priority=True),
+                # The cursor keys, preempted: a focused list binds them too,
+                # and `Editor.on_key` runs before the widget binding would —
+                # so routing them through the app would double-move (native
+                # wrap plus state step on one press). Screen-priority bindings
+                # run first instead: the state walks the continuous cursor
+                # across open groups (single-row edges included — native
+                # no-ops there, posting nothing) and the mirror sets
+                # `highlighted` + focus together on the landing list.
+                Binding("up", "import_up", "", show=False,
+                        priority=True),
+                Binding("down", "import_down", "", show=False,
+                        priority=True),
+                Binding("space", "import_toggle", "", show=False,
+                        priority=True)]
+
+    # Theme-closure: `$background`/`$foreground` plus the selection pair the
+    # picker already wears — every token here is one `TOKEN_SLOTS` maps, no
+    # `auto` ink, no derived washes. The modal dim is overridden to the
+    # theme's own `background` (Textual's overlay colour never shows), and
+    # all four `selection-list--button*` component classes bind theme slots:
+    # the cursor wears the selection pair, a toggled row reads bold.
+    DEFAULT_CSS = """
+    ImportScreen {
+        background: $background;
+        overflow: hidden;
+    }
+    ImportScreen #import-body {
+        height: 1fr;
+        background: $background;
+    }
+    ImportScreen #import-left {
+        width: 34;
+        height: 1fr;
+        background: $background;
+        padding: 0;
+        margin: 0;
+    }
+    ImportScreen #import-right {
+        height: 1fr;
+        background: $background;
+        padding: 0;
+        margin: 0;
+    }
+    ImportScreen #import-footer {
+        height: auto;
+        background: $background;
+    }
+    ImportScreen #import-buttons {
+        height: auto;
+        background: $background;
+    }
+    ImportScreen SelectionList {
+        background: $background;
+        color: $foreground;
+        border: none;
+        padding: 0;
+        margin: 0;
+    }
+    ImportScreen SelectionList > .selection-list--button {
+        background: $background;
+        color: $foreground;
+    }
+    ImportScreen SelectionList > .selection-list--button-selected {
+        background: $background;
+        color: $foreground;
+        text-style: bold;
+    }
+    ImportScreen SelectionList > .selection-list--button-highlighted {
+        background: $screen-selection-background;
+        color: $screen-selection-foreground;
+    }
+    ImportScreen SelectionList > .selection-list--button-selected-highlighted {
+        background: $screen-selection-background;
+        color: $screen-selection-foreground;
+        text-style: bold;
+    }
+    """
+
+    def __init__(self, istate, **kwargs):
+        super().__init__(**kwargs)
+        self._istate = istate
+        # While set, widget messages are echoes of a programmatic mirror,
+        # not user input: handlers return early. Every echo is idempotent
+        # anyway (handlers read the live widget state and compare against
+        # the state), so this is belt, not braces.
+        self._syncing = False
+        self._lists: dict = {}          # provider -> ImportList
+        self._collapsibles: dict = {}   # provider -> Collapsible
+        # Last accounted-for highlight per provider: a mounted list posts
+        # `SelectionHighlighted` for its initial highlight, and every mirror
+        # below posts one per change — all echoes, not user moves. The
+        # handler ignores a highlight equalling the echo and adopts anything
+        # else, so the cursor can never drift to a list nobody touched.
+        self._echo: dict = {}
+        self._left = None
+        self._right = None
+        self._footer = None
+        self._hints_frame = None
+        self._count_frame = None
+        self._preview_pane = None
+        self._full = True               # False while the too-small line
+                                        # stands in for the popup
+
+    # -- mount ---------------------------------------------------------
+
+    def compose(self) -> ComposeResult:
+        # Nothing here: the popup's width comes from the compositor, and the
+        # too-small check needs the laid-out size. Shells mount in `_fill`
+        # once the tree exists — the same shape as `Editor.compose`.
+        return iter(())
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._after_mount)
+
+    def _after_mount(self) -> None:
+        # Focus after mount, like every other focus this shell places: `mount`
+        # is a request, so focusing inline would query an empty tree. The
+        # fill mounts first, the sync runs on the refresh after it.
+        self._fill()
+        self.call_after_refresh(self._sync_all)
+
+    def on_resize(self, event) -> None:
+        # The laid-out size arrives a refresh late (the `Editor.on_resize`
+        # rule), so re-evaluate on the first moment sizes agree.
+        self.call_after_refresh(self._relayout)
+
+    def _editor_slots(self):
+        """The live buffer's slots, for popup chrome (frame-typography rule).
+
+        Chrome (titles, hints, counts) is painted from the buffer through
+        `chrome()`/`title()` like every frame; the preview column paints
+        from the highlighted theme's own slots instead (§4.5).
+        """
+        return getattr(getattr(self.app, "state", None), "slots", {})
+
+    def _fill(self) -> None:
+        """Mount the popup at the current size: full, or the too-small line.
+
+        Below `MIN_COLS`×`MIN_ROWS` the popup keeps the editor's own fallback
+        — the `terminal too small` line instead of a squeezed modal, same
+        floor, no second constant. Widget state is never carried: lists,
+        collapsed flags and selections re-sync from the state afterwards.
+        """
+        for child in list(self.children):
+            child.remove()
+        self._lists = {}
+        self._collapsibles = {}
+        self._echo = {}
+        self._left = self._right = self._footer = None
+        self._hints_frame = self._count_frame = self._preview_pane = None
+        width, height = self.size
+        if width < MIN_COLS or height < MIN_ROWS:
+            self._full = False
+            small = Frame([too_small_frame(width)], width,
+                            name="import-small")
+            small.styles.width = width
+            small.styles.height = 1
+            self.mount(small)
+            return
+        self._full = True
+        st = self._istate
+        slots = self._editor_slots()
+        groups = []
+        for provider in st.provider_order:
+            ids = st.theme_ids.get(provider, [])
+            title_text = f"{provider} ({len(ids)})"
+            if ids:
+                lst = ImportList(*[(st.display[tid], st.display[tid])
+                                   for tid in ids],
+                                 id=f"import-list-{provider}")
+                kids = [lst]
+                self._lists[provider] = lst
+            else:
+                # An empty provider is one muted row, never a bare missing
+                # block — and no list at all, so `select_all` and the cursor
+                # have nothing to swallow or stand on.
+                kids = [Static(Text.from_ansi(
+                    chrome("no themes found", CHROME_MUTED, slots)))]
+            coll = Collapsible(*kids, title=title_text,
+                               collapsed=(provider not in st.expanded),
+                               id=f"import-group-{provider}")
+            coll.can_focus = False
+            groups.append(coll)
+            self._collapsibles[provider] = coll
+            if provider in self._lists:
+                self._echo[provider] = self._lists[provider].highlighted
+        left = VerticalScroll(*groups, id="import-left")
+        right = Vertical(id="import-right")
+        body = Horizontal(left, right, id="import-body")
+        hints = Frame(self._hint_rows(width), width, name="import-hints")
+        hints.styles.width = width
+        hints.styles.height = len(hints.rows_text)
+        count = Frame(self._count_rows(width), width, name="import-count")
+        count.styles.width = width
+        count.styles.height = 1
+        confirm = ImportFooterButton("Import", id="import-confirm")
+        cancel = ImportFooterButton("Cancel", id="import-cancel")
+        buttons = Horizontal(confirm, cancel, id="import-buttons")
+        footer = Vertical(hints, count, buttons, id="import-footer")
+        # One mount call: everything above is constructor-composed (a widget
+        # accepts `mount` only once it is mounted itself, so nesting through
+        # constructors is the only synchronous shape).
+        self.mount(body, footer)
+        self._left, self._right, self._footer = left, right, footer
+        self._hints_frame, self._count_frame = hints, count
+        self._preview_pane = None
+
+    def _tree_mounted(self) -> bool:
+        """Whether the filled tree finished mounting (mounts are requests)."""
+        return (self._full and self._left is not None
+                and self._left.is_mounted and self._right is not None
+                and self._right.is_mounted)
+
+    def _relayout(self) -> None:
+        """Re-evaluate the size after a resize: swap or repaint."""
+        if not self.is_running:
+            return
+        width, height = self.size
+        fits = width >= MIN_COLS and height >= MIN_ROWS
+        if fits != self._full:
+            self._fill()
+            self._sync_all()
+        elif fits and self._tree_mounted():
+            self._repaint_preview()
+            self._refresh_footer()
+
+    # -- rows ----------------------------------------------------------
+
+    def _hint_rows(self, width):
+        slots = self._editor_slots()
+        return ["  " + line
+                for line in hint_line(slots, IMPORT_HINTS, width - 2)]
+
+    def _count_rows(self, width):
+        """The live count: `N selected — Enter imports, Esc cancels`."""
+        st = self._istate
+        slots = self._editor_slots()
+        line = (chrome(f"{len(st.selected)} selected", "foreground",
+                        slots, bold=True)
+                + chrome(" — Enter imports, Esc cancels",
+                         CHROME_MUTED, slots))
+        if st.note:
+            line += "  " + chrome(st.note, CHROME_MUTED, slots)
+        return [backdrop(line, slots, width)]
+
+    def _refresh_footer(self) -> None:
+        if self._footer is None or not self._full:
+            return
+        width, _ = self.size
+        if getattr(self, "_hints_frame", None) is not None:
+            self._hints_frame.update_rows(self._hint_rows(width), width)
+        if getattr(self, "_count_frame", None) is not None:
+            self._count_frame.update_rows(self._count_rows(width), width)
+
+    def _repaint_preview(self) -> None:
+        """Repaint the preview from the cursor theme's slots (read-once).
+
+        `cursor_slots` hits the injected reader on first highlight and the
+        cache after that; `{}` (nowhere, or unreadable) paints the muted row
+        rather than the last theme's. Read-only carriers: plain `Frame`s,
+        selection off, never focusable (spec §4.5).
+        """
+        if self._right is None or not self._full:
+            return
+        if not self._right.is_mounted:
+            return              # mounts still queued; `_sync_all` repaints
+        st = self._istate
+        tid = import_state.cursor_id(st)
+        slots = import_state.cursor_slots(st) if tid is not None else {}
+        name = st.display.get(tid, "") if tid is not None else ""
+        width = max(8, self.size.width - IMPORT_LEFT_W)
+        rows = import_preview_rows(name, slots, width)
+        if getattr(self, "_preview_pane", None) is None:
+            pane = Frame(rows, width, name="import-preview")
+            pane.styles.width = width
+            pane.styles.height = len(rows)
+            pane.styles.padding = 0
+            pane.styles.margin = 0
+            self._right.mount(pane)
+            self._preview_pane = pane
+        else:
+            self._preview_pane.update_rows(rows, width)
+
+    # -- state → widgets -----------------------------------------------
+
+    def _sync_all(self) -> None:
+        if self._full and not self._tree_mounted():
+            if not self.is_running:
+                return          # dismissed mid-mount: nothing to sync into
+            self.call_after_refresh(self._sync_all)
+            return
+        self._sync_collapsed()
+        self._sync_selection()
+        self._sync_cursor()
+
+    def _sync_collapsed(self) -> None:
+        st = self._istate
+        self._syncing = True
+        try:
+            for provider, coll in self._collapsibles.items():
+                want = provider not in st.expanded
+                if coll.collapsed != want:
+                    coll.collapsed = want
+        finally:
+            self._syncing = False
+
+    def _sync_selection(self) -> None:
+        """Mirror the toggled set onto the lists, exactly (no `select_all`:
+
+        it would swallow an empty group's muted row into `selected`, the
+        candidate-B failure. Only ids the state knows are ever selected.
+        """
+        st = self._istate
+        self._syncing = True
+        try:
+            for provider, lst in self._lists.items():
+                ids = st.theme_ids.get(provider, [])
+                want = {st.display[tid] for tid in ids
+                        if tid in st.selected}
+                have = set(lst.selected)
+                for value in have - want:
+                    lst.deselect(value)
+                for value in want - have:
+                    lst.select(value)
+        finally:
+            self._syncing = False
+        self._refresh_footer()
+
+    def _sync_cursor(self) -> None:
+        """Focus-follows-cursor: the cursor's list holds the highlight and
+        the focus, every other list holds neither — never split-brain."""
+        st = self._istate
+        cursor_provider, cursor_index = st.cursor
+        self._syncing = True
+        try:
+            for provider, lst in self._lists.items():
+                ids = st.theme_ids.get(provider, [])
+                if (provider == cursor_provider
+                        and 0 <= cursor_index < len(ids)):
+                    if lst.highlighted != cursor_index:
+                        lst.highlighted = cursor_index
+                elif lst.highlighted is not None:
+                    lst.highlighted = None
+                self._echo[provider] = lst.highlighted
+            target = self._lists.get(cursor_provider)
+            if target is None or not st.theme_ids.get(cursor_provider):
+                target = next(iter(self._lists.values()), None)
+            if target is not None:
+                target.focus()
+                if target.highlighted is not None:
+                    target.scroll_to_highlight()
+        finally:
+            self._syncing = False
+        self._repaint_preview()
+
+    # -- keys ----------------------------------------------------------
+
+    def import_key(self, key: str) -> None:
+        """One keypress while this screen is top, from `Editor.on_key`.
+
+        `up`/`down`/`space`/`enter` belong to the screen-level priority
+        bindings above (which run before any widget binding could), and
+        `home`/`end`/`pagedown`/`pageup` to the focused list itself — all
+        stepped over here. `left` / `right` / `a` / `n` route to
+        `import_state.handle_key` and mirror back out; close spellings dismiss
+        with nothing written. Editor colour keys have no branch — inert by
+        construction, like the picker's `t`.
+        """
+        st = self._istate
+        if key in IMPORT_WIDGET_KEYS or key == "enter":
+            return                    # the screen binding, or the list
+        if key in ("left", "right", "a", "n"):
+            action = import_state.handle_key(st, key)
+            if action in ("collapsed", "expanded"):
+                self._sync_collapsed()
+                self._sync_cursor()
+            elif action in ("selected-all", "cleared"):
+                self._sync_selection()
+            return
+        if key in ("esc", "escape", "I", "\x03"):
+            if import_state.handle_key(st, key) == "close":
+                self.dismiss(None)
+            return
+        # Anything else (`w/e/s/d/x/c/f/i/u/r/t/N/…`, `ctrl+s`, …) is an
+        # editor key behind a popup that owns the surface: ignore it.
+
+    def scroll_import(self, delta: int) -> None:
+        """A wheel detent over a list: the highlight follows, ±1."""
+        import_state.wheel(self._istate, delta)
+        self._sync_cursor()
+
+    # -- messages ------------------------------------------------------
+
+    def _list_provider(self, lst):
+        for provider, owned in self._lists.items():
+            if owned is lst:
+                return provider
+        return None
+
+    def on_selection_list_selection_highlighted(self, event) -> None:
+        """Cursor move: adopt the live highlight, repaint the preview.
+
+        Reads `selection_list.highlighted` — `SelectionHighlighted` carries
+        no `index` attr (P0). A highlight equalling the per-provider echo is
+        a mount- or mirror-time message, not a move: hold still. Anything
+        else (clicks, native `home`/`end`/page jumps) adopts the cursor and
+        repaints — `up`/`down` never arrive here, the screen bindings own
+        them before any widget binding could wrap.
+        """
+        if self._syncing:
+            return
+        provider = self._list_provider(event.selection_list)
+        if provider is None:
+            return
+        highlighted = event.selection_list.highlighted
+        if highlighted is None:
+            return
+        if highlighted == self._echo.get(provider):
+            return                    # mount or mirror echo, not a move
+        self._echo[provider] = highlighted
+        st = self._istate
+        if (provider, highlighted) == (st.cursor[0], st.cursor[1]):
+            return
+        st.cursor = (provider, highlighted)
+        self._repaint_preview()
+
+    def on_selection_list_selected_changed(self, event) -> None:
+        """Toggle: reconcile the provider's ids from the list's `selected`.
+
+        Only ids the state knows survive — a muted or stale value can never
+        enter the toggled set. The footer count is the proof; the preview
+        does not follow selection.
+        """
+        if self._syncing:
+            return
+        provider = self._list_provider(event.selection_list)
+        if provider is None:
+            return
+        st = self._istate
+        ids = set(st.theme_ids.get(provider, []))
+        now = {(provider, value) for value in event.selection_list.selected
+               if (provider, value) in ids}
+        st.selected = (st.selected - ids) | now
+        self._refresh_footer()
+
+    def on_collapsible_collapsed(self, event) -> None:
+        """A group title toggled shut (click or Enter): persist the set.
+
+        Same pattern as `Live`: the widget owns the toggle, the screen owns
+        the expanded set across redraws. A cursor left inside a closed group
+        re-homes flat-preservingly (the `_collapse` rule); selections stay
+        selected — hiding is not deselecting. (`Collapsible.Toggled` itself
+        is never posted — only its `Collapsed`/`Expanded` specialisations —
+        so there is one handler per posted message, not one for the base.)
+        """
+        if self._syncing:
+            return
+        self._group_toggled(event.collapsible, True)
+
+    def on_collapsible_expanded(self, event) -> None:
+        """A group title toggled back open: persist the set."""
+        if self._syncing:
+            return
+        self._group_toggled(event.collapsible, False)
+
+    def _group_toggled(self, collapsible, is_collapsed: bool) -> None:
+        provider = next((name for name, owned
+                         in self._collapsibles.items()
+                         if owned is collapsible), None)
+        if provider is None:
+            return
+        self._adopt_collapsed(provider, is_collapsed)
+        self._sync_cursor()
+
+    def _adopt_collapsed(self, provider: str, is_collapsed: bool) -> None:
+        st = self._istate
+        rows = import_state.visible_rows(st)
+        buddy = import_state.cursor_id(st)
+        flat = (next((i for i, (_, _, rid) in enumerate(rows)
+                      if rid == buddy), None)
+                if buddy is not None else None)
+        if is_collapsed:
+            st.expanded.discard(provider)
+        else:
+            st.expanded.add(provider)
+        rows = import_state.visible_rows(st)
+        if buddy is not None and any(rid == buddy for _, _, rid in rows):
+            return                    # still standing on a row: unmoved
+        if not rows:
+            st.cursor = (provider, 0)
+            return
+        flat = 0 if flat is None else min(flat, len(rows) - 1)
+        st.cursor = (rows[flat][0], rows[flat][1])
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = getattr(event.button, "id", None)
+        if button_id == "import-confirm":
+            event.stop()
+            self.confirm()
+        elif button_id == "import-cancel":
+            event.stop()
+            self.dismiss(None)
+
+    def action_confirm_import(self) -> None:
+        self.confirm()
+
+    def action_import_up(self) -> None:
+        import_state.handle_key(self._istate, "up")
+        self._sync_cursor()
+
+    def action_import_down(self) -> None:
+        import_state.handle_key(self._istate, "down")
+        self._sync_cursor()
+
+    def action_import_toggle(self) -> None:
+        import_state.handle_key(self._istate, "space")
+        self._sync_selection()
+        self._sync_cursor()
+
+    def confirm(self) -> None:
+        """`Enter`: import the selected themes and close (spec §4.4).
+
+        The toggled set maps through `plan_confirm` (slugified unique names,
+        library clashes skipped, unreadable sources noted) into a plain plan
+        payload; `_import_closed` writes each plan through the injected
+        writer (`themes.create` per plan, truth files only). An
+        empty confirm stays open on the footer note — never an error and
+        never a close.
+        """
+        st = self._istate
+        library = getattr(self.app, "library", None)
+        existing = library.names() if library is not None else []
+        plans, skips, failures = import_state.plan_confirm(st, existing)
+        if not plans and not skips and not failures:
+            self._refresh_footer()   # `nothing selected`; stay open
+            return
+        self.dismiss((plans, skips, failures))
+
+
 class Editor(App):
     """One editing session, under Textual's compositor.
 
@@ -839,7 +1611,8 @@ class Editor(App):
 
     def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", slots=None,
                  write=None, backup_path=None, theme=None, library=None,
-                 head_override=None, **kwargs):
+                 head_override=None, import_library=None,
+                 import_writer=None, **kwargs):
         # Before `super()`: App.__init__ calls get_css_variables() to build the
         # stylesheet, so the buffer must exist by then or the first frame is
         # painted against MISSING for every slot.
@@ -850,6 +1623,19 @@ class Editor(App):
         self.backup_path = backup_path
         self.theme_name = theme
         self.library = library
+        # 003/P4 — the import popup's injected seam (`ImportLibrary`: listing
+        # + reader + formats, built by the `cli` composition root in phase 5
+        # like the picker's `Library`). `None` lists nothing, so a bare popup
+        # renders empty groups and never crashes; full wiring lands in P5.
+        self.import_library = import_library
+        # 003/P5 — the confirm path's write seam: a `cli`-built
+        # `themes.create` closure (truth files only — no push, no
+        # `set_current`, no buffer). `None` writes nothing; the root
+        # builds it, never an import here.
+        self.import_writer = import_writer
+        self.import_result = None     # the last confirm's plan payload
+        self.import_notes = []        # per-theme failures, for P5's report
+        self._import_state = None     # the open popup's state, if any
         # `None` means "derive it from the session"; `""` means "none", which is
         # how the harness pins the header to the reference's arguments.
         self.head_override = head_override
@@ -1159,8 +1945,8 @@ class Editor(App):
         header += [backdrop("", slots, left_w)] * max(0, top_screen - len(header))
         header = header[:top_screen]
         meta = [backdrop(line, slots, meta_w) for line in meta_rows]
-        meta += [backdrop("", slots, meta_w)] * max(0, top_screen - 1 - len(meta))
-        meta = meta[:top_screen - 1]
+        meta += [backdrop("", slots, meta_w)] * max(0, top_screen - 2 - len(meta))
+        meta = meta[:top_screen - 2]
         hsv = [backdrop(line, slots, content_w)
                for line in editor_rows]
         hsv += [backdrop("", slots, content_w)] * max(0, inner_h - len(hsv))
@@ -1172,16 +1958,18 @@ class Editor(App):
         header_frame.styles.margin = 0
         meta_frame = Frame(meta, meta_w, name="info")
         meta_frame.styles.width = meta_w
-        meta_frame.styles.height = top_screen - 1
+        meta_frame.styles.height = top_screen - 2
         meta_frame.styles.padding = 0
         meta_frame.styles.margin = 0
-        # The top's one control in this arrangement: the same flat
+        # The top's controls in this arrangement: the same flat
         # `themes` button, under the theme subject in the metadata
-        # column. Never focusable, theme-closed by the same CSS, and
-        # exactly what `t` does through the same `apply_key` call — see
-        # `ThemesButton` and `on_button_pressed`. Its floor follows the
-        # column down: past the label's own 16 the button squeezes with
-        # it rather than overflowing the share the allocator gave it.
+        # column, and below it the same flat `import` button (003/P4) —
+        # never focusable, theme-closed by the same CSS, each exactly what
+        # its key does through the same call (`t`/`apply_key`, `I` /
+        # `open_import` — see `ThemesButton`, `ImportButton` and
+        # `on_button_pressed`). Their floor follows the
+        # column down: past the label's own 16 the buttons squeeze with
+        # it rather than overflowing the share the allocator gave them.
         button = ThemesButton()
         button_air = 1 if meta_w > 2 else 0
         button.styles.width = meta_w - 2 * button_air
@@ -1189,7 +1977,18 @@ class Editor(App):
         button.styles.height = 1
         button.styles.margin = (0, button_air)
         button.styles.padding = 0
-        meta_col = Vertical(meta_frame, button)
+        # The top's second control (003/P4): the same flat `import` button,
+        # directly below `themes` in the metadata column. Never focusable,
+        # theme-closed by the same CSS, and exactly what `I` does through the
+        # same `open_import` call. It costs no row: the column's last row was
+        # blank fill, and the metadata frame above gives one back.
+        import_button = ImportButton()
+        import_button.styles.width = meta_w - 2 * button_air
+        import_button.styles.min_width = min(16, meta_w - 2 * button_air)
+        import_button.styles.height = 1
+        import_button.styles.margin = (0, button_air)
+        import_button.styles.padding = 0
+        meta_col = Vertical(meta_frame, button, import_button)
         meta_col.styles.width = meta_w
         meta_col.styles.height = top_screen
         meta_col.styles.padding = 0
@@ -1894,6 +2693,12 @@ class Editor(App):
         # headless suites, and `tests/session.py` — has no focus to place.
         if not self.is_running:
             return
+        # 003/P4 — the import popup owns focus while it is up; handing a
+        # grid the focus would let an arrow move the colour selection behind
+        # the list the user is reading. The popup focuses its own cursor list
+        # and `redraw` hands the grid back once it closes.
+        if self._import_screen() is not None:
+            return
         # The frame is the window, so any scroll offset on the screen is left
         # over from a moment when it was not — a resize mid-frame, or a frame
         # laid out one row taller than the window it is in. Leaving it there is
@@ -1944,6 +2749,9 @@ class Editor(App):
         # just left — a 24-row frame in a 12-row terminal, one resize behind,
         # forever. `call_after_refresh` is the first moment both agree.
         _debug("resize to %s" % (event.size,))
+        if self._import_screen() is not None:
+            return          # the popup owns the surface: it re-lays itself
+                            # out, and the frame behind it redraws on close
         if self.state is not None:
             self.call_after_refresh(self.redraw)
 
@@ -1957,8 +2765,24 @@ class Editor(App):
         # no toggle ever steals a colour key; the picker owns the surface
         # while it is up, so behind it they stay editor keys (no-ops) rather
         # than collapsing the frame the user is reading.
+        # 003/P4 — the import popup owns the surface while it is up. The
+        # modal does not starve this handler (P0), so the guard reads the
+        # screen type: popup keys route to the import state, and editor
+        # colour keys are inert — no branch reaches `apply_key` underneath it.
+        if self._import_screen() is not None:
+            event.stop()
+            self.screen.import_key(translate(event.key))
+            return
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
+            return
+        # 003/P4 — `I` opens the import popup, through the one call the
+        # `Import` button takes. While the picker owns the surface it has
+        # no branch (takeovers never stack); `open_import` re-checks both.
+        if translate(event.key) == "I":
+            if self.state.overlay is not None:
+                return
+            self.open_import()
             return
         if (event.key in COLLAPSE_KEYS and self.state.overlay is None
                 and collapsible_enabled()):
@@ -1981,9 +2805,16 @@ class Editor(App):
         A click is a keypress (§4.3.2): the button resolves to the key surface
         rather than re-implementing the picker — open, blocked-while-dirty,
         or the no-library status — and `redraw` hands focus to the picker
-        when one opened, the same as `on_key` does after `apply_key`.
+        when one opened, the same as `on_key` does after `apply_key`. The
+        `import` button (003/P4) resolves the same way to `open_import`, the
+        identical call the `I` key takes.
         """
-        if getattr(event.button, "id", None) != "themes-button":
+        button_id = getattr(event.button, "id", None)
+        if button_id == "import-button":
+            event.stop()
+            self.open_import()
+            return
+        if button_id != "themes-button":
             return
         event.stop()
         apply_key("t", self.state)
@@ -1991,6 +2822,100 @@ class Editor(App):
             self.exit()
         else:
             self.redraw()
+
+    def _import_screen(self):
+        """The import popup, if it is the top screen — else `None`.
+
+        One guard for every popup check in this shell. `is_running` comes
+        first because a frame drawn outside Textual (the headless suites,
+        `tests/session.py`) has no screen stack at all — `self.screen`
+        raises there instead of answering.
+        """
+        if not self.is_running:
+            return None
+        screen = self.screen
+        return screen if isinstance(screen, ImportScreen) else None
+
+    def open_import(self) -> None:
+        """`I` and the `Import` button: one call for both (003 spec §4.1).
+
+        Opening is never blocked by a dirty buffer, and neither open nor
+        close retargets the session: importing adds library files, it never
+        touches the buffer the way the picker does. Takeovers never stack —
+        the picker owns the surface while it is up, and a second `I` while
+        the popup is up is a no-op. The provider order comes from the
+        injected library's formats (P5 builds it; `None` lists nothing, so
+        a bare popup renders empty groups and never crashes).
+        """
+        if self.state.overlay is not None:
+            return
+        if self._import_screen() is not None:
+            return
+        library = self.import_library
+        order = list(library.formats) if library is not None else []
+        istate = import_state.ImportState(order, library)
+        import_state.open_import(istate)
+        self._import_state = istate
+        self.push_screen(ImportScreen(istate), self._import_closed)
+
+    def _write_imports(self, plans):
+        """Write each confirmed plan through the injected writer.
+
+        Returns `(imported, problems)`: the names that landed and the
+        per-theme problems that did not. Truth files only, by construction
+        — the writer is `cli`'s `themes.create` closure (no push, no
+        `set_current`), so writing never retargets the session, never
+        touches the current theme, and never reaches the edit buffer;
+        only `state.status` below is written, never slots, sel or theme.
+        A session with no writer (harness, bare `Editor`) reports the
+        plan and writes nothing.
+        """
+        imported, problems = [], []
+        writer = self.import_writer
+        if writer is None:
+            return [plan.name for plan in plans], problems
+        for plan in plans:
+            problem = writer(plan.name, plan.slots, plan.source)
+            if problem:
+                problems.append(f"{plan.name}: {problem}")
+            else:
+                imported.append(plan.name)
+        return imported, problems
+
+    def _import_closed(self, result) -> None:
+        """The popup dismissed: write the plan, report, frame returns.
+
+        `result` is `None` on abandon (Esc/`I`/cancel — buffer and status
+        untouched) or the `(plans, skips, failures)` payload from `confirm`.
+        Each plan lands through the injected writer (`themes.create` per
+        plan, truth files only); successes and skips fold into the status
+        line (`imported N themes: …` / `already in library: …`), per-theme
+        failures join `import_notes` for the exit report (the picker-notes
+        rule — no modal in the popup). Closing never touches the buffer:
+        no branch here assigns slots, sel, theme or path.
+        """
+        self._import_state = None
+        if not self.is_running:
+            return
+        if result is not None:
+            plans, skips, failures = result
+            self.import_result = result
+            imported, problems = self._write_imports(plans)
+            self.import_notes = list(failures) + problems
+            if imported:
+                names = ", ".join(imported)
+                plural = "" if len(imported) == 1 else "s"
+                parts = [f"imported {len(imported)} "
+                         f"theme{plural}: {names}"]
+                parts.extend(skips)
+                self.state.status = "; ".join(parts)
+            elif skips:
+                self.state.status = (skips[0] if len(skips) == 1
+                                     else f"{len(skips)} themes already "
+                                          "in library")
+            elif self.import_notes:
+                self.state.status = "nothing imported - see session notes"
+        self.redraw()
 
     def on_collapsible_collapsed(self, event) -> None:
         """A header toggled shut (click or Enter): stay shut on redraw."""
@@ -2022,6 +2947,11 @@ class Editor(App):
     def on_click(self, event) -> None:
         """Click a swatch or an interface cell to select it.
 
+        003/P4 — while the import popup is top this returns without stopping:
+        the list rows and group titles already answered the click below, and
+        answering here as well would move the *colour* selection behind the
+        popup the user is reading.
+
         The frame widget starts at the screen origin, so a click's screen row is
         its row in the frame; `slot_at` maps a column to a slot or to None for
         the chrome. Clicking nothing is not an error and does not move the
@@ -2034,6 +2964,8 @@ class Editor(App):
         editor's carry the slot in, because both are "the number this row means"
         and neither is anything a click has to translate.
         """
+        if self._import_screen() is not None:
+            return
         event.stop()
         # Screen coords survive nesting; `offset` does not. A synthetic
         # `Click(widget=None)` carries its point in both; a real click on a
@@ -2092,9 +3024,15 @@ class Editor(App):
         self.redraw()
 
     def on_mouse_scroll_up(self, event) -> None:
+        if self._import_screen() is not None:
+            return          # the popup's lists stop their own wheel events;
+                            # gaps bubble to the list column, not here — so
+                            # do not stop what is already past this shell
         self._scroll_picker("up", event)
 
     def on_mouse_scroll_down(self, event) -> None:
+        if self._import_screen() is not None:
+            return
         self._scroll_picker("down", event)
 
     def _scroll_picker(self, direction: str, event) -> None:
@@ -2130,19 +3068,25 @@ class Editor(App):
 
 
 def run(fmt, path, slots, write, backup_path=None, theme=None, library=None,
-        report=None, notes=None):
+        report=None, notes=None, import_library=None, import_writer=None):
     """Run one session to completion, then say what it has to say.
 
     What `cli` calls. `report_session` runs here rather than in `cli` because the
     session state lives on the `Editor`, and the wording of what a user reads on
-    exit is huebox's, not the driver's.
+    exit is huebox's, not the driver's. `import_library` / `import_writer` are
+    the import popup's injected seams (built by `cli`); `None` lists nothing
+    and writes nothing. The popup's per-theme failures join the session notes
+    printed at exit — the picker-notes rule, no modal in the popup.
     """
     editor = Editor(fmt=fmt, path=path, slots=slots, write=write,
-                    backup_path=backup_path, theme=theme, library=library)
+                    backup_path=backup_path, theme=theme, library=library,
+                    import_library=import_library,
+                    import_writer=import_writer)
     try:
         editor.run()
     finally:
-        report_session(editor.state, report, notes)
+        report_session(editor.state, report,
+                       list(notes or []) + list(editor.import_notes))
     return editor
 
 

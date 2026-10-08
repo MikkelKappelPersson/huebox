@@ -158,3 +158,39 @@ over a dummy editor and compare with a mounted swap.
   `themes.create` loop → `dismiss(plan)` or status + close.
 - `Esc` / `I` / `Ctrl+C` while up → abandon: `dismiss(None)` or state
   clear, buffer untouched.
+
+## 4. Spike verdict (P0, 2026-10-08 — `/tmp/spike_import.py`, 40/40 headless Pilot checks, Textual 8.2.8)
+
+- **Chosen: candidate A** — one `SelectionList` per `Collapsible`; a headless
+  cursor owns cross-list order, each move sets `highlighted` programmatically
+  on the target list and focuses it (focus-follows-cursor, exactly one list
+  focused). Proven: hand-off Ghostty→Alacritty skipping collapsed kitty,
+  merged `sum(selected)` footer, collapsed selections intact (hiding ≠
+  deselecting). Rejected B: `select_all` swallows disabled headers into
+  `selected` and collapse needs row surgery — no native collapse.
+- **Cursor/focus ownership:** single focused list; cursor moves set
+  `highlighted` + `focus()` together, never split-brain.
+- **Enter mechanism:** `SelectionList` inherits OptionList `enter`→`select`,
+  and a focused widget's binding starves plain app/screen `enter` (confirm
+  never fired, row toggled instead — reproduced). Use M1:
+  `Binding("enter", …, priority=True)` on the import screen; M3 (subclass
+  shadowing `enter`) also works with `space` intact, but M1 keeps the list
+  stock. `Esc` needs no hijack (no list binding); wire `escape` + `ctrl+c`.
+- **Wheel:** custom `on_mouse_scroll_down/up` per list moving `highlighted`
+  ±1 + `event.stop()`; native scroll never moves the highlight (proven:
+  `scroll_to` leaves `highlighted` put, posted wheel event moves it 10→11).
+- **`I` proven free:** `apply_key` branches are arrows/`f`/Ctrl+S/`u`/`r`/
+  `t`/`N`/`ADJUST`(`w,e,s,d,x,c,h,l,j,k,H,L`)/`i`,`X`/quit(`esc`,`Q`,Ctrl+C) —
+  no `I` branch; `GRID_KEYS` is arrows only, `COLLAPSE_KEYS` is `{E,D,C}`.
+  Lowercase `i` stays hex entry.
+- **Message flow:** `SelectedChanged.selected` → footer count only;
+  `SelectionHighlighted` carries (`selection_list`, `selection`) — there is
+  **no `index` attr** (research §2 guess wrong); read the cursor index via
+  `selection_list.highlighted` in the handler. `Collapsible.Toggled` →
+  expanded set, `Live._collapsed` pattern.
+- **Screen pattern: `ModalScreen`** — `push_screen(ImportModal(), callback=…)`
+  / `dismiss(result)`; modal `on_mount` focuses the list; resize 60×20 and
+  `Esc`→`dismiss(None)` / `Enter`→payload both proven. App-level `on_key`
+  still sees keys under a modal, so the popup guards on screen type (same
+  shape as the picker's overlay check); the picker's mounted-takeover path
+  is untouched — no frame/overlay code runs.

@@ -20,7 +20,7 @@ or modifying any code, or doing any architecture or design work on this project.
 Summary (details in the linked document):
 - **Modular Design** — one job per module, minimal cross-module deps, no cycles
 - **Facade Pattern** — `FORMATS` registry, `themes.save`/`push`, `detect.resolve()`; callers never reach into format internals
-- **Dependency Injection** — `editor` reaches the world only through injected callables `cli` builds; never import `themes`/`detect` into `editor`; `cli` is the composition root
+- **Dependency Injection** — `editor` reaches the world only through injected callables `cli` builds; never import `themes`/`detect` into `editor`; the import popup follows the same rule (`ImportLibrary` + writer injected, `app`/`import_state` import neither); `cli` is the composition root
 - **State/View Separation** — `EditorState` + `apply_key` own all behaviour, `app` is a thin shell over `render`'s rows, buffer renders every frame and disk writes on Ctrl+S only
 - **Coding Notes** — line-level config writes, `with open(...)`, 3.9-compatible code, `huebox: ` errors to stderr with exit 1, tests mirror modules and stay clean under `-W always`
 

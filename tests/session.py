@@ -107,7 +107,11 @@ def driver_factory(keys, size=(100, 24), prompt=None, draw=None):
         cli._run_editor(target, spec, driver=session.driver_factory(keys))
     """
     def run(fmt, path, slots, write, backup_path=None, theme=None,
-            library=None, report=None, notes=None):
+            library=None, report=None, notes=None,
+            import_library=None, import_writer=None):
+        # Shaped like `app.run`: the import seams arrive here and are
+        # ignored — a headless double has no popup to open, so there is
+        # nothing to list and nothing to write.
         return drive(keys, fmt, path, slots, write,
                      backup=backup_path is not None, theme=theme,
                      library=library, report=report, notes=notes,

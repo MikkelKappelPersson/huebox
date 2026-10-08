@@ -222,7 +222,9 @@ The popup preview and the editor frame must render from the same code:
   mapping (case, spaces, duplicates across providers) is §8 question 4.
 - Clashes: a selected name that already exists in the library is skipped
   and named in the post-import report (`already in library: …`), never
-  silently overwritten. No `--force` in the popup; overwrite stays a CLI
+  silently overwritten. The comparison is case-insensitive, like `create`.
+  Successes and skips share the status line; per-theme failures go to the
+  session notes printed at exit (§4.4). No `--force` in the popup; overwrite stays a CLI
   verb (`import --force`), same way the picker confirms in text rather
   than with a modal.
 - Provider read failures (missing dir, unreadable file, zero colours in a
@@ -235,7 +237,11 @@ The popup preview and the editor frame must render from the same code:
 1. **Where do provider themes come from?** Decided: **A — fixed local
    dirs per terminal** (e.g. Ghostty resource + `~/.config/ghostty/themes`,
    kitty themes dir / kitten cache, Alacritty themes dir). No subprocess,
-   no network, testable. Exact paths per provider belong to the plan.
+   no network, testable. Pinned for P5 (all `XDG_CONFIG_HOME`-aware):
+   Ghostty `$GHOSTTY_RESOURCES_DIR/themes` then `ghostty_themes_dir()`;
+   kitty `~/.config/kitty/themes` then
+   `~/.config/kitty/kitty-themes/themes`; Alacritty
+   `~/.config/alacritty/themes`.
 2. **One `SelectionList` per provider or one list with separators?**
    Behaviour decided, implementation deferred to the plan spike: the user
    sees **one continuous list** — one cursor walks up/down through every
@@ -298,3 +304,5 @@ Append-only. Newest last. One line per decision, with the reason.
 | 8 | One continuous cursor across open providers; collapsed skipped, never deselected (§8.2) | Cross-provider pick-then-import-once is the flow; widget count is plan detail |
 | 9 | `a` selects all visible — every open group (§8.3) | What you see is what `Enter` takes |
 | 10 | Slugify, `-2`/`-3` in-batch, skip against the library (§8.4) | Deterministic, no prompts, no noisy provider prefixes |
+| 11 | Confirm writes through a `cli`-injected writer; `app`/`import_state` never import `themes`/`detect` | The composition root owns I/O; the popup stays testable without a filesystem |
+| 12 | Imported names plus skips on the status line, per-theme failures in the session notes at exit | Same rule as the picker's notes: no modal inside a surface the user is reading |

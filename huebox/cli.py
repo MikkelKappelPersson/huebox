@@ -29,9 +29,11 @@ from collections import namedtuple
 
 from . import __version__, editor, themes
 from .color import SLOTS
-from .detect import resolve
+from .detect import ghostty_themes_dir, resolve
 from .editor import Library
 from .formats import FORMAT_NAMES, FORMATS
+from .import_state import ImportLibrary
+from .providers import PROVIDERS
 from .render import render_preview
 from .tui import term_size
 
@@ -392,14 +394,16 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         return f"saved {theme} → {_pushed(result)}"
 
     # The Textual shell runs the session and reports it on the way out
-    # (`app.run` → `editor.report_session`). The four injected seams are the same
-    # ones `editor.edit` took, unchanged — the writer, the picker's `Library`,
-    # and the two prompt seams the shell satisfies by handing the terminal back
-    # — so the writer above is built once and both readers mean the same thing.
+    # (`app.run` → `editor.report_session`). The injected seams are the same
+    # ones `editor.edit` took — the writer, the picker's `Library`, and the
+    # two prompt seams the shell satisfies by handing the terminal back —
+    # plus the import popup's `ImportLibrary` and writer below, so the
+    # writer above is built once and both readers mean the same thing.
     run(label, target.path, target.slots, write,
         backup_path=target.path if direct_fmt is not None else None,
         theme=target.theme, library=_library(notes), report=report,
-        notes=notes)
+        notes=notes, import_library=_import_library(notes),
+        import_writer=_import_writer())
     return 1 if failed else 0
 
 
@@ -446,6 +450,85 @@ def _library(notes: list) -> Library:
         return path, ""
 
     return Library(listing, loader, creator)
+
+
+def _provider_dirs(provider: str) -> list:
+    """Local dirs `provider` reads, in order: shipped first, user last.
+
+    Ghostty roots come from `detect` (shipped `$GHOSTTY_RESOURCES_DIR/themes`,
+    then the user dir); kitty/alacritty dirs are the pinned local ones from
+    the `providers` table, under `$XDG_CONFIG_HOME` when set. Read at call
+    time so a test's temporary home is respected. Unknown providers read
+    nothing — the popup renders the empty group, never an exception.
+    """
+    if provider == "ghostty":
+        resources = os.environ.get("GHOSTTY_RESOURCES_DIR",
+                                   "/usr/share/ghostty")
+        return [os.path.join(resources, "themes"), ghostty_themes_dir()]
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    if provider == "kitty":
+        return [os.path.join(base, "kitty/themes"),
+                os.path.join(base, "kitty/kitty-themes/themes")]
+    if provider == "alacritty":
+        return [os.path.join(base, "alacritty/themes")]
+    return []
+
+
+def _import_library(notes: list) -> ImportLibrary:
+    """Provider themes for the import popup: list + read, injected (§7, §9).
+
+    Same shape as `_library`: the popup lists through
+    `PROVIDERS[name]["list"]` and reads through `["read"]`, with dir roots
+    from `_provider_dirs`. A dir that is missing or unreadable lists as the
+    empty group (the providers contract); a file with no colours is skipped
+    with a note that joins the session notes printed at exit. Neither call
+    raises into the popup — `ImportLibrary` reads both as the empty result.
+    """
+
+    def listing(provider):
+        try:
+            entries, file_notes = PROVIDERS[provider]["list"](
+                _provider_dirs(provider))
+        except (KeyError, ValueError):
+            return []
+        for note in file_notes:
+            if note not in notes:
+                notes.append(note)
+        return entries
+
+    def reader(provider, path):
+        try:
+            read = PROVIDERS[provider]["read"]
+        except KeyError:
+            return {}
+        return read(path) or {}
+
+    return ImportLibrary(listing, reader,
+                         {name: PROVIDERS[name]["format"]
+                          for name in PROVIDERS})
+
+
+def _import_writer():
+    """One confirmed import as a truth file: `themes.create` per plan.
+
+    Truth files only, by construction: this closure calls nothing but
+    `themes.create` — no push, no `set_current`, so confirming never
+    retargets the session, never touches the current theme, and never
+    reaches the edit buffer. Returns `""` on success, the problem
+    otherwise; the caller folds both into the status line and the
+    session notes.
+    """
+
+    def writer(name, slots, source):
+        try:
+            themes.create(name, slots, source=source)
+        except themes.ThemeError as error:
+            return str(error)
+        except OSError as error:
+            return f"could not create {name}: {error}"
+        return ""
+
+    return writer
 
 
 # --------------------------------------------------------------------------
