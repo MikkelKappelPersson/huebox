@@ -1041,9 +1041,9 @@ class ImportScreen(ModalScreen):
     # `auto` ink, no derived washes. The modal dim is overridden to the
     # theme's own `background` (Textual's overlay colour never shows), and
     # all four `selection-list--button*` component classes bind theme slots:
-    # the cursor wears the selection pair, a toggled row reads bold, and an
-    # untoggled box stays muted (`$text-muted`, the frame furniture's own
-    # grey) so the bright `X` marks the picked rows alone.
+    # the box marks the toggled set alone — muted until picked, bright once
+    # picked — and the cursor never repaints it: a cursor row keeps the muted
+    # box unless toggled, the selection-pair wash carries the cursor.
     DEFAULT_CSS = """
     ImportScreen {
         background: $background;
@@ -1092,7 +1092,7 @@ class ImportScreen(ModalScreen):
     }
     ImportScreen SelectionList > .selection-list--button-highlighted {
         background: $screen-selection-background;
-        color: $screen-selection-foreground;
+        color: $text-muted;
     }
     ImportScreen SelectionList > .selection-list--button-selected-highlighted {
         background: $screen-selection-background;
