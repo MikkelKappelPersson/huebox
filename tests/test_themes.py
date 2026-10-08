@@ -1046,6 +1046,7 @@ class TestReload(LibraryHome):
     def test_kitty_without_its_pid_falls_back_to_remote_control(self):
         done = subprocess.CompletedProcess(["kitty"], 0)
         with mock.patch.dict(os.environ, {"KITTY_PID": ""}), \
+                mock.patch.object(themes, "_in_kitty", return_value=True), \
                 mock.patch.object(themes.subprocess, "run",
                                   return_value=done) as run:
             self.assertEqual(themes.reload_terminal("kitty"),
@@ -1056,6 +1057,16 @@ class TestReload(LibraryHome):
         # keystroke or printed into the editor's frame is worse than none
         for stream in ("stdin", "stdout", "stderr"):
             self.assertIs(run.call_args[1][stream], subprocess.DEVNULL)
+
+    def test_kitty_outside_kitty_skips_remote_control(self):
+        """No kitty around means no tty fallback: from another terminal
+        the escape-code channel has nobody to answer, so trying it is a
+        doomed wait for the whole subprocess timeout per save."""
+        with mock.patch.dict(os.environ, {"KITTY_PID": "", "KITTY_LISTEN_ON": ""}), \
+                mock.patch.object(themes, "_in_kitty", return_value=False), \
+                mock.patch.object(themes.subprocess, "run") as run:
+            self.assertEqual(themes.reload_terminal("kitty"), "")
+        run.assert_not_called()
 
     def test_a_successful_push_reloads_only_what_it_pushed(self):
         config = self.xdg("ghostty/config.ghostty", ghostty_text())

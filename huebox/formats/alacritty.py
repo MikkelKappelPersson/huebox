@@ -14,6 +14,11 @@ ALACRITTY_PATHS = {
     "colors.selection.background": "selection-background",
     "colors.selection.foreground": "selection-foreground",
     **{f"colors.normal.{i}": f"palette-{i}" for i in range(16)},
+    # the same eight under their everyday names: hand-written configs
+    # say `black`, not `0` — both spellings read and write (§6).
+    **{f"colors.normal.{name}": f"palette-{i}" for i, name in enumerate(
+        ["black", "red", "green", "yellow",
+         "blue", "magenta", "cyan", "white"])},
 }
 
 PATH_SLOT = {slot: path for path, slot in ALACRITTY_PATHS.items()}

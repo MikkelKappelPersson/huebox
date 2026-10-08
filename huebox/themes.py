@@ -505,6 +505,38 @@ def ghostty_app_pid() -> int:
     return None
 
 
+def _in_kitty() -> bool:
+    """Whether this process runs inside a kitty window.
+
+    `kitty @` without `KITTY_LISTEN_ON` talks to the controlling
+    terminal through escape codes — from any other terminal that is a
+    doomed wait for a reply that never comes (the subprocess timeout).
+    So the fallback only runs where a kitty can actually answer:
+    explicit env, or a kitty ancestor in the process tree.
+    """
+    if os.environ.get("KITTY_PID") or os.environ.get("KITTY_LISTEN_ON"):
+        return True
+    pid = os.getpid()
+    for _ in range(64):
+        try:
+            with open(os.path.join(_PROC, str(pid), "stat"),
+                       encoding="utf-8") as handle:
+                ppid = int(handle.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+        if ppid <= 1:
+            return False
+        try:
+            with open(os.path.join(_PROC, str(ppid), "comm"),
+                       encoding="utf-8") as handle:
+                if handle.read().strip() == "kitty":
+                    return True
+        except OSError:
+            return False
+        pid = ppid
+    return False
+
+
 def _env_pid(name: str):
     """A PID from the environment, or `None` when it is missing or junk."""
     try:
@@ -552,7 +584,10 @@ def reload_terminal(fmt: str) -> str:
                 return ""
             return f"kitty: reloaded (config re-read, pid {pid})"
         # not inside a kitty window: fall through to `kitty @`, which
-        # reaches the controlling terminal when that is a kitty.
+        # reaches the controlling terminal when that is a kitty — and
+        # nowhere else, where it would only burn the timeout.
+        if not _in_kitty():
+            return ""
     command = RELOAD_COMMANDS.get(fmt)
     if not command:
         return ""

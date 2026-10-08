@@ -175,6 +175,17 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual(slots.get("background"), "#0f0f1a")
         self.assertEqual(slots.get("palette-0"), "#0a0a13")
 
+    def test_alacritty_named_palette(self):
+        path = self._write('[colors.normal]\nblack = "#0a0a13"\n'
+                           'white = "#f8f8ff"\n')
+        slots = huebox.FORMATS["alacritty"]["read"](path)
+        self.assertEqual(slots.get("palette-0"), "#0a0a13")
+        self.assertEqual(slots.get("palette-7"), "#f8f8ff")
+        huebox.FORMATS["alacritty"]["write"](path, {"palette-0": "#010203"})
+        slots = huebox.FORMATS["alacritty"]["read"](path)
+        os.unlink(path)
+        self.assertEqual(slots.get("palette-0"), "#010203")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
