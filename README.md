@@ -23,7 +23,7 @@ Everything else runs inline and exits — for scripts and one-shots:
   huebox import <name>  snapshot the detected terminal into a theme
 ```
 
-Modifiers: `--to ghostty,kitty` picks push targets, `--no-push` writes the theme file only, `--no-reload` skips the terminal reload, `--ghostty-in-place` edits a Ghostty config instead of exporting a theme, `--force` overwrites on `new` / `import`, `--from <fmt>` and `--config` / `--format` override detection.
+Modifiers: by default a save pushes every terminal holding colours; `--to ghostty,kitty` narrows the push targets, `--no-push` writes the theme file only, `--no-reload` skips the terminal reload, `--ghostty-in-place` edits a Ghostty config instead of exporting a theme, `--force` overwrites on `new` / `import`, `--from <fmt>` and `--config` / `--format` override detection.
 
 ## 📦 Install
 

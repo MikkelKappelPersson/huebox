@@ -518,13 +518,40 @@ class Push(LibraryHome):
         self.assertIn("no alacritty config with colours found",
                       "\n".join(result.lines))
 
-    def test_the_default_target_is_the_terminal_you_are_in(self):
-        with mock.patch.object(themes, "resolve",
-                               return_value=("ghostty", self.config, None)) as ask:
+    def test_the_default_pushes_every_terminal_holding_colours(self):
+        def ask(wanted, _explicit):
+            if wanted == "ghostty":
+                return ("ghostty", self.config, None)
+            if wanted == "kitty":
+                return ("kitty", self.kitty, None)
+            return (None, None, "no alacritty config with colours found")
+        with mock.patch.object(themes, "resolve", side_effect=ask):
             result = themes.push(dict(FULL, background="#010203"))
-        ask.assert_called_once_with(None, None)     # no format, no path: today
-        self.assertEqual(result.pushed, (("ghostty", self.config),))
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed,
+                         (("ghostty", self.config), ("kitty", self.kitty)))
         self.assertIn("background = #010203", self.read(self.config))
+
+    def test_the_default_skips_terminals_you_do_not_have(self):
+        def ask(wanted, _explicit):
+            if wanted == "ghostty":
+                return ("ghostty", self.config, None)
+            return (None, None, f"no {wanted} config with colours found")
+        with mock.patch.object(themes, "resolve", side_effect=ask):
+            result = themes.push(dict(FULL, background="#010203"))
+        self.assertFalse(result.failed)
+        self.assertEqual(result.pushed, (("ghostty", self.config),))
+
+    def test_the_default_with_no_terminals_at_all_fails(self):
+        with mock.patch.object(themes, "resolve",
+                               return_value=(None, None, "nothing here")), \
+                mock.patch.object(themes, "ghostty_main_config",
+                                  return_value=None):
+            result = themes.push(FULL)
+        self.assertTrue(result.failed)
+        self.assertEqual(result.pushed, ())
+        self.assertIn("found no terminal config with colours",
+                      "\n".join(result.lines))
 
     def test_an_unknown_target_is_refused(self):
         for bad in ("wezterm", "ghostty,wezterm", ["kitty", "nope"]):

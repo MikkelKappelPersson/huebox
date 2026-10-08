@@ -730,6 +730,12 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
     for a single target — several targets with one file is a CLI error.
     With an export, `path` names the main config to point at.
 
+    With no `to`, `fmt` or `path` the push goes to every format holding
+    colours — a save lands in all your terminals, not just the first one
+    detected. Formats with no config are skipped silently there: a
+    terminal you do not have is not an error. Only when nothing at all
+    resolves is that a failure.
+
     `reload` asks each terminal that took a push to re-read its config, so
     a save ends with the terminal already showing the colours; the formats
     that managed it come back in `PushResult.reloaded`, and the ones that
@@ -741,6 +747,12 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
         return PushResult((), (), False)
 
     names = _target_names(to, fmt)
+    all_targets = not to and fmt is None and path is None
+    if all_targets:
+        # no constraints: every format holding colours, not the first
+        # one detected — the per-format loop below skips the absent
+        # ones silently, so this list over-asks on purpose.
+        names = list(FORMAT_NAMES)
     if path is not None and len(names) != 1:
         raise ValueError(f"an explicit config path pushes exactly one "
                          f"target, got {len(names)} target names")
@@ -762,6 +774,8 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
         if error or not target or not found:
             if dangling and name and not ghostty_in_place:
                 found, target = "ghostty", main
+            elif all_targets and not dangling:
+                continue    # no such terminal here - not an error
             elif dangling:
                 # the one state where "no colours found" is the wrong
                 # answer to give: say what is missing and what to do
@@ -804,6 +818,8 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
             continue
         existing = FORMATS[found]["read"](target)
         if not existing:
+            if all_targets:
+                continue    # resolved colourless - not a target either
             lines.append(f"{found}: no colours in {target} - not a push target")
             failed = True
             continue
@@ -826,6 +842,10 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
                          f"{', '.join(missing)}")
 
     reloaded: list = []
+    if all_targets and not pushed and not failed:
+        lines.append("found no terminal config with colours; pass "
+                       "--format with one of " + ", ".join(FORMAT_NAMES))
+        failed = True
     if reload:
         for hit, _target in pushed:
             note = reload_terminal(hit)
