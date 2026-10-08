@@ -355,15 +355,15 @@ class TheMouse(unittest.TestCase):
         than the key surface, the two could drift — and a click would be the one
         that is wrong, with nothing to compare it against."""
         clicked = self._editor()
-        hit = self._point_at(clicked, 1)
+        hit = self._point_at(clicked, 6)
         x, y = self._screen_point(clicked, hit)
         self._click(clicked, x, y)
 
         pressed = self._editor()
         huebox_app.apply_key("right", pressed.state)
         pressed.redraw()          # what `on_key` does after `apply_key`
-        self.assertEqual(clicked.state.sel, 1)
-        self.assertEqual(pressed.state.sel, 1)
+        self.assertEqual(clicked.state.sel, 6)
+        self.assertEqual(pressed.state.sel, 6)
         self.assertEqual(clicked.rows_text, pressed.rows_text,
                          "a click and a keypress painted different frames")
 
@@ -937,9 +937,9 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            self.assertEqual(app.state.sel, 0)
+            self.assertEqual(app.state.sel, 5)
             await self._press(app, pilot, "right")
-            self.assertEqual(app.state.sel, 1,
+            self.assertEqual(app.state.sel, 6,
                              "one press moved the selection more than one "
                              "slot: two handlers acted on one key")
 
@@ -979,7 +979,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
             # seventeen slots. `down` is the key that crosses blocks.
             await self._press(app, pilot, *["down"] * 2)
             self.assertEqual(app.state.sel, len(harness.FIXTURES["distinct"]
-                                                ["slots"]) - 6)
+                                                ["slots"]) - 5)
             self.assertEqual(app.focused.name, "interface",
                              "focus did not follow the selection out of the "
                              "palette")
@@ -991,7 +991,7 @@ class FocusAndKeys(unittest.IsolatedAsyncioTestCase):
             await self._press(app, pilot, *["down"] * 2)
             self.assertEqual(app.focused.name, "interface")
             await self._press(app, pilot, *["up"] * 2)
-            self.assertEqual(app.state.sel, 0)
+            self.assertEqual(app.state.sel, 1)
             self.assertEqual(app.focused.name, "palette")
 
     async def test_the_picker_has_no_grid_to_focus(self):
@@ -1617,17 +1617,18 @@ class PrototypePanels(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(tuple(panel.styles.padding), air)
 
     async def test_narrow_panels_drop_the_air_first(self):
-        # Decision 45: padding is the first thing spent — at 44x24 the
-        # padded lay would trim the sample to buy air, and at 42x24 the
-        # padded content would not even hold the draw floor, so both mount
+        # Decision 45: padding is the first thing spent — at 42x24 the
+        # padded content would not even hold the draw floor, so it mounts
         # unpadded rather than trimming widgets (or dropping the panels).
-        for size in ((44, 24), (42, 24)):
+        # At 44x24 the padded lay keeps every row the unpadded one shows,
+        # so the air stays: air is spent first, never content.
+        for size, pad in (((44, 24), 1), ((42, 24), 0)):
             with self.subTest(size=size):
                 app = await self._app()
                 async with app.run_test(size=size) as pilot:
                     await pilot.pause()
                     self.assertTrue(app._panels_on)
-                    self.assertEqual(app._panel_geom.get("pad"), 0)
+                    self.assertEqual(app._panel_geom.get("pad"), pad)
 
     def test_pad_opt_out_defaults_on(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -2235,15 +2236,14 @@ class SideBySide(unittest.IsolatedAsyncioTestCase):
         app = await self._app()
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            self.assertEqual(app.state.sel, 0)
+            self.assertEqual(app.state.sel, 5)
             await self._press(app, pilot, "right")
-            self.assertEqual(app.state.sel, 8)
+            self.assertEqual(app.state.sel, 13)
             await self._press(app, pilot, "down")
-            self.assertEqual(app.state.sel, 9)
+            self.assertEqual(app.state.sel, 14)
             await self._press(app, pilot, "left")
-            self.assertEqual(app.state.sel, 1)
-            await self._press(app, pilot, "down", "down", "down", "down",
-                              "down", "down")
+            self.assertEqual(app.state.sel, 6)
+            await self._press(app, pilot, "down")
             self.assertEqual(app.state.sel, 7)
             await self._press(app, pilot, "down")
             self.assertEqual(app.state.sel, 16)  # background, same column

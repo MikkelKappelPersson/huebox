@@ -1301,10 +1301,17 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
         regions.extend((name, row, stop - row)
                        for (name, row), stop in zip(live, edges[1:]))
     if hits is not None:
-        # The trim happened after the cells announced themselves, so a short
-        # frame still claims rows it never painted — and a click there would
-        # select something the user cannot see. Off they go.
-        del hits[len(out):]
+        # Both trims above happened after the cells announced themselves:
+        # the decoration pass drops air, and the cut below drops whole
+        # body rows for the tail — so a short frame still claims rows it
+        # never painted, and a click there would select something the user
+        # cannot see. Off they go. The cut is by row, not by count: a
+        # palette row holds eight cells, so cutting past the row count
+        # unclicks cells the frame painted — and leaves a visible
+        # selection no grid can focus. Only body rows survive the cut
+        # (`out` past that is the tail, which names no slot).
+        kept = len(out) - len(tail)
+        hits[:] = [hit for hit in hits if hit.y < kept]
     # CRLF: raw mode disables ONLCR, so a bare \n would not reset the column
     # §8.2 — every row stands on the buffer's own background, so the frame
     # *is* the theme: the floor, the air between widgets and the column after
