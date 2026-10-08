@@ -739,11 +739,11 @@ class EditorWiring(LibraryHome):
 
     def test_ctrl_s_writes_the_theme_file(self):
         themes.create("ember", FULL)
-        # palette-0 starts black: a hue nudge would not show on a grey
+        # palette-5 starts near-black: a hue nudge would not show on a grey
         self.session(["c", editor.SAVE_KEY, "esc"])
         saved = themes.load("ember")
-        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
-        self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
+        self.assertNotEqual(saved["palette-5"], FULL["palette-5"])
+        self.assertIn(f'palette-5 = "{saved["palette-5"]}"',
                       self.read(self.theme_file("ember")))
         self.assertFalse(os.path.exists(self.theme_file("ember")
                                         + ".huebox.bak"))
@@ -789,7 +789,10 @@ class PushOnSave(_PushSession):
 
     def test_ctrl_s_writes_truth_then_pushes(self):
         spec = cli.PushSpec(("kitty",), None, self.kitty, False)
-        status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
+        # the fixture carries color0: walk back from INITIAL_SEL to hit it
+        status, out, err = self.session(["left", "left", "left", "left",
+                                         "left", "c", editor.SAVE_KEY,
+                                         "esc"], spec)
         self.assertEqual(status, 0)
         saved = themes.load("ember")
         self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
@@ -834,8 +837,8 @@ class PushOnSave(_PushSession):
         spec = cli.PushSpec((), None, self.kitty, True)
         status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 0)
-        self.assertNotEqual(themes.load("ember")["palette-0"],
-                            FULL["palette-0"])
+        self.assertNotEqual(themes.load("ember")["palette-5"],
+                            FULL["palette-5"])
         self.assertEqual(self.read(self.kitty), self.before)
         self.assertEqual(os.path.getmtime(self.kitty), stamp)
         self.assertIn("saved ember (truth only)", out)
@@ -849,8 +852,8 @@ class PushOnSave(_PushSession):
         status, out, err = self.session(["c", editor.SAVE_KEY, "esc"], spec)
         self.assertEqual(status, 1)
         saved = themes.load("ember")
-        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
-        self.assertIn(f'palette-0 = "{saved["palette-0"]}"',
+        self.assertNotEqual(saved["palette-5"], FULL["palette-5"])
+        self.assertIn(f'palette-5 = "{saved["palette-5"]}"',
                       self.read(self.theme_file("ember")))
         self.assertEqual(self.read(blank), "font-size = 12\n")
         self.assertIn("saved ember - push failed", out)
@@ -883,7 +886,7 @@ class GhosttyNativeOnSave(_PushSession):
                                         self.native_spec())
         self.assertEqual(status, 0)
         saved = themes.load("ember")             # truth first, always
-        self.assertNotEqual(saved["palette-0"], FULL["palette-0"])
+        self.assertNotEqual(saved["palette-5"], FULL["palette-5"])
         self.assertEqual(themes.read_terminal("ghostty", self.native),
                          saved)
         # no inline colour was touched: the config grew one pointer line

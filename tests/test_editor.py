@@ -755,11 +755,11 @@ class EditLoop(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         self.assertEqual(writes[0][:2], (None, path))   # direct mode: no theme
         # the frame drawn after "w" already carried the adjusted value,
-        # before any save happened (palette-0 is the selected slot)
-        self.assertNotEqual(draws[0]["slots"]["palette-0"],
-                            draws[1]["slots"]["palette-0"])
-        self.assertEqual(draws[1]["slots"]["palette-0"],
-                         writes[0][2]["palette-0"])
+        # before any save happened (palette-5 is the selected slot)
+        self.assertNotEqual(draws[0]["slots"]["palette-5"],
+                            draws[1]["slots"]["palette-5"])
+        self.assertEqual(draws[1]["slots"]["palette-5"],
+                         writes[0][2]["palette-5"])
 
     def test_the_head_names_the_config_in_a_direct_session(self):
         _, draws, _, path = self.run_session(["esc"])
@@ -785,12 +785,13 @@ class EditLoop(unittest.TestCase):
                 self.assertEqual(draw["grid"], editor.grid_geometry(cols))
 
     def test_the_keys_follow_the_terminal_the_frame_is_drawn_for(self):
-        # 40 columns puts four swatches to a row, so one arrow down is
-        # palette-4 — not the palette-8 a fixed eight-slot stride would pick
+        # 40 columns puts four swatches to a row, so one arrow down from
+        # palette-5 is palette-9 — not the palette-13 a fixed eight-slot
+        # stride would pick
         writes, _, _, _ = self.run_session(["down", "s", SAVE, "esc"], cols=40)
         self.assertEqual(len(writes), 1)
-        self.assertNotEqual(writes[0][2]["palette-4"], FULL_SLOTS["palette-4"])
-        self.assertEqual(writes[0][2]["palette-8"], FULL_SLOTS["palette-8"])
+        self.assertNotEqual(writes[0][2]["palette-9"], FULL_SLOTS["palette-9"])
+        self.assertEqual(writes[0][2]["palette-13"], FULL_SLOTS["palette-13"])
 
 
 class ApplyKey(unittest.TestCase):
@@ -1256,8 +1257,8 @@ class ThemeSession(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         # the writer is told the subject, so a picker switch retargets it
         self.assertEqual(writes[0][:2], ("ember", self.theme))
-        self.assertNotEqual(writes[0][2]["palette-0"],
-                            FULL_SLOTS["palette-0"])
+        self.assertNotEqual(writes[0][2]["palette-5"],
+                            FULL_SLOTS["palette-5"])
         # huebox owns the file: no pre-save backup, and no claim about the
         # terminal — the writer's push report says what reached it (§13.6)
         self.assertFalse(os.path.exists(self.theme + ".huebox.bak"))
@@ -1391,7 +1392,7 @@ class PickerKeys(PickerCase):
         editor.apply_key("down", st)
         editor.apply_key("down", st)
         self.assertEqual(st.overlay_index, 2)
-        self.assertEqual(st.sel, 0)                # slot selection is untouched
+        self.assertEqual(st.sel, editor.INITIAL_SEL)  # slot selection is untouched
 
     def test_enter_opens_the_theme_saves_it_and_resets_the_session(self):
         st = self.picker_state()
@@ -1407,7 +1408,7 @@ class PickerKeys(PickerCase):
         self.assertEqual(st.slots, theme_slots(sum(ord(c) for c in "frost")))
         self.assertEqual(st.saved, st.slots)       # a fresh theme is clean
         self.assertEqual(st.undo, [])
-        self.assertEqual(st.sel, 0)
+        self.assertEqual(st.sel, editor.INITIAL_SEL)
         self.assertFalse(st.armed)                 # P2 review: no inherited arm
         self.assertIsNone(st.overlay)
         # the switch is the save: the theme is what the terminal gets

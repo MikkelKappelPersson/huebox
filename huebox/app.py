@@ -54,7 +54,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Collapsible
 
 from .color import MISSING, SLOTS
-from .editor import (EDITOR_PAD_X, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
+from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
                      SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
                      SIDE_LEFT_W, EditorState,
                      apply_key, backdrop, draw_editor, grid_geometry,
@@ -898,7 +898,7 @@ class Editor(App):
             # and the path can change while the session runs (§13.7)
             state.write = lambda values: self.write(state.theme, state.path,
                                                     values)
-        state.sel = int(os.environ.get("HUEBOX_SEL", "0"))
+        state.sel = int(os.environ.get("HUEBOX_SEL", str(INITIAL_SEL)))
         state.mult = _mult_step(os.environ.get("HUEBOX_MULT"))
         state.status = os.environ.get("HUEBOX_STATUS", "")
         scene = os.environ.get("HUEBOX_PICKER")

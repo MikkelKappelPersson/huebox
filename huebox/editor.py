@@ -44,6 +44,8 @@ ADJUST = {
     "H": ("s", -1), "L": ("s", +1),
 }
 MULT_STEPS = [1, 5, 20]
+#: The slot selected on open and after a theme switch (`palette-5`).
+INITIAL_SEL = 5
 ARROWS = ("up", "down", "left", "right")
 QUIT_KEYS = ("esc", "Q", "\x03")
 SAVE_KEY = "\x13"
@@ -1273,7 +1275,7 @@ class EditorState:
                  theme=None, fmt="", library=None, path=""):
         self.slots = dict(slots)
         self.saved = dict(self.slots)
-        self.sel = 0
+        self.sel = INITIAL_SEL
         self.undo: list = []
         self.status = ""
         self.mult = MULT_STEPS[0]
@@ -1432,13 +1434,13 @@ def _adopt(st, name: str, slots: dict, path: str) -> None:
 
     A different theme means a different buffer, a different file to save,
     and no history to carry over: `saved` is what was loaded, the undo log
-    is empty, the selection starts at slot 0, and the pending-discard arm
+    is empty, the selection starts at `INITIAL_SEL`, and the pending-discard arm
     is dropped — a fresh theme must never inherit a half-armed Esc.
     """
     st.slots = dict(slots)
     st.saved = dict(slots)
     st.undo.clear()
-    st.sel = 0
+    st.sel = INITIAL_SEL
     st.armed = False
     st.theme = name
     st.path = path
