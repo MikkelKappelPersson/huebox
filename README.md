@@ -4,27 +4,6 @@ A terminal theme editor with live preview — repaint your terminal without leav
 
 `huebox` shows you the colours your terminal is actually using, and lets you change them from a keyboard-driven interface — no hex codes, no hand-editing, no restarting.
 
-## ✨ Two modes
-
-### 🖥️ TUI editor
-
-Just run `huebox` — that is the editor. It opens what you are working on and pushes on every save. Pick a slot with the arrows, nudge it into place, `Ctrl+S` and your terminal changes — no hex codes, no hand-editing, no restarting. Details in [Editing](#editing) below.
-
-### ⌨️ Terminal commands
-
-Everything else runs inline and exits — for scripts and one-shots:
-
-```
-  huebox --dump [name]  print the resolved colours and exit
-  huebox --formats    list supported formats
-  huebox new <name>   create a theme from your terminal (or a built-in ramp)
-  huebox list         list your themes, current one marked
-  huebox use <name>   make a theme current and push it to your terminal
-  huebox import <name>  snapshot the detected terminal into a theme
-```
-
-Modifiers: by default a save pushes every terminal holding colours; `--to ghostty,kitty` narrows the push targets, `--no-push` writes the theme file only, `--no-reload` skips the terminal reload, `--ghostty-in-place` edits a Ghostty config instead of exporting a theme, `--force` overwrites on `new` / `import`, `--from <fmt>` and `--config` / `--format` override detection.
-
 ## 📦 Install
 
 ```sh
@@ -44,6 +23,27 @@ source ~/.bashrc
 ```
 
 Beyond the stdlib it needs [Pygments](https://pygments.org) (the code sample) and [Textual](https://textual.textualize.io/) (the editor), both installed automatically.
+
+## 🚀 Use
+
+### 🖥️ TUI editor
+
+Just run `huebox` — that is the editor. It opens what you are working on and pushes on every save. Pick a slot with the arrows, nudge it into place, `Ctrl+S` and your terminal changes — no hex codes, no hand-editing, no restarting. Details in [Editing](#editing) below.
+
+### ⌨️ Terminal commands
+
+Everything else runs inline and exits — for scripts and one-shots:
+
+```
+  huebox --dump [name]  print the resolved colours and exit
+  huebox --formats    list supported formats
+  huebox new <name>   create a theme from your terminal (or a built-in ramp)
+  huebox list         list your themes, current one marked
+  huebox use <name>   make a theme current and push it to your terminal
+  huebox import <name>  snapshot the detected terminal into a theme
+```
+
+Modifiers: by default a save pushes every terminal holding colours; `--to ghostty,kitty` narrows the push targets, `--no-push` writes the theme file only, `--no-reload` skips the terminal reload, `--ghostty-in-place` edits a Ghostty config instead of exporting a theme, `--force` overwrites on `new` / `import`, `--from <fmt>` and `--config` / `--format` override detection.
 
 ## 🎭 Themes
 
@@ -112,6 +112,8 @@ Writes are line-level: only the colour tokens are replaced, so comments, orderin
 ```sh
 python3 -m unittest discover -s tests
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, commit format, and PRs.
 
 ## License
 
