@@ -160,7 +160,7 @@ jobs:
           # it; the PyPI CDN can lag the upload by several minutes. The flag
           # matters: a bare retry loop exits 0 even when every attempt
           # fails, which would push a PKGBUILD whose source 404s.
-          su builder -c "cd /home/builder/huebox && ok=0; for i in $(seq 1 10); do makepkg --verifysource && { ok=1; break; }; sleep 60; done; test \$ok = 1"
+          su builder -c 'cd /home/builder/huebox && ok=0; for i in $(seq 1 10); do makepkg --verifysource && { ok=1; break; }; sleep 60; done; test $ok = 1'
 
       - name: Commit + push to AUR
         run: |
