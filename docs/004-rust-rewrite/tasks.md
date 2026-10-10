@@ -43,16 +43,16 @@ The tree must be build-ready or nothing below runs unattended:
   on go, record numbers in `plan.md` and delete the spike
 - [ ] `reviewer`: audit `rust/Cargo.*` + spike removal
 
-## P1 — parity oracle, Python (PARALLEL with P0, no cargo needed)
+## P1 — parity oracle, Python (PARALLEL with P0, no cargo needed) — done (115 color cases, 23-key trace, 519 green)
 
-- [ ] `worker-b`: `tests/test_parity.py` + `tests/fixtures/parity_color.json`
+- [x] `worker-b`: `tests/test_parity.py` + `tests/fixtures/parity_color.json`
   (every colour function on fixed inputs incl. wrap/clamp/rounding/140 edges)
   with `HUEBOX_REGENERATE=1` regen rule per spec §7
-- [ ] `worker-b`: `tests/fixtures/parity_session.json` — scripted session
+- [x] `worker-b`: `tests/fixtures/parity_session.json` — scripted session
   (all axes both ways, mult cycle, undo, revert, hex entry, save) as
   key-by-key trace plus final state, via `tests/session.py`
-- [ ] Gate: suite green, clean under `-W always`; fixtures committed
-- [ ] `reviewer`: audit vectors for edge coverage (one missing edge fails it)
+- [x] Gate: suite green, clean under `-W always`; fixtures committed
+- [x] `reviewer`: audit vectors for edge coverage (one missing edge fails it) — pass, no Critical
 
 ## P2 — core + format + lib crates (workers PARALLEL after API handshake)
 

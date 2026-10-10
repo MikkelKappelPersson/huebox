@@ -1,0 +1,843 @@
+{
+  "hex_to_rgb": [
+    {
+      "expected": [
+        0,
+        0,
+        0
+      ],
+      "input": "#000000"
+    },
+    {
+      "expected": [
+        255,
+        255,
+        255
+      ],
+      "input": "#ffffff"
+    },
+    {
+      "expected": [
+        255,
+        0,
+        0
+      ],
+      "input": "#ff0000"
+    },
+    {
+      "expected": [
+        0,
+        255,
+        0
+      ],
+      "input": "#00ff00"
+    },
+    {
+      "expected": [
+        0,
+        0,
+        255
+      ],
+      "input": "#0000ff"
+    },
+    {
+      "expected": [
+        97,
+        175,
+        239
+      ],
+      "input": "#61afef"
+    },
+    {
+      "expected": [
+        255,
+        0,
+        0
+      ],
+      "input": "ff0000"
+    },
+    {
+      "expected": [
+        171,
+        205,
+        239
+      ],
+      "input": "#AbCdEf"
+    },
+    {
+      "expected": [
+        140,
+        140,
+        140
+      ],
+      "input": "#8c8c8c"
+    },
+    {
+      "expected": [
+        141,
+        141,
+        141
+      ],
+      "input": "#8d8d8d"
+    },
+    {
+      "expected": [
+        16,
+        16,
+        20
+      ],
+      "input": "#101014"
+    },
+    {
+      "expected": [
+        18,
+        52,
+        86
+      ],
+      "input": "#123456"
+    }
+  ],
+  "hsv_to_rgb": [
+    {
+      "expected": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "input": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "expected": [
+        255.0,
+        0.0,
+        0.0
+      ],
+      "input": [
+        0.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        255.0,
+        255.0
+      ],
+      "input": [
+        0.5,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        255.0,
+        255.0,
+        255.0
+      ],
+      "input": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        255.0,
+        0.0,
+        0.0
+      ],
+      "input": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        255.0,
+        0.0
+      ],
+      "input": [
+        0.3333333333333333,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        0.0,
+        255.0
+      ],
+      "input": [
+        0.6666666666666666,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "expected": [
+        97.0,
+        174.99999999999997,
+        239.0
+      ],
+      "input": [
+        0.5751173708920189,
+        0.5941422594142259,
+        0.9372549019607843
+      ]
+    },
+    {
+      "expected": [
+        255.0,
+        0.0,
+        3.999999999999986
+      ],
+      "input": [
+        0.9973856209150327,
+        1.0,
+        1.0
+      ]
+    }
+  ],
+  "is_hex": [
+    {
+      "expected": true,
+      "input": "#000000"
+    },
+    {
+      "expected": true,
+      "input": "000000"
+    },
+    {
+      "expected": true,
+      "input": "#ABCDEF"
+    },
+    {
+      "expected": true,
+      "input": "abcdef"
+    },
+    {
+      "expected": true,
+      "input": "  #ABCDEF  "
+    },
+    {
+      "expected": true,
+      "input": "#ffffff "
+    },
+    {
+      "expected": false,
+      "input": "#abcdeg"
+    },
+    {
+      "expected": false,
+      "input": "#12345"
+    },
+    {
+      "expected": false,
+      "input": "#1234567"
+    },
+    {
+      "expected": false,
+      "input": ""
+    },
+    {
+      "expected": false,
+      "input": "#12345g"
+    },
+    {
+      "expected": false,
+      "input": "not a colour"
+    }
+  ],
+  "luminance": [
+    {
+      "expected": 0.0,
+      "input": "#000000"
+    },
+    {
+      "expected": 254.99999999999997,
+      "input": "#ffffff"
+    },
+    {
+      "expected": 54.213,
+      "input": "#ff0000"
+    },
+    {
+      "expected": 182.37599999999998,
+      "input": "#00ff00"
+    },
+    {
+      "expected": 18.411,
+      "input": "#0000ff"
+    },
+    {
+      "expected": 140.0,
+      "input": "#8c8c8c"
+    },
+    {
+      "expected": 141.0,
+      "input": "#8d8d8d"
+    },
+    {
+      "expected": 127.0,
+      "input": "#7f7f7f"
+    },
+    {
+      "expected": 128.0,
+      "input": "#808080"
+    },
+    {
+      "expected": 142.0,
+      "input": "#8e8e8e"
+    },
+    {
+      "expected": 16.2888,
+      "input": "#101014"
+    },
+    {
+      "expected": 163.03799999999998,
+      "input": "#61afef"
+    }
+  ],
+  "meta": {
+    "channel_step": 0.02,
+    "hue_step": 0.002777777777777778,
+    "missing": "#808080",
+    "slots": [
+      "palette-0",
+      "palette-1",
+      "palette-2",
+      "palette-3",
+      "palette-4",
+      "palette-5",
+      "palette-6",
+      "palette-7",
+      "palette-8",
+      "palette-9",
+      "palette-10",
+      "palette-11",
+      "palette-12",
+      "palette-13",
+      "palette-14",
+      "palette-15",
+      "background",
+      "foreground",
+      "cursor-color",
+      "cursor-text",
+      "selection-background",
+      "selection-foreground"
+    ]
+  },
+  "normalize_hex": [
+    {
+      "expected": "#abcdef",
+      "input": "  #ABCDEF  "
+    },
+    {
+      "expected": "#abcdef",
+      "input": "abcdef"
+    },
+    {
+      "expected": "#abcdef",
+      "input": "ABCDEF"
+    },
+    {
+      "expected": "#abc123",
+      "input": "#AbC123"
+    },
+    {
+      "expected": "#ff0000",
+      "input": "  ff0000  "
+    },
+    {
+      "expected": "#000000",
+      "input": "#000000"
+    },
+    {
+      "expected": "#abcdef",
+      "input": "#AbCdEf"
+    }
+  ],
+  "readable_fg": [
+    {
+      "expected": "#ffffff",
+      "input": "#000000"
+    },
+    {
+      "expected": "#000000",
+      "input": "#ffffff"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#ff0000"
+    },
+    {
+      "expected": "#000000",
+      "input": "#00ff00"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#0000ff"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#8c8c8c"
+    },
+    {
+      "expected": "#000000",
+      "input": "#8d8d8d"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#7f7f7f"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#808080"
+    },
+    {
+      "expected": "#000000",
+      "input": "#8e8e8e"
+    },
+    {
+      "expected": "#ffffff",
+      "input": "#101014"
+    },
+    {
+      "expected": "#000000",
+      "input": "#61afef"
+    }
+  ],
+  "rgb_to_hex": [
+    {
+      "expected": "#ff0000",
+      "input": [
+        255,
+        0,
+        0
+      ]
+    },
+    {
+      "expected": "#000000",
+      "input": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "expected": "#ffffff",
+      "input": [
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "expected": "#808080",
+      "input": [
+        128,
+        128,
+        128
+      ]
+    },
+    {
+      "expected": "#020202",
+      "input": [
+        2.5,
+        2.5,
+        2.5
+      ]
+    },
+    {
+      "expected": "#040404",
+      "input": [
+        3.5,
+        3.5,
+        3.5
+      ]
+    },
+    {
+      "expected": "#000000",
+      "input": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "expected": "#020202",
+      "input": [
+        1.5,
+        1.5,
+        1.5
+      ]
+    },
+    {
+      "expected": "#fe0000",
+      "input": [
+        254.5,
+        0,
+        0
+      ]
+    },
+    {
+      "expected": "#808080",
+      "input": [
+        127.5,
+        127.5,
+        127.5
+      ]
+    },
+    {
+      "expected": "#00ff80",
+      "input": [
+        -1,
+        300,
+        127.5
+      ]
+    },
+    {
+      "expected": "#00ff00",
+      "input": [
+        -100,
+        1000,
+        0
+      ]
+    },
+    {
+      "expected": "#00ff80",
+      "input": [
+        -0.5,
+        255.5,
+        128.0
+      ]
+    },
+    {
+      "expected": "#020204",
+      "input": [
+        1.5,
+        2.5,
+        3.5
+      ]
+    },
+    {
+      "expected": "#fefefe",
+      "input": [
+        254.5,
+        254.5,
+        254.5
+      ]
+    },
+    {
+      "expected": "#61a8ef",
+      "input": [
+        97.00761,
+        167.971305,
+        238.935
+      ]
+    }
+  ],
+  "rgb_to_hsv": [
+    {
+      "expected": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "input": [
+        255,
+        0,
+        0
+      ]
+    },
+    {
+      "expected": [
+        0.3333333333333333,
+        1.0,
+        1.0
+      ],
+      "input": [
+        0,
+        255,
+        0
+      ]
+    },
+    {
+      "expected": [
+        0.6666666666666666,
+        1.0,
+        1.0
+      ],
+      "input": [
+        0,
+        0,
+        255
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "input": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "input": [
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "expected": [
+        0.0,
+        0.0,
+        0.5019607843137255
+      ],
+      "input": [
+        128,
+        128,
+        128
+      ]
+    },
+    {
+      "expected": [
+        0.5751173708920189,
+        0.5941422594142259,
+        0.9372549019607843
+      ],
+      "input": [
+        97,
+        175,
+        239
+      ]
+    },
+    {
+      "expected": [
+        0.6666666666666666,
+        0.2,
+        0.0784313725490196
+      ],
+      "input": [
+        16,
+        16,
+        20
+      ]
+    },
+    {
+      "expected": [
+        0.3333333333333333,
+        0.48360655737704916,
+        0.47843137254901963
+      ],
+      "input": [
+        63,
+        122,
+        63
+      ]
+    }
+  ],
+  "step_hsv": [
+    {
+      "channel": "h",
+      "direction": 1,
+      "expected": "#ff0400",
+      "mult": 1,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "h",
+      "direction": -1,
+      "expected": "#ff0004",
+      "mult": 1,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "h",
+      "direction": -1,
+      "expected": "#ff0015",
+      "mult": 5,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "h",
+      "direction": 1,
+      "expected": "#ff5500",
+      "mult": 20,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "h",
+      "direction": -1,
+      "expected": "#ff0055",
+      "mult": 20,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "h",
+      "direction": 1,
+      "expected": "#ff0000",
+      "mult": 1,
+      "value": "#ff0004"
+    },
+    {
+      "channel": "s",
+      "direction": -1,
+      "expected": "#808080",
+      "mult": 1,
+      "value": "#808080"
+    },
+    {
+      "channel": "s",
+      "direction": -1,
+      "expected": "#808080",
+      "mult": 5,
+      "value": "#808080"
+    },
+    {
+      "channel": "s",
+      "direction": 1,
+      "expected": "#ff0000",
+      "mult": 20,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "s",
+      "direction": -1,
+      "expected": "#ff0505",
+      "mult": 1,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "s",
+      "direction": 1,
+      "expected": "#ff0000",
+      "mult": 1,
+      "value": "#ff0000"
+    },
+    {
+      "channel": "v",
+      "direction": -1,
+      "expected": "#000000",
+      "mult": 1,
+      "value": "#000000"
+    },
+    {
+      "channel": "v",
+      "direction": 1,
+      "expected": "#ffffff",
+      "mult": 1,
+      "value": "#ffffff"
+    },
+    {
+      "channel": "v",
+      "direction": 1,
+      "expected": "#ffffff",
+      "mult": 20,
+      "value": "#ffffff"
+    },
+    {
+      "channel": "v",
+      "direction": -1,
+      "expected": "#000000",
+      "mult": 20,
+      "value": "#000000"
+    },
+    {
+      "channel": "v",
+      "direction": 1,
+      "expected": "#858585",
+      "mult": 1,
+      "value": "#808080"
+    },
+    {
+      "channel": "v",
+      "direction": -1,
+      "expected": "#7b7b7b",
+      "mult": 1,
+      "value": "#808080"
+    },
+    {
+      "channel": "h",
+      "direction": 1,
+      "expected": "#3f7a40",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "h",
+      "direction": -1,
+      "expected": "#407a3f",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "s",
+      "direction": 1,
+      "expected": "#3d7a3d",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "s",
+      "direction": -1,
+      "expected": "#417a41",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "v",
+      "direction": 1,
+      "expected": "#427f42",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "v",
+      "direction": -1,
+      "expected": "#3c753c",
+      "mult": 1,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "s",
+      "direction": 1,
+      "expected": "#337a33",
+      "mult": 5,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "h",
+      "direction": 1,
+      "expected": "#3f7a44",
+      "mult": 5,
+      "value": "#3f7a3f"
+    },
+    {
+      "channel": "v",
+      "direction": -1,
+      "expected": "#0a140a",
+      "mult": 20,
+      "value": "#3f7a3f"
+    }
+  ]
+}
