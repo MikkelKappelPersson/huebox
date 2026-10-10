@@ -190,6 +190,8 @@ pub fn rgb_to_hsv(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
 /// `%` for negative hues. Output is unclamped, as in Python.
 pub fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f64, f64, f64) {
     if s == 0.0 {
+        // NOTE: scaled here — colorsys returns unit (v,v,v); the *255.0
+        // happens at the single return below, so scale now to match.
         let g = v * 255.0;
         return (g, g, g);
     }
