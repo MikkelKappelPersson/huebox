@@ -25,7 +25,7 @@ from huebox import editor, tui
 
 def drive(keys, fmt, path, slots, write, backup=False, theme=None,
           report=None, library=None, notes=None, size=(100, 24), prompt=None,
-          draw=None):
+          draw=None, apply=None):
     """Run one session over `keys`; return its `EditorState`.
 
     `keys` is iterated in order. `"resize"` redraws without consuming a key or
@@ -60,6 +60,8 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
                                    fmt=fmt, library=library, path=path)
         state.prompt_name = prompt
         state.write = lambda values: write(state.theme, state.path, values)
+        if apply is not None:
+            state.apply = lambda values: apply(state.theme, state.path, values)
         if state.overlay is None:
             # An empty library opens on the first-run choice, like the
             # shell does — a headless session with nothing to save to
@@ -122,12 +124,12 @@ def driver_factory(keys, size=(100, 24), prompt=None, draw=None):
     """
     def run(fmt, path, slots, write, backup_path=None, theme=None,
             library=None, report=None, notes=None,
-            import_library=None, import_writer=None):
+            import_library=None, import_writer=None, apply=None):
         # Shaped like `app.run`: the import seams arrive here and are
         # ignored — a headless double has no popup to open, so there is
         # nothing to list and nothing to write.
         return drive(keys, fmt, path, slots, write,
                      backup=backup_path is not None, theme=theme,
                      library=library, report=report, notes=notes,
-                     size=size, prompt=prompt, draw=draw)
+                     size=size, prompt=prompt, draw=draw, apply=apply)
     return run

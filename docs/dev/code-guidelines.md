@@ -24,7 +24,7 @@ Shields callers from subsystem complexity; lets internals evolve without breakin
 
 ### 3. Dependency Injection
 Decouples the editing session from the outside world; makes the session testable without a compositor.
-- `editor` reaches outside only through injected callables that `cli` builds: the save callback (`write(theme, path, slots)` — handed the subject every time, since a picker switch retargets it mid-session), `prompt_hex` / `prompt_name` (one prompt pattern), the `Library` object (`list` / `load` / `create`) behind the theme picker, and the import popup's `ImportLibrary` (`list` / `read` per provider) plus its `themes.create` writer
+- `editor` reaches outside only through injected callables that `cli` builds: the save callback (`write(theme, path, slots)`) and the preview callback (`apply(theme, path, slots)`) — each handed the subject every time, since a picker switch retargets it mid-session — `prompt_hex` / `prompt_name` (one prompt pattern), the `Library` object (`list` / `load` / `create`) behind the theme picker, and the import popup's `ImportLibrary` (`list` / `read` per provider) plus its `themes.create` writer
 - NEVER import `themes` or `detect` into `editor` to save a parameter
 - The import flow follows the same rule: `import_state` takes an injected `ImportLibrary`, `app` takes an injected writer — neither imports `themes` or `detect`
 - `cli` is the composition root: `_run_editor` takes a `driver` defaulting to `app.run`, so tests drive a session without a compositor (`tests/session.py`)
@@ -32,9 +32,9 @@ Decouples the editing session from the outside world; makes the session testable
 
 ### 4. State/View Separation
 Separates editing behaviour from the compositor; enables testing behaviour without Textual.
-- `EditorState` + `apply_key` own ALL editing behaviour — selection, adjust, undo, revert, step size, picker, first-run setup choice, save, two-armed Esc. `app` owns only keys-in, redraw, and the two prompts
+- `EditorState` + `apply_key` own ALL editing behaviour — selection, adjust, undo, revert, step size, picker, first-run setup choice, save, apply, two-armed Esc. `app` owns only keys-in, redraw, and the two prompts
 - `app` reuses `draw_editor`'s rows (handed to Textual as `Strip`s) — it never re-renders the frame, re-implements grid geometry, or duplicates step arithmetic (`HUE_STEP` / `CHANNEL_STEP` in `color` is the single source)
-- The editor draws from the in-memory buffer every frame; disk writes happen on Ctrl+S only
+- The editor draws from the in-memory buffer every frame; truth reaches disk on Ctrl+S only, a preview push on Ctrl+A only — and the preview never moves `saved`, so the buffer stays dirty and Esc keeps guarding it
 - A click resolves to a slot and goes through `apply_key` — it never touches a colour or a frame directly. Clickable cells are recorded by the rows that draw them (`draw_editor` / `theme_lines` / `setup_lines` take `hits=`), never recomputed
 - Frame mounts and queries scope to the stack bottom (`_editor_screen`): `App.query` spans every screen while `App.mount` targets the active one, so an unscoped redraw under a modal tears the editor's widgets out of the default screen and mounts them into the popup. Popups mount through their own screen methods, which are already scoped.
 - An empty library opens on the first-run choice as a modal popup, not an editor with nothing to save to: `enter_setup` arms it, `SetupScreen` shows `setup_lines`' rows in a centered dialog over the dimmed editor (the screen keeps the modal dim, never an opaque fill), and `apply_key` still owns every key. `Enter`/`i` raises `import_pending` (opened after dismiss, so modals never stack); `n` opens an inline naming field typed in the popup — the terminal is never handed back — and Enter creates through the prompt-free `_setup_create`. Esc backs out of naming, quits from the choices. A popup closed still empty puts the choice back up.
@@ -79,7 +79,7 @@ No cycles.
 
 - **Line-level writes only.** Never re-serialise a terminal config; only colour tokens are replaced. Compare first, write second: a no-op write is byte-identical and never opens the file.
 - **Theme files are ours; configs are theirs.** `themes/` may be rewritten freely (canonical layout, via `.tmp` + rename, never partially written); terminal configs follow line-level discipline. A theme's colours never land in a file that belongs to another theme.
-- **Truth first, never rollback.** A save writes the theme file and only then pushes; a failed push is a report plus exit 1, and the theme file stays as written.
+- **Truth first, never rollback.** A save writes the theme file and only then pushes; a failed push is a report plus exit 1, and the theme file stays as written. Ctrl+A is the one sanctioned bypass: an explicit preview push of a dirty buffer, truth untouched by construction. In direct mode the config is the truth, so Ctrl+A saves there — there is nothing to preview past the file.
 - **Readers use `with open(...)`.** No bare `open()` in `huebox/` or `tests/` — the suite must be clean under `-W always`.
 - **3.9-compatible code.** No `match`, no `tomllib`, no runtime `X | Y` (keep `from __future__ import annotations` in every file).
 - **Errors to stderr, prefixed `huebox: `, exit 1.** No tracebacks for user errors: missing config, bad theme name, no colours found.

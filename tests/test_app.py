@@ -246,9 +246,9 @@ class KeyVocabulary(unittest.TestCase):
     """The only seam between Textual's key names and huebox's.
 
     `apply_key` was written against huebox's own reader and expects `esc`,
-    `\x03`, `\x13`. Getting this wrong would mean the quit key and the save key
-    silently did nothing — the kind of bug that reads as "the migration broke
-    shortcuts" with nothing in the logs.
+    `\x03`, `\x13`, `\x01`. Getting this wrong would mean the quit key, the
+    save key and the apply key silently did nothing — the kind of bug that
+    reads as "the migration broke shortcuts" with nothing in the logs.
     """
 
     def test_the_names_textual_speaks_are_the_names_apply_key_wants(self):
@@ -256,12 +256,14 @@ class KeyVocabulary(unittest.TestCase):
 
         for textual_name, huebox_name in (("escape", "esc"),
                                           ("ctrl+c", "\x03"),
-                                          ("ctrl+s", editor.SAVE_KEY)):
+                                          ("ctrl+s", editor.SAVE_KEY),
+                                          ("ctrl+a", editor.APPLY_KEY)):
             with self.subTest(key=textual_name):
                 self.assertEqual(huebox_app.translate(textual_name),
                                  huebox_name)
                 self.assertIn(huebox_name,
-                              editor.QUIT_KEYS + (editor.SAVE_KEY,),
+                              editor.QUIT_KEYS + (editor.SAVE_KEY,
+                                                editor.APPLY_KEY),
                               "translate maps to a key apply_key does not "
                               "handle — a silent no-op keypress")
 

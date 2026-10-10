@@ -23,6 +23,11 @@ from huebox.render import (BOLD, ESCAPE_END, HSV_COMPACT,  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FULL_SLOTS = {name: "#3f7a3f" for name in SLOTS}
+APPLY = editor.APPLY_KEY
+
+
+def _failing_apply(values):
+    raise OSError("no terminal to push to")
 HINT = ("terminal too small — need "
         f"{editor.MIN_COLS}x{editor.MIN_ROWS}")
 SAVE = editor.SAVE_KEY
@@ -833,6 +838,74 @@ class ApplyKey(unittest.TestCase):
         self.assertTrue(st.written)
         self.assertEqual(st.status, "saved")
         self.assertEqual(st.saved, dict(st.slots))
+
+    def apply_state(self, **kwargs):
+        """A theme session with a push-only seam, background selected."""
+        writes, pushes = [], []
+        kwargs.setdefault("theme", "ember")
+        st = editor.EditorState(
+            kwargs.pop("slots", dict(FULL_SLOTS)),
+            lambda values: writes.append(dict(values)),
+            kwargs.pop("prompt", None), kwargs.pop("backup", None),
+            theme=kwargs.pop("theme"), path="/tmp/huebox/ember.toml",
+            apply=lambda values: pushes.append(dict(values)) or "applied")
+        st.sel = SLOTS.index("background")
+        return st, writes, pushes
+
+    def test_apply_pushes_dirty_buffer_without_saving(self):
+        st, writes, pushes = self.apply_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(pushes[0], dict(st.slots))
+        self.assertEqual(writes, [])
+        self.assertTrue(st.dirty())       # truth untouched: Esc still guards
+        self.assertFalse(st.written)
+        self.assertEqual(st.status, "applied")
+
+    def test_apply_accepts_textual_key_name(self):
+        st, writes, pushes = self.apply_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key("ctrl+a", st)
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(writes, [])
+        self.assertTrue(st.dirty())
+
+    def test_apply_without_seam_reports_nothing(self):
+        st = editor.EditorState(dict(FULL_SLOTS),
+                                lambda values: None, theme="ember")
+        st.sel = SLOTS.index("background")
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertTrue(st.dirty())
+        self.assertEqual(st.status, "nothing to apply")
+
+    def test_apply_failure_keeps_dirty(self):
+        st = editor.EditorState(dict(FULL_SLOTS),
+                                lambda values: None, theme="ember",
+                                apply=_failing_apply)
+        st.sel = SLOTS.index("background")
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertTrue(st.dirty())
+        self.assertIn("apply failed", st.status)
+
+    def test_apply_in_direct_mode_saves(self):
+        st, writes = self.background_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertEqual(len(writes), 1)  # the config is the truth there
+        self.assertFalse(st.dirty())
+
+    def test_save_after_apply_cleans_the_buffer(self):
+        st, writes, pushes = self.apply_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertTrue(st.dirty())
+        editor.apply_key(SAVE, st)
+        self.assertEqual(len(writes), 1)
+        self.assertFalse(st.dirty())
+        self.assertTrue(st.written)
 
     def test_every_buffer_edit_is_written_only_on_save(self):
         st, writes = self.background_state()

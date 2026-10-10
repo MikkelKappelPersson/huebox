@@ -9,9 +9,10 @@ the Textual shell (`app.py`) be the editor rather than a second implementation
 of it. The migration deleted `edit()`, the raw-mode loop that used to tie all
 three to a real tty; nothing about the behaviour went with it.
 
-Keystrokes mutate an in-memory buffer; nothing reaches disk until Ctrl+S
-(§14.2). The writer is injected by cli so this module never touches the
-format registry — saving is the caller's decision, drawing is ours.
+Keystrokes mutate an in-memory buffer; truth reaches disk on Ctrl+S
+(§14.2), a preview push on Ctrl+A (§13.6). The writer and the applier
+are injected by cli so this module never touches the format registry —
+saving and pushing are the caller's decision, drawing is ours.
 
 The theme picker (§13.7) follows the same rule one level up: the library
 arrives as an injected `Library` (list / load / create) rather than an
@@ -53,6 +54,7 @@ INITIAL_SEL = 5
 ARROWS = ("up", "down", "left", "right")
 QUIT_KEYS = ("esc", "Q", "\x03")
 SAVE_KEY = "\x13"
+APPLY_KEY = "\x01"
 ENTER_KEYS = ("\r", "\n", "enter")
 #: `import_state` keeps the same three: the headless tests speak `\r`, the
 #: compositor speaks `enter`, and both arrive at the same branch.
@@ -78,7 +80,8 @@ def editor_hints(mult, undo_len):
     """
     return [("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"),
             ("x/c", "light"), ("f", f"x{mult}"), ("h", "hex"),
-            ("^S", "save"), ("u", f"undo({undo_len})"), ("r", "revert"),
+            ("^S", "save"), ("^A", "apply"),
+            ("u", f"undo({undo_len})"), ("r", "revert"),
             ("t", "themes"), ("i", "import"), ("N", "as new"),
             ("Esc", "quit")]
 
@@ -1357,10 +1360,13 @@ class EditorState:
     """Everything one editor session mutates (§14.2, §13.7).
 
     `slots` is the buffer: it renders every frame and reaches disk only via
-    the injected `write`, called from the Ctrl+S branch of `apply_key`.
-    `saved` is the last-save snapshot, so `dirty()` means "the buffer
-    differs from what is on disk" — that is what arms Esc, and what blocks
-    a theme switch (decision 12).
+    the injected `write`, called from the Ctrl+S branch of `apply_key`;
+    the injected `apply` pushes the buffer to the terminals without
+    touching disk, called from the Ctrl+A branch. `saved` is the
+    last-save snapshot, so `dirty()` means "the buffer differs from what
+    is on disk" — that is what arms Esc, and what blocks a theme switch
+    (decision 12). An apply never moves `saved`: the buffer stays dirty
+    and Esc keeps guarding it.
 
     `theme` is the name of the theme being edited (`None` in a legacy
     direct-mode session), and
@@ -1372,7 +1378,7 @@ class EditorState:
     """
 
     def __init__(self, slots, write, prompt_hex=None, backup_path=None,
-                 theme=None, fmt="", library=None, path=""):
+                 theme=None, fmt="", library=None, path="", apply=None):
         self.slots = dict(slots)
         self.saved = dict(self.slots)
         self.sel = INITIAL_SEL
@@ -1384,6 +1390,7 @@ class EditorState:
         self.backup_path = backup_path      # None: huebox owns the file, no .bak
         self.backup_made = False
         self.write = write                  # write(slots) -> status | None
+        self.apply = apply                  # apply(slots) -> status | None
         self.prompt_hex = prompt_hex        # prompt_hex(name) -> str | None
         self.quit = False
         self.theme = theme                  # theme name, None: direct mode
@@ -1483,6 +1490,25 @@ def save_state(st):
     st.saved = dict(st.slots)
     st.written = True
     st.status = message or "saved"
+
+
+def apply_state(st):
+    """Ctrl+A — push the buffer without touching truth (§13.6).
+
+    `saved` stays where it was: the buffer stays dirty and Esc keeps
+    guarding it. A failed push leaves the buffer alone the same way.
+    In a direct session the config is the truth, so there is nothing to
+    preview past the file itself — apply saves there (see `apply_key`).
+    """
+    if st.apply is None:
+        st.status = "nothing to apply"
+        return
+    try:
+        message = st.apply(st.slots)
+    except OSError as error:
+        st.status = f"apply failed: {error}"
+        return
+    st.status = message or "applied"
 
 
 def _adjust(st, key):
@@ -1819,9 +1845,9 @@ def apply_key(key, st):
 
     Pure apart from disk and prompts: the injected `write` callback fires
     on Ctrl+S (and the session's first save also snapshots
-    `<path>.huebox.bak`), and `prompt_hex` / `prompt_name` drop out of raw
-    mode for one line — so the key surface itself is testable without a
-    terminal. Sets `st.quit` when the session is done: a clean Esc (or
+    `<path>.huebox.bak`), the injected `apply` callback fires on Ctrl+A,
+    and `prompt_hex` / `prompt_name` drop out of raw mode for one line —
+    so the key surface itself is testable without a terminal. Sets `st.quit` when the session is done: a clean Esc (or
     Ctrl+C) quits at once, a dirty one arms and takes a second press. An
     open picker takes the whole key surface first, and an open first-run
     choice before that, so quitting and colour edits cannot happen behind
@@ -1856,6 +1882,11 @@ def apply_key(key, st):
         st.status = f"step size x{st.mult}"
     elif key == SAVE_KEY:
         save_state(st)
+    elif key in (APPLY_KEY, "ctrl+a"):
+        if st.theme is None:     # direct mode: the config is the truth,
+            save_state(st)        # so a preview is a save
+        else:
+            apply_state(st)
     elif key == "u":
         if st.undo:
             slot, previous = st.undo.pop()

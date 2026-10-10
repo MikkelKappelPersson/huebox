@@ -73,7 +73,8 @@ Run `huebox` and drive it with the keyboard.
 | `x` / `c` | lightness −/+ |
 | `f` | cycle step size ×1 → ×5 → ×20 |
 | `h` | type a hex value |
-| `Ctrl+S` | save — the session's only write: the theme file, then a push |
+| `Ctrl+S` | save — the theme file, then a push |
+| `Ctrl+A` | apply — push the buffer without saving (stays dirty) |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens, `n` makes a theme from the buffer, `Esc` back |
 | `i` / `I` | theme import — browse Ghostty/kitty/Alacritty themes, `space` toggles, `Enter` imports, `Esc` backs out |
@@ -82,7 +83,7 @@ Run `huebox` and drive it with the keyboard.
 
 The mouse works too: click a swatch to select it, a picker row to open it, wheel through long picker lists. Clicking anything else does nothing.
 
-Edits live in an in-memory buffer — nothing is written until `Ctrl+S` — and the whole frame renders from that buffer, so palette, code sample and examples are live before the file changes (a tall frame also shows a git diff of the sample). The header names what you are editing (`ember ●` for a theme, `●` marks unsaved changes); `t` opens the picker without leaving the editor, and opening a theme with unsaved edits is refused rather than losing them. `Ctrl+S` writes the theme file first, then pushes to your terminal and asks it to re-read its config (`--no-reload` turns that off), so the colours are live when the command finishes.
+Edits live in an in-memory buffer — truth is written on `Ctrl+S` only — and the whole frame renders from that buffer, so palette, code sample and examples are live before the file changes (a tall frame also shows a git diff of the sample). `Ctrl+A` pushes the buffer to your terminals without saving, so you can preview a dirty buffer; it stays dirty and quitting still asks twice. The header names what you are editing (`ember ●` for a theme, `●` marks unsaved changes); `t` opens the picker without leaving the editor, and opening a theme with unsaved edits is refused rather than losing them. `Ctrl+S` writes the theme file first, then pushes to your terminal and asks it to re-read its config (`--no-reload` turns that off), so the colours are live when the command finishes.
 
 A config is only ever edited line by line: a colour it does not define is reported (`not carried by this config: …`) and left alone — huebox never invents a line in your terminal's config.
 

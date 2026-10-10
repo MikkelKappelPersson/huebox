@@ -894,6 +894,41 @@ class PushOnSave(_PushSession):
         self.assertEqual(self.read(self.kitty), self.before)
         self.assertIn("saved ember (truth only)", out)
 
+    def test_ctrl_a_pushes_without_touching_truth(self):
+        spec = cli.PushSpec(("kitty",), None, self.kitty, False)
+        original = self.read(self.theme_file("ember"))
+        status, out, err = self.session(["left", "left", "left", "left",
+                                         "left", "c", editor.APPLY_KEY,
+                                         "esc", "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.read(self.theme_file("ember")), original)
+        self.assertEqual(themes.load("ember"), FULL)
+        after = self.read(self.kitty)
+        self.assertNotEqual(after, self.before)
+        self.assertIn("applied (unsaved) → kitty", out)
+        self.assertIn(f"huebox: kitty: pushed to {self.kitty}", err)
+
+    def test_ctrl_a_with_no_push_pushes_nothing(self):
+        spec = cli.PushSpec((), None, self.kitty, True)
+        status, out, _ = self.session(["c", editor.APPLY_KEY,
+                                       "esc", "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.read(self.kitty), self.before)
+        self.assertEqual(themes.load("ember"), FULL)
+        self.assertIn("apply blocked (--no-push)", out)
+
+    def test_ctrl_a_failed_push_exits_1_and_keeps_truth(self):
+        blank = self.write(os.path.join(self.root, "blank.ghostty"),
+                           "font-size = 12\n")
+        spec = cli.PushSpec(("ghostty",), None, blank, False)
+        status, out, err = self.session(["c", editor.APPLY_KEY,
+                                         "esc", "esc"], spec)
+        self.assertEqual(status, 1)
+        self.assertEqual(themes.load("ember"), FULL)
+        self.assertEqual(self.read(blank), "font-size = 12\n")
+        self.assertIn("applied (unsaved) - push failed", out)
+        self.assertIn("huebox: ghostty: no colours in", err)
+
 
 class GhosttyNativeOnSave(_PushSession):
     """The flag through the editor: Ctrl+S exports and points, in that order.

@@ -15,9 +15,10 @@ does" and it is the one the 400-odd existing tests cover.
 
 **Three Textual details this exists to get right.**
 
-*Key names.* Textual says `escape`, `ctrl+c`, `ctrl+s`; `apply_key` was written
-against huebox's own reader and says `esc`, `\x03`, `\x13`. `translate` is the
-whole of the difference, and it is the only place the two vocabularies meet.
+*Key names.* Textual says `escape`, `ctrl+c`, `ctrl+s`, `ctrl+a`; `apply_key`
+was written against huebox's own reader and says `esc`, `\x03`, `\x13`, `\x01`.
+`translate` is the whole of the difference, and it is the only place the two
+vocabularies meet.
 
 *The prompts.* `apply_key` calls `st.prompt_hex(label)` synchronously, so the
 answer has to be available when it returns. `App.suspend()` hands the terminal
@@ -116,6 +117,7 @@ KEYS = {
     "escape": "esc",
     "ctrl+c": "\x03",
     "ctrl+s": "\x13",
+    "ctrl+a": "\x01",
     "ctrl+d": "\x04",
 }
 
@@ -2089,7 +2091,7 @@ class ImportScreen(ModalScreen):
             if import_state.handle_key(st, key) == "close":
                 self.dismiss(None)
             return
-        # Anything else (`w/e/s/d/x/c/f/u/r/t/N/…`, `ctrl+s`, …) is an
+        # Anything else (`w/e/s/d/x/c/f/u/r/t/N/…`, `ctrl+s`, `ctrl+a`, …) is an
         # editor key behind a popup that owns the surface: ignore it.
 
     def scroll_import(self, delta: int) -> None:
@@ -2249,9 +2251,10 @@ class ImportScreen(ModalScreen):
 class Editor(App):
     """One editing session, under Textual's compositor.
 
-    `write` is the session's one save path and `library` the picker's seam onto
-    the theme store — the same four injected seams `edit()` took, unchanged, so
-    `cli` builds them once and both the tests and this shell consume them.
+    `write` is the session's one save path, `apply` its preview push, and
+    `library` the picker's seam onto the theme store — the same injected
+    seams `edit()` took, unchanged, so `cli` builds them once and both the
+    tests and this shell consume them.
     """
 
     ENABLE_COMMAND_PALETTE = False
@@ -2298,7 +2301,7 @@ class Editor(App):
     def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", slots=None,
                  write=None, backup_path=None, theme=None, library=None,
                  head_override=None, import_library=None,
-                 import_writer=None, **kwargs):
+                 import_writer=None, apply=None, **kwargs):
         # Before `super()`: App.__init__ calls get_css_variables() to build the
         # stylesheet, so the buffer must exist by then or the first frame is
         # painted against MISSING for every slot.
@@ -2306,6 +2309,7 @@ class Editor(App):
         self.path = path
         self.slots = load_slots() if slots is None else dict(slots)
         self.write = write
+        self.apply = apply
         self.backup_path = backup_path
         self.theme_name = theme
         self.library = library
@@ -2386,6 +2390,9 @@ class Editor(App):
             # bound to the state, not to this call's arguments: both the theme
             # and the path can change while the session runs (§13.7)
             state.write = lambda values: self.write(state.theme, state.path,
+                                                    values)
+        if self.apply is not None:
+            state.apply = lambda values: self.apply(state.theme, state.path,
                                                     values)
         state.sel = int(os.environ.get("HUEBOX_SEL", str(INITIAL_SEL)))
         state.mult = _mult_step(os.environ.get("HUEBOX_MULT"))
@@ -4380,7 +4387,8 @@ class Editor(App):
 
 
 def run(fmt, path, slots, write, backup_path=None, theme=None, library=None,
-        report=None, notes=None, import_library=None, import_writer=None):
+        report=None, notes=None, import_library=None, import_writer=None,
+        apply=None):
     """Run one session to completion, then say what it has to say.
 
     What `cli` calls. `report_session` runs here rather than in `cli` because the
@@ -4393,7 +4401,7 @@ def run(fmt, path, slots, write, backup_path=None, theme=None, library=None,
     editor = Editor(fmt=fmt, path=path, slots=slots, write=write,
                     backup_path=backup_path, theme=theme, library=library,
                     import_library=import_library,
-                    import_writer=import_writer)
+                    import_writer=import_writer, apply=apply)
     try:
         editor.run()
     finally:

@@ -320,16 +320,19 @@ def _textual_app():
 def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
     """Open the editor; theme mode writes truth, then pushes (§13.6).
 
-    One writer serves the whole session, and it branches on the subject:
-    a theme name means truth-then-push, `None` means the v1 direct-mode
-    write into the terminal config itself (§13.4). The picker can move the
-    subject mid-session (§13.7), so the writer is handed the name and the
-    path instead of closing over them.
+    One writer and one applier serve the whole session, and each branches
+    on the subject: a theme name means truth-then-push (writer) or
+    push-without-saving (applier), `None` means the v1 direct-mode write
+    into the terminal config itself (§13.4) — direct mode has no preview
+    past the file, so Ctrl+A saves there. The picker can move the subject
+    mid-session (§13.7), so both are handed the name and the path instead
+    of closing over them.
 
     The returned status string is what the status bar shows
     (`saved ember → ghostty`). A push that fails never undoes the save
     (decision 7): the buffer is clean, the report says why, and the process
-    ends 1.
+    ends 1. An apply never touches truth: the buffer stays dirty and Esc
+    keeps guarding it.
 
     `spec=None` is a caller with no command line behind it, so the session
     writes truth only: a programmatic `edit()` must never push a terminal
@@ -393,17 +396,36 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
             return f"saved {theme} - push failed"
         return f"saved {theme} → {_pushed(result)}"
 
+    def apply(theme, path, values):
+        if theme is None:      # unreachable: direct-mode Ctrl+A saves —
+            return FORMATS[direct_fmt]["write"](path, values)  # belt
+        del report[:]                      # one report: this push's
+        del failed[:]
+        if spec.no_push:
+            report.append(NO_PUSH_LINE)
+            return "apply blocked (--no-push) - terminal unchanged"
+        result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path,
+                             ghostty_native=spec.ghostty_native, name=theme,
+                             ghostty_in_place=spec.ghostty_in_place,
+                             reload=spec.reload)
+        report.extend(_push_lines(result))
+        if result.failed:
+            failed.append(result)
+            return "applied (unsaved) - push failed"
+        return f"applied (unsaved) → {_pushed(result)}"
+
     # The Textual shell runs the session and reports it on the way out
     # (`app.run` → `editor.report_session`). The injected seams are the same
-    # ones `editor.edit` took — the writer, the picker's `Library`, and the
-    # two prompt seams the shell satisfies by handing the terminal back —
-    # plus the import popup's `ImportLibrary` and writer below, so the
-    # writer above is built once and both readers mean the same thing.
+    # ones `editor.edit` took — the writer, the applier, the picker's
+    # `Library`, and the two prompt seams the shell satisfies by handing the
+    # terminal back — plus the import popup's `ImportLibrary` and writer
+    # below, so the writer above is built once and both readers mean the
+    # same thing.
     run(label, target.path, target.slots, write,
         backup_path=target.path if direct_fmt is not None else None,
         theme=target.theme, library=_library(notes), report=report,
         notes=notes, import_library=_import_library(notes),
-        import_writer=_import_writer())
+        import_writer=_import_writer(), apply=apply)
     return 1 if failed else 0
 
 
