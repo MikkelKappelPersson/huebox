@@ -837,16 +837,28 @@ def _sample():
 
 
 def sample_lines(slots):
-    """Paint the sample from the live slot values: one lookup per run."""
-    out, current = [], None
+    """Paint the sample from the live slot values: one lookup per run.
+
+    Each row re-opens its own ink: a run spanning a newline must not
+    leave the next row relying on the previous row's SGR state, since
+    rows are parsed independently (`Text.from_ansi` per row) and an
+    unstyled run falls back to the widget chrome instead of the slot —
+    which is how `std.debug.` once survived the modal dim undimmed.
+    """
+    default = slots.get("foreground", "#ededfe")
+    lines, current = [""], None
     for slot, text in _sample():
-        if slot != current:
-            current = slot
-            out.append(fg(slots.get(slot, slots.get("foreground", "#ededfe"))))
-        out.append(text)
-    out.append(RESET)
-    body = "".join(out)
-    return [(line, 0) for line in body.split("\n")]
+        for index, chunk in enumerate(text.split("\n")):
+            if index:
+                lines.append("")
+                current = None
+            if chunk:
+                if slot != current:
+                    current = slot
+                    lines[-1] += fg(slots.get(slot, default))
+                lines[-1] += chunk
+    lines[-1] += RESET
+    return [(line, 0) for line in lines]
 
 
 # --------------------------------------------------------------------------

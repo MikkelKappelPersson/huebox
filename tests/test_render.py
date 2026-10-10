@@ -164,6 +164,18 @@ class Sample(unittest.TestCase):
         self.assertEqual([_plain(line) for line, _ in one],
                          [_plain(line) for line, _ in two])
 
+    def test_every_row_reopens_its_own_ink(self):
+        # a run spanning a newline must not leave the next row unstyled:
+        # rows parse independently, so an unstyled `std.debug.` fell back
+        # to widget chrome and survived the modal dim undimmed
+        slots = {name: "#3f7a3f" for name in huebox.SLOTS}
+        for line, _ in huebox.sample_lines(slots):
+            for escape, text in self.painted_runs(line):
+                if text.strip():
+                    self.assertTrue(
+                        escape.startswith("\x1b["),
+                        f"unstyled text {text!r} in {line!r}")
+
 
 class Geometry(unittest.TestCase):
     def test_clip_respects_wide_glyphs(self):
