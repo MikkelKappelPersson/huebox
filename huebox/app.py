@@ -4103,7 +4103,7 @@ class Editor(App):
         footer.styles.display = "block" if show else "none"
         if show:
             state = self.state
-            footer.update_footer(editor_hints(state.mult, len(state.undo)),
+            footer.update_footer(editor_hints(len(state.undo)),
                                  state.status)
 
     def _import_screen(self):

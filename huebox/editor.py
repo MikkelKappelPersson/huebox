@@ -70,20 +70,19 @@ THEME_HINTS = [("arrows", "move"), ("Enter", "use"), ("n", "new from buffer"),
                ("N", "save as new"), ("t / Esc", "back")]
 
 
-def editor_hints(mult, undo_len):
+def editor_hints(undo_len):
     """The editor footer's `(key, what)` pairs — one source, two paints.
 
     `draw_editor` folds these into tail rows (headless/direct mode) and the
     `HueFooter` widget shows the same pairs in its docked row (compositor);
     building the list here is what keeps the keys and the frame from
-    disagreeing about what the footer says.
+    disagreeing about what the footer says. The step multiplier stays out:
+    `f` still cycles it and the status line confirms the step.
     """
     return [("arrows", "move"), ("w/e", "hue"), ("s/d", "sat"),
-            ("x/c", "light"), ("f", f"x{mult}"), ("h", "hex"),
-            ("^S", "save"), ("^A", "apply"),
-            ("u", f"undo({undo_len})"), ("r", "revert"),
-            ("t", "themes"), ("i", "import"), ("N", "as new"),
-            ("Esc", "quit")]
+            ("x/c", "val"), ("^S", "save"), ("^A", "apply"),
+            ("N", "save as new"), ("u", f"undo({undo_len})"),
+            ("r", "revert"), ("t", "themes"), ("i", "import")]
 
 #: First-run setup: the two ways out of an empty library. `import` opens the
 #: import popup, `new` asks for a name and writes the buffer as that theme —
@@ -1058,7 +1057,7 @@ def draw_editor(fmt, path, slots, sel, undo, status, mult, head=None,
     # the whole frame — body, widgets and `tail` — before it can know
     # whether the rows below leave room.
     tail = ["  " + line for line in hint_line(slots,
-        editor_hints(mult, len(undo)),
+        editor_hints(len(undo)),
         # two spaces, not three: the picker added two keys to this line and
         # one more row here would come out of the examples strip's budget
         cols - 2)] if footer else []

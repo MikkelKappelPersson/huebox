@@ -70,15 +70,15 @@ Run `huebox` and drive it with the keyboard.
 | arrows | move between slots |
 | `w` / `e` | hue −/+ |
 | `s` / `d` | saturation −/+ |
-| `x` / `c` | lightness −/+ |
-| `f` | cycle step size ×1 → ×5 → ×20 |
-| `h` | type a hex value |
+| `x` / `c` | value −/+ |
 | `Ctrl+S` | save — the theme file, then a push |
 | `Ctrl+A` | apply — push the buffer without saving (stays dirty) |
+| `N` | save as new — the buffer as a new theme (and then save it) |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens, `n` makes a theme from the buffer, `Esc` back |
 | `i` / `I` | theme import — browse Ghostty/kitty/Alacritty themes, `space` toggles, `Enter` imports, `Esc` backs out |
-| `N` | save the buffer as a new theme (and then save it) |
+| `f` | cycle step size ×1 → ×5 → ×20 (status confirms, not in footer) |
+| `h` | type a hex value |
 | `Esc` | quit — twice if there are unsaved changes |
 
 The mouse works too: click a swatch to select it, a picker row to open it, wheel through long picker lists. Clicking anything else does nothing.

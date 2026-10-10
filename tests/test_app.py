@@ -1386,19 +1386,23 @@ class TheAppsOwnKeysWork(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.state.sel, plain.sel)
             self.assertEqual(MULT_STEPS[0], 1)
 
-    async def test_the_hint_line_shows_the_step_not_its_repr(self):
-        """`f x1`, never `f xFalse` or `f x'1'`.
+    async def test_the_footer_carries_keys_not_the_step(self):
+        """No `f` pair: the footer lists keys, the status confirms steps.
 
-        The footer prints the multiplier verbatim, so a string multiplier is
-        visible on screen even before it is fatal — which is how `f xFalse`
-        first showed itself."""
+        The multiplier left the footer, so a string multiplier can no
+        longer show on screen — but `f` still cycles 1→5→20 as an int
+        and the status line names the step it landed on."""
         app = await self._app()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            pairs = dict(app._footer._pairs)
-            self.assertIn("arrows", pairs, "no hint pairs")
-            self.assertEqual(pairs["f"], "x1")
-            self.assertNotIn("xFalse", pairs["f"])
+            self.assertEqual([key for key, _ in app._footer._pairs],
+                             ["arrows", "w/e", "s/d", "x/c", "^S",
+                              "^A", "N", "u", "r", "t", "i"])
+            start = app.state.mult
+            await _key(app, pilot, "f")
+            self.assertNotEqual(app.state.mult, start)
+            self.assertIsInstance(app.state.mult, int)
+            self.assertIn(str(app.state.mult), app.state.status)
 
 
 def _plain(row):
