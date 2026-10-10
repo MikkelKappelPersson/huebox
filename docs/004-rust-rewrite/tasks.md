@@ -16,19 +16,20 @@ every agent as soon as its task is closed.
 Agents: `worker` (full capabilities, isolated context) implements;
 `reviewer` (read-only) audits. No other agents on this rewrite.
 
-## P-1 — overnight setup (human, before sleep)
+## P-1 — overnight setup (human, before sleep) — done 2026-10-10 (cargo 1.99.0, stable 1.99.0, 516 tests green via `uv run`)
 
 The tree must be build-ready or nothing below runs unattended:
 
-- [ ] Install the toolchain: `yay -S rustup`, then
+- [x] Install the toolchain: `yay -S rustup`, then
   `rustup toolchain install stable`, then `cargo --version` prints a version
-- [ ] Commit the working tree: the `HUEBOX_DEBUG`/`HUEBOX_DEBUG_LOG` timing
-  seam in `huebox/app.py` stays (spec §7 mandates it) — commit it as
-  `chore: file-logged debug timing seam`, so overnight starts clean
-- [ ] Network for crates.io (first `cargo build` fetches ~200MB); machine
+  (rustup 1.29.1, cargo 1.99.0)
+- [x] Commit the working tree: the `HUEBOX_DEBUG`/`HUEBOX_DEBUG_LOG` timing
+  seam in `huebox/app.py` stays (spec §7 mandates it) — tree verified clean,
+  no commit needed
+- [x] Network for crates.io (first `cargo build` fetches ~200MB); machine
   stays on, no sleep/suspend
-- [ ] Confirm `python3 -W always -m unittest discover -s tests` is green on
-  the committed tree (baseline for every later comparison)
+- [x] Confirm `python3 -W always -m unittest discover -s tests` is green on
+  the committed tree (baseline for every later comparison) — 516 tests OK
 
 ## P0 — toolchain verify + perf spike (gate: go/no-go)
 
