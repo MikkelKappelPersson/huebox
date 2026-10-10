@@ -55,33 +55,43 @@ The tree must be build-ready or nothing below runs unattended:
 - [x] Gate: suite green, clean under `-W always`; fixtures committed
 - [x] `reviewer`: audit vectors for edge coverage (one missing edge fails it) — pass, no Critical
 
-## P2 — core + format + lib crates (workers PARALLEL after API handshake)
+## P2 — core + format + lib crates (workers PARALLEL after API handshake) — done (175 cargo green, clippy clean)
 
-- [ ] All: 30-minute handshake — freeze `huebox-core` public API
+- [x] All: 30-minute handshake — froze `huebox-core` public API by dictate
   (`Slots`, `hex/rgb/hsv`, `step_hsv`, `luminance`, `readable_fg`) from
   research §7, then split and do not block on each other
-- [ ] `worker-a`: `huebox-core` — colorsys verbatim, banker's rounding,
+- [x] `worker-a`: `huebox-core` — colorsys verbatim, banker's rounding,
   `((x % 1.0) + 1.0) % 1.0` hue normalisation; colour vectors replay exactly
-- [ ] `worker-b`: `huebox-format` — base rules + ghostty/kitty/alacritty +
+  (14 tests; landed `3e6d203`)
+- [x] `worker-b`: `huebox-format` — base rules + ghostty/kitty/alacritty +
   `FORMATS` registry; round-trip + byte-identical no-op tests ported
-- [ ] `worker-c`: `huebox-lib` — `PROVIDERS`, `detect.resolve`, `themes`
+  (4 unit + 20 integration; review pass, no Critical)
+- [x] `worker-c`: `huebox-lib` — `PROVIDERS`, `detect.resolve`, `themes`
   save/push/create/overrides/reload; truth-then-push + line-level writes
-  ported by test (PARALLEL with A/B against the frozen registry shape)
-- [ ] Gate: `cargo test` green for all three; colour vectors byte-exact
+  ported by test (57 tests; review found 3 Criticals, all fixed at merge:
+  exact-case listing, clear-error propagation, per-line Ghostty predicate
+  exposed as `ghostty_is_color_line`; `RealBackend` wires FormatStub→format
+  with FORMAT_NAMES validation so unknown fmts become `huebox:` errors)
+- [x] Gate: `cargo test` green for all three; colour vectors byte-exact
   (hex/int) / 1e-9 (floats)
-- [ ] `reviewer`: audit all three crates (dependency rule: no cycles,
+- [x] `reviewer`: audit all three crates (dependency rule: no cycles,
   editor-ward seams untouched)
+- Known gaps (deferred to P6 hardening): UTC-vs-local `created` stamp,
+  lossy non-UTF8 edge, `{value}` vs `{value!r}` warnings, Linux SIGUSR
+  consts, hex-helper 3-way duplication (core/format/lib fold pass)
 
-## P3 — render + preview, pure (PARALLEL with P2-C, needs core only)
+## P3 — render + preview, pure (PARALLEL with P2-C, needs core only) — done (80 cargo green)
 
-- [ ] `worker-c`: port `clip`/`pack`/`visible` (unicode-width) +
+- [x] `worker-c`: port `clip`/`pack`/`visible` (unicode-width) +
   adversarial property tests; chrome/title/wordmark, banner/mini,
   palette/interface cells, examples strip, diff, HSV bars
-- [ ] `worker-c`: grid/panel/side/bare ladder + ported layout tests
-- [ ] Gate: cell-grid comparison harness — Python dumps (char, fg, bg)
+- [x] `worker-c`: grid/panel/side/bare ladder + ported layout tests
+- [x] Gate: cell-grid comparison harness — Python dumps (char, fg, bg)
   triples per fixture frame, Rust asserts identical grids; no ANSI strings
-  cross the boundary (finding `from_ansi` fails the phase)
-- [ ] `reviewer`: audit purity (no I/O, no Ratatui in this crate)
+  cross the boundary (zero `from_ansi`; `tests/dump_grid.py` replays real
+  draw_editor stdout, 10 frame fixtures + corpora)
+- [x] `reviewer`: audit purity (no I/O, no Ratatui in this crate) — pass,
+  no phase-failing defect
 
 ## P4 — editor state machine, headless (starts when core API frozen)
 

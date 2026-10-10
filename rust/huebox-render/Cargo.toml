@@ -1,0 +1,12 @@
+[package]
+name = "huebox-render"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "huebox_render"
+path = "src/lib.rs"
+
+[dependencies]
+huebox-core = { path = "../huebox-core" }
+unicode-width = "0.2"

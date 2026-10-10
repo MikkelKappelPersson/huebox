@@ -1,0 +1,362 @@
+[
+ {
+  "slot": "palette-8",
+  "text": "// live preview - edits show here without reloading\n"
+ },
+ {
+  "slot": "palette-5",
+  "text": "const"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "huebox"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": "="
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "palette-2",
+  "text": "terminal theme editor"
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "foreground",
+  "text": ";"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "palette-5",
+  "text": "const"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "std"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": "="
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-14",
+  "text": "@import"
+ },
+ {
+  "slot": "foreground",
+  "text": "("
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "palette-2",
+  "text": "std"
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "foreground",
+  "text": ")"
+ },
+ {
+  "slot": "foreground",
+  "text": ";"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "palette-5",
+  "text": "pub"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": "fn"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "main"
+ },
+ {
+  "slot": "foreground",
+  "text": "("
+ },
+ {
+  "slot": "foreground",
+  "text": ")"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": "!"
+ },
+ {
+  "slot": "palette-6",
+  "text": "void"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "{"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "foreground",
+  "text": "    "
+ },
+ {
+  "slot": "palette-5",
+  "text": "var"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "count"
+ },
+ {
+  "slot": "palette-5",
+  "text": ":"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-6",
+  "text": "u32"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": "="
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-3",
+  "text": "42"
+ },
+ {
+  "slot": "foreground",
+  "text": ";"
+ },
+ {
+  "slot": "foreground",
+  "text": "   "
+ },
+ {
+  "slot": "palette-8",
+  "text": "// your palette\n"
+ },
+ {
+  "slot": "foreground",
+  "text": "    "
+ },
+ {
+  "slot": "palette-5",
+  "text": "if"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "("
+ },
+ {
+  "slot": "foreground",
+  "text": "count"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-5",
+  "text": ">"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "palette-3",
+  "text": "0xFF"
+ },
+ {
+  "slot": "foreground",
+  "text": ")"
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "{"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "foreground",
+  "text": "        "
+ },
+ {
+  "slot": "foreground",
+  "text": "std"
+ },
+ {
+  "slot": "foreground",
+  "text": "."
+ },
+ {
+  "slot": "foreground",
+  "text": "debug"
+ },
+ {
+  "slot": "foreground",
+  "text": "."
+ },
+ {
+  "slot": "palette-12",
+  "text": "print"
+ },
+ {
+  "slot": "foreground",
+  "text": "("
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "palette-2",
+  "text": "{d} colours"
+ },
+ {
+  "slot": "palette-11",
+  "text": "\\n"
+ },
+ {
+  "slot": "palette-2",
+  "text": "\""
+ },
+ {
+  "slot": "foreground",
+  "text": ","
+ },
+ {
+  "slot": "foreground",
+  "text": " "
+ },
+ {
+  "slot": "foreground",
+  "text": "."
+ },
+ {
+  "slot": "foreground",
+  "text": "{"
+ },
+ {
+  "slot": "foreground",
+  "text": "count"
+ },
+ {
+  "slot": "foreground",
+  "text": "}"
+ },
+ {
+  "slot": "foreground",
+  "text": ")"
+ },
+ {
+  "slot": "foreground",
+  "text": ";"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ },
+ {
+  "slot": "foreground",
+  "text": "    "
+ },
+ {
+  "slot": "foreground",
+  "text": "}"
+ },
+ {
+  "slot": "foreground",
+  "text": "\n"
+ }
+]

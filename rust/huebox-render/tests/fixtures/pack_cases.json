@@ -1,0 +1,83 @@
+[
+ {
+  "items": [
+   "aa",
+   "bb",
+   "cc"
+  ],
+  "cols": 5,
+  "sep": " ",
+  "lines": [
+   "aa bb",
+   "cc"
+  ]
+ },
+ {
+  "items": [
+   "aa",
+   "bb",
+   "cc"
+  ],
+  "cols": 4,
+  "sep": " ",
+  "lines": [
+   "aa",
+   "bb",
+   "cc"
+  ]
+ },
+ {
+  "items": [
+   "arrows move",
+   "w/e hue",
+   "s/d sat",
+   "x/c light"
+  ],
+  "cols": 40,
+  "sep": "  ",
+  "lines": [
+   "arrows move  w/e hue  s/d sat  x/c light"
+  ]
+ },
+ {
+  "items": [
+   "arrows move",
+   "w/e hue",
+   "s/d sat",
+   "x/c light"
+  ],
+  "cols": 24,
+  "sep": "  ",
+  "lines": [
+   "arrows move  w/e hue",
+   "s/d sat  x/c light"
+  ]
+ },
+ {
+  "items": [
+   "\u001b[38;2;255;0;0maa\u001b[0m",
+   "bb"
+  ],
+  "cols": 5,
+  "sep": " ",
+  "lines": [
+   "\u001b[38;2;255;0;0maa\u001b[0m bb"
+  ]
+ },
+ {
+  "items": [
+   "abcdef"
+  ],
+  "cols": 4,
+  "sep": " ",
+  "lines": [
+   "abcdef"
+  ]
+ },
+ {
+  "items": [],
+  "cols": 80,
+  "sep": "  ",
+  "lines": []
+ }
+]

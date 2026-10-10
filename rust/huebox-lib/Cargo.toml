@@ -1,0 +1,12 @@
+[package]
+name = "huebox-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "huebox_lib"
+path = "src/lib.rs"
+
+[dependencies]
+huebox-core = { path = "../huebox-core" }
+huebox-format = { path = "../huebox-format" }

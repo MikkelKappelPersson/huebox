@@ -1,3 +1,3 @@
 [workspace]
-members = ["huebox-core"]
+members = ["huebox-core", "huebox-format", "huebox-lib", "huebox-render"]
 resolver = "2"
