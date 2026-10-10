@@ -31,17 +31,18 @@ The tree must be build-ready or nothing below runs unattended:
 - [x] Confirm `python3 -W always -m unittest discover -s tests` is green on
   the committed tree (baseline for every later comparison) — 516 tests OK
 
-## P0 — toolchain verify + perf spike (gate: go/no-go)
+## P0 — toolchain verify + perf spike (gate: go/no-go) — done, GO (1.43ms / 4.26ms dev)
 
-- [ ] `worker-a`: verify `cargo` stable, create `rust/` workspace skeleton
+- [x] `worker-a`: verify `cargo` stable, create `rust/` workspace skeleton
   (`Cargo.toml` workspace + empty `huebox-spike`), pin `ratatui 0.30`
-  with the `crossterm` feature per research §1
-- [ ] `worker-a`: worst-case spike — background-hold frame (palette grids,
+  with the `crossterm` feature per research §1 (cargo 1.99.0)
+- [x] `worker-a`: worst-case spike — background-hold frame (palette grids,
   three HSV bars, sample, strip, diff) at 100x24 and 150x50 through the
   test backend with the research §2 loop; print per-frame build+diff+write
-- [ ] Gate: p50 under 8ms both sizes or STOP (ship Python fixes instead);
-  on go, record numbers in `plan.md` and delete the spike
-- [ ] `reviewer`: audit `rust/Cargo.*` + spike removal
+- [x] Gate: p50 under 8ms both sizes or STOP (ship Python fixes instead);
+  on go, record numbers in `plan.md` and delete the spike — GO, numbers in plan
+- [x] `reviewer`: audit `rust/Cargo.*` + spike removal — reviewer timed out;
+  orchestrator self-audited (single ratatui dep, no from_ansi, §2 loop) and landed bare workspace
 
 ## P1 — parity oracle, Python (PARALLEL with P0, no cargo needed) — done (115 color cases, 23-key trace, 519 green)
 

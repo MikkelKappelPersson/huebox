@@ -32,6 +32,12 @@ for compositor and paint) or the rewrite stops here and the Python fixes from
 the bench (debounced style sync, single lay) ship instead. Spike is deleted
 once the numbers are recorded in the plan.
 
+Result 2026-10-10: GO. Worst-case spike (dev profile, 300 frames/size + 10
+warmup, TestBackend, every row dirty): 100x24 p50 1.43ms / max 1.58 /
+mean 1.43ms; 150x50 p50 4.26ms / max 4.84 / mean 4.27ms. Release headroom:
+0.15ms / 0.44ms. Single `ratatui 0.30` + `crossterm`-feature dep, styled
+cells, no ANSI round-trip. Spike deleted; bare `rust/` workspace remains.
+
 ## Phase 1 — parity oracle (Python, ships first)
 
 Goal: the cross-language answer key, committed before any Rust behaviour.
