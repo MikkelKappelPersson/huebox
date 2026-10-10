@@ -38,6 +38,7 @@ from .color import MISSING, SLOTS, is_hex, normalize_hex
 from .detect import config_holds_colours, ensure_theme_pointer, \
     ghostty_main_config, ghostty_theme_name, ghostty_themes_dir, resolve
 from .formats import FORMAT_NAMES, FORMATS
+from .formats.ghostty import GHOSTTY_RULES
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SUFFIX = ".toml"
@@ -445,15 +446,65 @@ def export_ghostty_native(name: str, slots: dict) -> str:
     return path
 
 
+def ghostty_overrides(main=None) -> dict:
+    """The colour slots `main` sets inline — the export's shadows (§13.6).
+
+    Ghostty loads a theme file first and the main config second, so any
+    colour key the main config carries wins over the file `theme =` points
+    at. After an export those keys are exactly the lines a delete-or-keep
+    popup names. Empty when there is no main config, no file behind it, or
+    no colour in it — which is also the clean-export case, where there is
+    nothing to ask about.
+    """
+    if not main:
+        return {}
+    try:
+        return FORMATS["ghostty"]["read"](main)
+    except OSError:
+        return {}
+
+
+def clear_ghostty_overrides(main: str) -> int:
+    """Delete the colour lines `main` carries inline; returns how many went.
+
+    The delete half of the overrides popup: every line the Ghostty rules
+    match goes, everything else stays byte-identical — spacing, comments,
+    non-colour keys and the `theme =` pointer itself. Line-level like every
+    other write to somebody else's file (§6.2): compare first, write second,
+    so a config with nothing to remove keeps its mtime. A missing file
+    removes nothing and returns 0.
+    """
+    if not main:
+        return 0
+    try:
+        with open(main, encoding="utf-8", errors="surrogateescape",
+                   newline="") as handle:
+            text = handle.read()
+    except OSError:
+        return 0
+    lines = text.split("\n")
+    kept = [line for line in lines
+            if not any(rule[0].match(line) for rule in GHOSTTY_RULES)]
+    removed = len(lines) - len(kept)
+    if not removed:
+        return 0
+    with open(main, "w", encoding="utf-8", errors="surrogateescape",
+               newline="") as handle:
+        handle.write("\n".join(kept))
+    return removed
+
+
 #: What one `push` did. The caller routes `lines` (they are its report) and
 #: the verdict: `failed` is the exit code, `pushed` the `fmt: path` pairs a
 #: status line names, `reloaded` the formats whose terminal was asked to
-#: re-read its config. A plain list of strings could not say which target
+#: re-read its config, `overrides` the Ghostty inline colours that shadow
+#: an export — `(main, (slot, ...))` or `None` — which is what arms the
+#: editor's delete-or-keep popup. A plain list of strings could not say which target
 #: failed without the caller re-reading the text — nor which terminals are
 #: already showing the push, which is what decides whether the caller still
 #: owes the user a "reload your terminal".
-PushResult = namedtuple("PushResult", "lines pushed failed reloaded",
-                        defaults=((),))
+PushResult = namedtuple("PushResult", "lines pushed failed reloaded overrides",
+                        defaults=((), None))
 
 
 #: How a terminal is told to re-read its config (§13.6). Only terminals
@@ -718,8 +769,10 @@ def _dangling_pointer(main: str):
 def _push_native(name: str, slots: dict, main: str, dangling=None):
     """Export a Ghostty theme file, then point the main config at it.
 
-    Returns `(path, lines, failed)`: the exported file the status line
-    names, the report, and whether the target failed. Neither write is
+    Returns `(path, lines, failed, overrides)`: the exported file the status line
+    names, the report, whether the target failed, and the inline colours that
+    now shadow it — `(main, (slot, ...))` or `None` — which is what arms the
+    editor's delete-or-keep popup. Neither write is
     rolled back if the other one misses (decision 7) — a theme file
     without a pointer is a harmless file, and the report says so.
 
@@ -732,20 +785,22 @@ def _push_native(name: str, slots: dict, main: str, dangling=None):
     """
     try:
         path = export_ghostty_native(name, slots)
-        shadowed = bool(FORMATS["ghostty"]["read"](main))
+        over = ghostty_overrides(main)
         action = ensure_theme_pointer(main, name)
     except (ThemeError, OSError, ValueError) as problem:
-        return None, [f"ghostty: {main}: {problem}"], True
+        return None, [f"ghostty: {main}: {problem}"], True, None
     lines = [f"ghostty: exported {path}",
              f"ghostty: theme = {name} {action} in {main}"]
     if dangling:
         lines.append(f"ghostty: {main} pointed at {dangling!r}, which was "
                      f"not on disk - the colours are back in a file of that "
                      f"name now")
-    if shadowed:
+    overrides = None
+    if over:
         lines.append(f"ghostty: the colours in {main} are now shadowed by "
                      f"{path} - remove the inline ones to change them again")
-    return path, lines, False
+        overrides = (main, tuple(sorted(over)))
+    return path, lines, False, overrides
 
 
 def push(slots: dict, to=None, fmt: str = None, path: str = None,
@@ -826,6 +881,7 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
     lines: list = []
     pushed: list = []
     failed = False
+    overrides = None
 
     for wanted in names:
         found, target, error = resolve(wanted, explicit)
@@ -875,12 +931,14 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
                              "- not a push target")
                 failed = True
                 continue
-            path_, extra, bad = _push_native(name, slots, main, dangling)
+            path_, extra, bad, over = _push_native(name, slots, main, dangling)
             lines.extend(extra)
             if bad:
                 failed = True
                 continue
             pushed.append((found, path_))
+            if over is not None:
+                overrides = over
             continue
         existing = FORMATS[found]["read"](target)
         if not existing:
@@ -919,7 +977,8 @@ def push(slots: dict, to=None, fmt: str = None, path: str = None,
                 lines.append(note)
                 reloaded.append(hit)
 
-    return PushResult(tuple(lines), tuple(pushed), failed, tuple(reloaded))
+    return PushResult(tuple(lines), tuple(pushed), failed, tuple(reloaded),
+                       overrides)
 
 
 # --------------------------------------------------------------------------

@@ -671,6 +671,82 @@ class GhosttyNative(LibraryHome):
         self.assertIn("background = #010203", self.read(self.config))
         self.assertFalse(os.path.exists(self.native))
         self.assertNotIn("theme =", self.read(self.config))
+        self.assertIsNone(result.overrides)
+
+
+class GhosttyOverrides(LibraryHome):
+    """Inline colours that shadow an export — the delete-or-keep popup (§13.6).
+
+    Ghostty loads the theme file first and the main config second, so any
+    colour key the main config carries wins. An export leaves those lines
+    alone (truth → file → pointer, never an erase), reports them as
+    `PushResult.overrides`, and the editor asks — delete them so the theme
+    shows, or keep them and stay shadowed.
+    """
+
+    def main_with(self, text):
+        path = os.path.join(self.root, "ghostty", "config")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return self.write(path, text)
+
+    def test_overrides_are_the_colours_the_main_config_carries(self):
+        main = self.main_with("background = #101014\n"
+                              "# foreground = #ffffff\n"
+                              "font-size = 12\n")
+        over = themes.ghostty_overrides(main)
+        self.assertEqual(over, {"background": "#101014"})
+
+    def test_no_main_means_no_overrides(self):
+        self.assertEqual(themes.ghostty_overrides(None), {})
+        self.assertEqual(themes.ghostty_overrides(
+            os.path.join(self.root, "missing")), {})
+
+    def test_clear_removes_only_colour_lines(self):
+        main = self.main_with("# keep me\n"
+                              "background = #101014  # mine\n"
+                              "font-size = 12\n"
+                              "palette = 0=#000000\n")
+        removed = themes.clear_ghostty_overrides(main)
+        self.assertEqual(removed, 2)
+        with open(main, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(),
+                             "# keep me\nfont-size = 12\n")
+        self.assertEqual(themes.ghostty_overrides(main), {})
+
+    def test_clear_is_byte_identical_when_there_is_nothing_to_remove(self):
+        main = self.main_with("# mine\nfont-size = 12\ntheme = ember\n")
+        stamp = os.path.getmtime(main) - 60
+        os.utime(main, (stamp, stamp))
+        self.assertEqual(themes.clear_ghostty_overrides(main), 0)
+        self.assertEqual(os.path.getmtime(main), stamp)
+        with open(main, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(),
+                             "# mine\nfont-size = 12\ntheme = ember\n")
+
+    def test_a_native_push_with_inline_colours_reports_overrides(self):
+        main = self.main_with("background = #101014\n"
+                              "foreground = #e6e6ea\ntheme = Old\n")
+        old = os.path.join(self.root, "ghostty", "themes", "Old")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        self.write(old, "background = #000000\n")
+        result = themes.push(dict(FULL), to="ghostty", path=main,
+                             name="ember")
+        self.assertFalse(result.failed)
+        self.assertIsNotNone(result.overrides)
+        found_main, keys = result.overrides
+        self.assertEqual(found_main, main)
+        self.assertEqual(set(keys), {"background", "foreground"})
+        self.assertIn("now shadowed", "\n".join(result.lines))
+
+    def test_a_clean_export_reports_no_overrides(self):
+        main = self.main_with("# mine\nfont-size = 12\ntheme = Old\n")
+        old = os.path.join(self.root, "ghostty", "themes", "Old")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        self.write(old, "background = #000000\n")
+        result = themes.push(dict(FULL), to="ghostty", path=main,
+                             name="ember")
+        self.assertFalse(result.failed)
+        self.assertIsNone(result.overrides)
 
 class ThemeOrganisedGhostty(LibraryHome):
     """A ghostty config that points at a theme file — the common shape.
@@ -960,6 +1036,41 @@ class GhosttyNativeOnSave(_PushSession):
         self.assertIn(f"huebox: ghostty: exported {self.native}", err)
         self.assertIn(f"huebox: ghostty: theme = ember appended in "
                       f"{self.config}", err)
+
+    def test_a_save_with_inline_colours_offers_delete_and_deletes(self):
+        # §13.6: the main config shadows the export, so Ctrl+S arms the
+        # warning and `d` removes the lines — the theme shows afterwards.
+        main = os.path.join(self.root, "ghostty", "config")
+        os.makedirs(os.path.dirname(main), exist_ok=True)
+        self.write(main, "background = #101014\n"
+                         "foreground = #e6e6ea\ntheme = Old\n")
+        old = os.path.join(self.root, "ghostty", "themes", "Old")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        self.write(old, "background = #000000\n")
+        spec = cli.PushSpec(("ghostty",), None, main, False, True)
+        status, out, err = self.session(["c", editor.SAVE_KEY, "y",
+                                          "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertIn("removed 2 override(s)", out)
+        with open(main, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "theme = ember\n")
+        self.assertIn("removed 2 override(s)", err)
+        self.assertIn("now shadowed", err)   # the save's own report stays
+
+    def test_a_save_with_inline_colours_keeps_on_esc(self):
+        main = os.path.join(self.root, "ghostty", "config")
+        os.makedirs(os.path.dirname(main), exist_ok=True)
+        self.write(main, "background = #101014\ntheme = Old\n")
+        old = os.path.join(self.root, "ghostty", "themes", "Old")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        self.write(old, "background = #000000\n")
+        spec = cli.PushSpec(("ghostty",), None, main, False, True)
+        status, out, _ = self.session(["c", editor.SAVE_KEY, "esc",
+                                        "esc"], spec)
+        self.assertEqual(status, 0)
+        self.assertIn("kept 1 override(s)", out)
+        with open(main, encoding="utf-8") as handle:
+            self.assertIn("background = #101014", handle.read())
 
 class Picker(LibraryHome):
     """The picker and save-as-new against a real library (§13.7)."""

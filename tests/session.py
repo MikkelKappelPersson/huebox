@@ -25,7 +25,7 @@ from huebox import editor, tui
 
 def drive(keys, fmt, path, slots, write, backup=False, theme=None,
           report=None, library=None, notes=None, size=(100, 24), prompt=None,
-          draw=None, apply=None):
+          draw=None, apply=None, delete_overrides=None):
     """Run one session over `keys`; return its `EditorState`.
 
     `keys` is iterated in order. `"resize"` redraws without consuming a key or
@@ -57,11 +57,14 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
     try:
         state = editor.EditorState(slots, None, prompt,
                                    path if backup else None, theme=theme,
-                                   fmt=fmt, library=library, path=path)
+                                   fmt=fmt, library=library, path=path,
+                                   delete_overrides=delete_overrides)
         state.prompt_name = prompt
         state.write = lambda values: write(state.theme, state.path, values)
         if apply is not None:
             state.apply = lambda values: apply(state.theme, state.path, values)
+        if delete_overrides is not None:
+            state.delete_overrides = delete_overrides
         if state.overlay is None:
             # An empty library opens on the first-run choice, like the
             # shell does — a headless session with nothing to save to
@@ -81,6 +84,15 @@ def drive(keys, fmt, path, slots, write, backup=False, theme=None,
                 for line in editor.setup_lines(state.setup, size[0], size[1],
                                                state.status, state.slots,
                                                name=state.setup_name):
+                    sys.stdout.write(editor.backdrop(line, state.slots, size[0])
+                                     + "\r\n")
+            elif state.overrides is not None:
+                # The Ghostty warning is its own frame, like the picker:
+                # `overrides_lines`, then `backdrop`.
+                over = state.overrides
+                for line in editor.overrides_lines(
+                        over["main"], over["keys"], state.overrides_index,
+                        size[0], size[1], state.status, state.slots):
                     sys.stdout.write(editor.backdrop(line, state.slots, size[0])
                                      + "\r\n")
             elif state.picker_frame() is not None:
@@ -124,12 +136,14 @@ def driver_factory(keys, size=(100, 24), prompt=None, draw=None):
     """
     def run(fmt, path, slots, write, backup_path=None, theme=None,
             library=None, report=None, notes=None,
-            import_library=None, import_writer=None, apply=None):
+            import_library=None, import_writer=None, apply=None,
+            delete_overrides=None):
         # Shaped like `app.run`: the import seams arrive here and are
         # ignored — a headless double has no popup to open, so there is
         # nothing to list and nothing to write.
         return drive(keys, fmt, path, slots, write,
                      backup=backup_path is not None, theme=theme,
                      library=library, report=report, notes=notes,
-                     size=size, prompt=prompt, draw=draw, apply=apply)
+                     size=size, prompt=prompt, draw=draw, apply=apply,
+                     delete_overrides=delete_overrides)
     return run

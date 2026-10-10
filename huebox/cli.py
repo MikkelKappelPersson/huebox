@@ -385,7 +385,7 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         del failed[:]
         if spec.no_push:
             report.append(NO_PUSH_LINE)
-            return f"saved {theme} (truth only)"
+            return f"saved {theme} (truth only)", None
         result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path,
                              ghostty_native=spec.ghostty_native, name=theme,
                              ghostty_in_place=spec.ghostty_in_place,
@@ -393,17 +393,17 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         report.extend(_push_lines(result))
         if result.failed:
             failed.append(result)
-            return f"saved {theme} - push failed"
-        return f"saved {theme} → {_pushed(result)}"
+            return f"saved {theme} - push failed", None
+        return f"saved {theme} → {_pushed(result)}", result.overrides
 
     def apply(theme, path, values):
         if theme is None:      # unreachable: direct-mode Ctrl+A saves —
-            return FORMATS[direct_fmt]["write"](path, values)  # belt
+            return FORMATS[direct_fmt]["write"](path, values), None  # belt
         del report[:]                      # one report: this push's
         del failed[:]
         if spec.no_push:
             report.append(NO_PUSH_LINE)
-            return "apply blocked (--no-push) - terminal unchanged"
+            return "apply blocked (--no-push) - terminal unchanged", None
         result = themes.push(values, to=spec.to, fmt=spec.fmt, path=spec.path,
                              ghostty_native=spec.ghostty_native, name=theme,
                              ghostty_in_place=spec.ghostty_in_place,
@@ -411,8 +411,28 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         report.extend(_push_lines(result))
         if result.failed:
             failed.append(result)
-            return "applied (unsaved) - push failed"
-        return f"applied (unsaved) → {_pushed(result)}"
+            return "applied (unsaved) - push failed", None
+        return f"applied (unsaved) → {_pushed(result)}", result.overrides
+
+    def delete_overrides(main):
+        """Delete Ghostty's inline colours so the exported theme shows (§13.6).
+
+        The delete half of the save/apply popup, injected so `editor` never
+        imports `themes`: line-level removal through `themes`, a report line
+        where a report belongs, and a re-reload where a reload was asked —
+        the terminal was already asked once with the shadows still in place.
+        Returns the status line; raises `OSError` for the editor to report.
+        """
+        removed = themes.clear_ghostty_overrides(main)
+        if not removed:
+            return f"no overrides left in {main}"
+        report.append(f"ghostty: removed {removed} override(s) from {main}")
+        if spec.reload:
+            note = themes.reload_terminal("ghostty")
+            if note:
+                report.append(note)
+        return (f"removed {removed} override(s) from {main} - "
+                "theme now shows")
 
     # The Textual shell runs the session and reports it on the way out
     # (`app.run` → `editor.report_session`). The injected seams are the same
@@ -425,7 +445,8 @@ def _run_editor(target: Target, spec: PushSpec = None, driver=None) -> int:
         backup_path=target.path if direct_fmt is not None else None,
         theme=target.theme, library=_library(notes), report=report,
         notes=notes, import_library=_import_library(notes),
-        import_writer=_import_writer(), apply=apply)
+        import_writer=_import_writer(), apply=apply,
+        delete_overrides=delete_overrides)
     return 1 if failed else 0
 
 

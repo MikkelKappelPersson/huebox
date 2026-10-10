@@ -101,6 +101,16 @@ SETUP_NAME_HINTS = [("type", "name"), ("Enter", "save"),
 #: number is pinned here and the writer still has the last word.
 SETUP_NAME_MAX = 64
 
+#: Ghostty overrides: inline colours in the main config shadow the exported
+#: theme file (§13.6). `delete` removes those lines so the theme shows, `keep`
+#: leaves them. Index 1 (`keep`) is the safe default — Enter keeps, `y`
+#: deletes — so a popup left on screen never destroys a config by accident.
+OVERRIDES_CHOICES = ("delete", "keep")
+OVERRIDES_LABELS = {"delete": "yes, delete", "keep": "no, keep overrides"}
+OVERRIDES_KEYS = {"delete": "y", "keep": "n"}
+OVERRIDES_HINTS = [("arrows", "move"), ("Enter", "choose"),
+                    ("y", "delete"), ("n / Esc", "keep")]
+
 # §15 — what a short terminal spends, in order. The frame sheds its
 # decoration (the palette legend, then the blank separators nearest the
 # widgets) before it sheds a widget, and the three live widgets share what
@@ -602,6 +612,69 @@ def setup_hits(index, cols, rows, slots=None, status="") -> list:
     """
     found: list = []
     setup_lines(index, cols, rows, status=status, slots=slots, hits=found)
+    return found
+
+
+def _overrides_row(choice: str, selected: bool, slots: dict) -> str:
+    """One overrides row: `> label (key)`, the selected choice marked.
+
+    The same two columns in front of the label the setup rows keep, so the
+    choices line up and the mark reads the same way. The key in parentheses
+    is the row's direct spelling — `y` deletes from either row, `n` keeps.
+    """
+    mark = chrome(">", "foreground", slots, bold=True) if selected else " "
+    painted = chrome(f"{OVERRIDES_LABELS[choice]}  ({OVERRIDES_KEYS[choice]})",
+                       "foreground", slots, bold=selected)
+    return f"  {mark} {painted}"
+
+
+def overrides_lines(main, keys, index, cols, rows, status="", slots=None,
+                    hits=None, footer=True):
+    """The Ghostty overrides warning as a frame of lines (§13.6).
+
+    Pure, like `setup_lines`: the wordmark plus an `overrides` title, one
+    muted line saying how many colours in `main` shadow the exported theme,
+    one muted line naming them, the two choices with the selected one marked
+    `>`, and the hint footer folded through `pack` so it can never widen the
+    frame. Every line is `clip`ped to `cols` and the frame to `rows`, with the
+    footer never the part that gets cut. Clickable cells are announced by the
+    rows that draw them (`hits=`), the same rule as every other frame.
+    """
+    slots = slots or {}
+    keys = list(keys or [])
+    index = max(0, min(index, len(OVERRIDES_CHOICES) - 1))
+    out = ["  " + wordmark(slots) + "  " + title("delete config overrides?", slots), "",
+           "  " + chrome(f"{len(keys)} colour(s) in {main} shadow "
+                            "the exported theme", CHROME_MUTED, slots),
+           "  " + chrome(", ".join(keys) or "no colours",
+                            CHROME_MUTED, slots),
+           ""]
+    for row, choice in enumerate(OVERRIDES_CHOICES):
+        if hits is not None:
+            hits.append(Hit(len(out), 2, cols - 1, row))
+        out.append(_overrides_row(choice, row == index, slots))
+    out.append("")
+    footer = (["  " + line
+               for line in hint_line(slots, OVERRIDES_HINTS, cols - 2)]
+              if footer else [])
+    if status and footer:
+        footer.append(f"  {BOLD}{status}{RESET}")
+    out.extend(footer)
+    if len(out) > rows:                    # belt and braces: keep the footer
+        out = out[:len(out) - len(footer)] + footer
+    return [clip(line, cols) for line in out[:rows]]
+
+
+def overrides_hits(main, keys, index, cols, rows, slots=None,
+                   status="") -> list:
+    """Every overrides row, as `Hit`s whose `slot` is the choice index.
+
+    The mirror of `setup_hits`: ask this at the moment the frame is up, so a
+    click and the row cannot disagree about which choice is where.
+    """
+    found: list = []
+    overrides_lines(main, keys, index, cols, rows, status=status,
+                    slots=slots, hits=found)
     return found
 
 
@@ -1377,7 +1450,8 @@ class EditorState:
     """
 
     def __init__(self, slots, write, prompt_hex=None, backup_path=None,
-                 theme=None, fmt="", library=None, path="", apply=None):
+                 theme=None, fmt="", library=None, path="", apply=None,
+                 delete_overrides=None):
         self.slots = dict(slots)
         self.saved = dict(self.slots)
         self.sel = INITIAL_SEL
@@ -1389,7 +1463,10 @@ class EditorState:
         self.backup_path = backup_path      # None: huebox owns the file, no .bak
         self.backup_made = False
         self.write = write                  # write(slots) -> status | None
+                                            #   or (status, (main, keys) | None)
         self.apply = apply                  # apply(slots) -> status | None
+                                            #   or (status, (main, keys) | None)
+        self.delete_overrides = delete_overrides  # delete(main) -> status
         self.prompt_hex = prompt_hex        # prompt_hex(name) -> str | None
         self.quit = False
         self.theme = theme                  # theme name, None: direct mode
@@ -1403,6 +1480,9 @@ class EditorState:
         self.setup = None                   # 0/1 while the first-run choice is up
         self.setup_name = None              # typed name while naming (modal input line)
         self.import_pending = False         # setup chose import: shell opens it
+        self.overrides = None               # {"main": path, "keys": [...]} while
+                                            #   the Ghostty warning is up
+        self.overrides_index = 1            # keep: the safe default (§13.6)
         self.grid = grid_geometry(FALLBACK_COLS)   # refreshed every frame
 
     def dirty(self) -> bool:
@@ -1473,22 +1553,122 @@ def ensure_backup(path):
     return True
 
 
+def _split_result(result):
+    """A writer's answer as `(message, overrides)`.
+
+    Old writers return a status string (or `None`); Ghostty-aware ones
+    return `(message, (main, keys) | None)` so a save that shadowed its own
+    export can arm the delete-or-keep popup. Both shapes stay accepted so a
+    test double never has to learn about Ghostty to save a buffer.
+    """
+    if isinstance(result, tuple) and len(result) == 2:
+        message, over = result
+        return message, over
+    return result, None
+
+
+def _open_overrides(st, main, keys) -> None:
+    """Arm the Ghostty overrides warning after a save or an apply (§13.6).
+
+    Popups never stack: over an open choice or picker this is a no-op and
+    the save's own status line is all the warning there is. Otherwise the
+    warning owns the surface until delete or keep closes it, starting on
+    `keep` — the safe default.
+    """
+    keys = list(keys or [])
+    if not main or not keys:
+        return
+    if st.setup is not None or st.overlay is not None:
+        return
+    if st.overrides is not None:
+        return
+    st.overrides = {"main": main, "keys": keys}
+    st.overrides_index = 1
+    st.armed = False
+
+
+def _overrides_delete(st) -> None:
+    """Delete the warned-about lines through the injected seam (§13.6).
+
+    The buffer is untouched — overrides live in the terminal config, not in
+    truth — so `saved`/`dirty`/`written` stay as the save left them. A missing
+    seam or a failed delete keeps the popup's warning on the status line and
+    still closes: the save itself succeeded, and a stuck popup would hold the
+    session hostage over a best-effort cleanup.
+    """
+    main = (st.overrides or {}).get("main", "")
+    count = len((st.overrides or {}).get("keys", []))
+    if st.delete_overrides is None:
+        st.status = "cannot delete overrides here"
+        st.overrides = None
+        return
+    try:
+        message = st.delete_overrides(main)
+    except OSError as error:
+        st.status = f"delete failed: {error}"
+        st.overrides = None
+        return
+    st.status = message or (f"removed {count} override(s) from {main} "
+                             "- theme now shows")
+    st.overrides = None
+
+
+def _overrides_keep(st) -> None:
+    """Keep the inline colours: the theme stays shadowed, by choice."""
+    main = (st.overrides or {}).get("main", "")
+    count = len((st.overrides or {}).get("keys", []))
+    st.status = (f"kept {count} override(s) in {main} - "
+                 "theme stays shadowed" if main else "kept overrides")
+    st.overrides = None
+
+
+def _overrides_key(key, st) -> None:
+    """Keys while the overrides warning is up: it owns the surface (§13.6).
+
+    Nothing else can fire — no colour changes, no save, no quit — so a key
+    meant for the editor cannot do damage behind a warning the user is
+    reading. `Esc`, `Q` and Ctrl+C keep (the safe default), never quit.
+    """
+    st.armed = False
+    if key in ("up", "left"):
+        st.overrides_index = max(0, st.overrides_index - 1)
+    elif key in ("down", "right"):
+        st.overrides_index = min(len(OVERRIDES_CHOICES) - 1,
+                                 st.overrides_index + 1)
+    elif key in ENTER_KEYS:
+        if OVERRIDES_CHOICES[st.overrides_index] == "delete":
+            _overrides_delete(st)
+        else:
+            _overrides_keep(st)
+    elif key in ("y", "Y"):
+        _overrides_delete(st)
+    elif key in ("n", "N", "esc", "escape", "Q", "\x03", "t"):
+        _overrides_keep(st)
+
+
 def save_state(st):
     """Ctrl+S — the one path from buffer to disk (§14.2).
 
     A failed write leaves `saved` untouched: the buffer stays dirty and Esc
     keeps guarding it. The backup is best-effort and never blocks a save.
+    A write that reports Ghostty overrides arms the delete-or-keep popup;
+    the buffer is already clean, so delete/keep only ever touch the
+    terminal config.
     """
     if st.backup_path and not st.written:
         st.backup_made = ensure_backup(st.backup_path)
     try:
-        message = st.write(st.slots)
+        result = st.write(st.slots)
     except OSError as error:
         st.status = f"write failed: {error}"
         return
+    message, over = _split_result(result)
     st.saved = dict(st.slots)
     st.written = True
     st.status = message or "saved"
+    if over:
+        main, keys = over
+        _open_overrides(st, main, keys)
 
 
 def apply_state(st):
@@ -1498,16 +1678,22 @@ def apply_state(st):
     guarding it. A failed push leaves the buffer alone the same way.
     In a direct session the config is the truth, so there is nothing to
     preview past the file itself — apply saves there (see `apply_key`).
+    A push that reports Ghostty overrides arms the delete-or-keep popup;
+    the buffer stays dirty either way.
     """
     if st.apply is None:
         st.status = "nothing to apply"
         return
     try:
-        message = st.apply(st.slots)
+        result = st.apply(st.slots)
     except OSError as error:
         st.status = f"apply failed: {error}"
         return
+    message, over = _split_result(result)
     st.status = message or "applied"
+    if over:
+        main, keys = over
+        _open_overrides(st, main, keys)
 
 
 def _adjust(st, key):
@@ -1613,6 +1799,8 @@ def _create_theme(st, label: str = NEW_THEME_LABEL):
 
 def _open_overlay(st) -> None:
     """`t` — the picker, with the session's own theme selected (§13.7)."""
+    if st.overrides is not None:
+        return              # popups never stack: the warning owns the surface
     if st.library is None:
         st.status = "no theme library in this session"
         return
@@ -1706,10 +1894,12 @@ def enter_setup(st) -> bool:
     """Put the first-run choice up, when the library is empty.
 
     Returns whether it opened. Called once per session start (and again when
-    the import popup closes still empty), never over an open choice or an
-    open picker — the harnesses that pin a picker keep it.
+    the import popup closes still empty), never over an open choice, an
+    open picker or an open overrides warning — the harnesses that pin a picker
+    keep it.
     """
-    if st.setup is not None or st.overlay is not None:
+    if st.setup is not None or st.overlay is not None \
+            or st.overrides is not None:
         return st.setup is not None
     if not needs_setup(st):
         return False
@@ -1848,12 +2038,17 @@ def apply_key(key, st):
     and `prompt_hex` / `prompt_name` drop out of raw mode for one line —
     so the key surface itself is testable without a terminal. Sets `st.quit` when the session is done: a clean Esc (or
     Ctrl+C) quits at once, a dirty one arms and takes a second press. An
-    open picker takes the whole key surface first, and an open first-run
+    open picker takes the whole key surface first, an open overrides warning
+    before that, and an open first-run
     choice before that, so quitting and colour edits cannot happen behind
     either.
     """
     if st.setup is not None:
         _setup_key(key, st)
+        return
+
+    if st.overrides is not None:
+        _overrides_key(key, st)
         return
 
     if st.overlay is not None:

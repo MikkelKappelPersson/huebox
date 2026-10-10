@@ -61,13 +61,14 @@ from textual.widgets._footer import FooterKey, FooterLabel
 
 from . import import_state
 from .color import MISSING, SLOTS
-from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, SIDE_LEFT_NARROW_ROWS,
+from .editor import (EDITOR_PAD_X, INITIAL_SEL, MULT_STEPS, OVERRIDES_HINTS,
+                     SIDE_LEFT_NARROW_ROWS,
                      SIDE_LEFT_NARROW_W, SIDE_LEFT_ROWS, SIDE_LEFT_THIN_W,
                      SIDE_LEFT_W, EditorState,
                      apply_key, backdrop, draw_editor, editor_hints, enter_setup,
                      grid_geometry,
                      head_label, report_session, session_path, SETUP_HINTS,
-                     SETUP_NAME_HINTS, setup_lines, side_grid,
+                     SETUP_NAME_HINTS, overrides_lines, setup_lines, side_grid,
                      side_left_rows, side_live_rows, slot_at, theme_lines,
                      THEME_HINTS, too_small_frame, top_editor_meta, top_layout, top_left_rows,
                      top_subject)
@@ -806,6 +807,184 @@ class ThemesScreen(ModalScreen):
             return
         st.overlay_index = target
         self.themes_key("\r")
+
+
+class OverridesScreen(ModalScreen):
+    """The Ghostty overrides warning as a modal popup over the editor (§13.6).
+
+    The dialog's rows are `editor.overrides_lines` at the dialog width — the same
+    rows the headless session draws full-frame, so the two cannot disagree
+    about what the warning says. Behaviour stays in `EditorState` + `apply_key`
+    (the `SetupScreen`/`ThemesScreen` split, repeated): keys arrive already
+    translated from `Editor.on_key` and go straight to the one key surface,
+    and closing is the state going `overrides is None` — the app repaints the
+    editor behind it. The dialog is positioned with explicit margins rather than
+    `align`, so its origin is exactly what `click_at` recomputes — no stored
+    geometry to drift. Popups never stack: the setup choice, the themes list
+    and the import popup each own the surface their own way, and opening here
+    re-checks all three.
+    """
+
+    #: The dialog's content width: holds the overrides rows with the hint
+    #: footer folded to two lines. Clamped to narrow screens in `_fill` — the
+    #: same clamp as `SetupScreen`, so all popups read as one kind.
+    DIALOG_W = 60
+
+    #: The dialog content's narrowest honest width: below this even the
+    #: choice rows clip, so the dialog never shrinks past it.
+    DIALOG_MIN_W = 24
+
+    DEFAULT_CSS = """
+    OverridesScreen {
+        /* No background of its own: the modal dim (`$background` at 60%)
+        stays, so the editor frame shows through behind the dialog.
+        Painting this opaque would hide the session the warning belongs
+        to — the same rule as `SetupScreen` / `ThemesScreen`. */
+        padding: 0;
+    }
+    OverridesScreen .overrides-dialog {
+        background: $background;
+        border: round $border;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._dlg_w = 0               # content width from the last `_fill`
+        self._dlg_h = 0               # content height from the last `_fill`
+        self._hits: list = []         # their clickable cells, content coords
+        self._body = None             # the `Frame` carrying the rows
+        self._dialog = None           # the bordered container
+        self._bars = []               # the folded footer rows
+
+    def compose(self) -> ComposeResult:
+        # Nothing here: the dialog's width comes from the compositor, and
+        # the size it reports decides the clamp. Shells mount in `_fill`
+        # once the tree exists — the same shape as `Editor.compose`.
+        return iter(())
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._fill)
+
+    def on_resize(self, event) -> None:
+        # The rows are fixed-width, but the clamp and the centering are
+        # not: re-lay rather than repaint.
+        if not self.is_running:
+            return
+        self.call_after_refresh(self._fill)
+
+    def _origin(self):
+        """The dialog's top-left, in screen coords.
+
+        The dialog is the screen's only child and carries its centering as
+        explicit margins (set in `_fill`), so this recomputes to exactly
+        where it was mounted — the click map never drifts from the paint.
+        """
+        width, height = self.size
+        return ((width - (self._dlg_w + 2)) // 2,
+                (height - (self._dlg_h + 2)) // 2)
+
+    def _fill(self) -> None:
+        """Mount the dialog at the current size, centered with margins."""
+        for child in list(self.children):
+            child.remove()
+        st = self.app.state
+        width, _height = self.size
+        dlg_w = max(self.DIALOG_MIN_W,
+                    min(self.DIALOG_W, width - 2))
+        over = st.overrides or {"main": "", "keys": []}
+        self._hits = []
+        rows = [backdrop(line, st.slots, dlg_w)
+                for line in overrides_lines(
+                    over.get("main", ""), over.get("keys", []),
+                    st.overrides_index, dlg_w, 99,
+                    st.status, st.slots, hits=self._hits, footer=False)]
+        folded = _fold_footer(OVERRIDES_HINTS, st.status, dlg_w)
+        bars = [HueFooter(p, s, name="overrides-bar") for p, s in folded]
+        for bar in bars:
+            # In-flow, not docked: the dialog already stacks body over
+            # bar at a fixed height, so a dock would overlay the last row.
+            bar.styles.dock = "none"
+        self._dlg_w = dlg_w
+        self._dlg_h = len(rows) + len(bars)
+        body = Frame(rows, dlg_w, name="overrides-body")
+        body.styles.width = dlg_w
+        body.styles.height = len(rows)
+        body.styles.padding = 0
+        body.styles.margin = 0
+        dialog = Vertical(body, *bars, classes="overrides-dialog")
+        dialog.styles.width = dlg_w + 2
+        dialog.styles.height = self._dlg_h + 2
+        dialog.styles.padding = 0
+        ox, oy = self._origin()
+        dialog.styles.margin = (oy, 0, 0, ox)
+        self.mount(dialog)
+        self._body = body
+        self._dialog = dialog
+        self._bars = bars
+
+    def _repaint(self) -> None:
+        """Repaint the dialog in place: new rows, same widgets.
+
+        The warning never moves rows (only the `>` mark), so the dialog
+        keeps its size and its margins — a repaint cannot misplace a
+        click. The bar follows the status.
+        """
+        if self._body is None or not self._body.is_mounted:
+            return              # mounts still queued; `_fill` paints them
+        st = self.app.state
+        over = st.overrides or {"main": "", "keys": []}
+        self._hits = []
+        rows = [backdrop(line, st.slots, self._dlg_w)
+                for line in overrides_lines(
+                    over.get("main", ""), over.get("keys", []),
+                    st.overrides_index, self._dlg_w, 99,
+                    st.status, st.slots, hits=self._hits, footer=False)]
+        folded = _fold_footer(OVERRIDES_HINTS, st.status, self._dlg_w)
+        if len(folded) != len(self._bars):
+            self._fill()       # fold moved; re-lay
+            return
+        self._body.update_rows(rows, self._dlg_w)
+        for bar, (pairs, status) in zip(self._bars, folded):
+            bar.update_footer(pairs, status)
+
+    def overrides_key(self, key: str) -> None:
+        """One keypress while this screen is top, from `Editor.on_key`.
+
+        The key arrives translated; everything routes to the one key
+        surface. Closing is the state going `overrides is None` (delete or
+        keep chose) — the app repaints the editor behind it — and anything
+        else repaints the dialog in place.
+        """
+        st = self.app.state
+        apply_key(key, st)
+        if st.quit or st.overrides is None:
+            self.dismiss(None)
+        else:
+            self._repaint()
+
+    def click_at(self, fx: int, fy: int) -> None:
+        """A click while this screen is top: a choice row confirms.
+
+        The origin is derived live from the screen size, so resizes need no
+        stored geometry. A click on the border or outside the dialog is
+        chrome and selects nothing — like every other frame, clicking
+        nothing is not an error.
+        """
+        ox, oy = self._origin()
+        lx, ly = fx - ox - 1, fy - oy - 1
+        if not (0 <= lx < self._dlg_w and 0 <= ly < self._dlg_h):
+            return
+        target = slot_at(self._hits, lx, ly)
+        if target is None:
+            return
+        st = self.app.state
+        if st.overrides is None:
+            return
+        st.overrides_index = target
+        self.overrides_key("\r")
 
 
 #: Which widget draws which block. Everything not named here is a plain `Frame`:
@@ -2301,7 +2480,8 @@ class Editor(App):
     def __init__(self, fmt="ghostty", path="/tmp/huebox.conf", slots=None,
                  write=None, backup_path=None, theme=None, library=None,
                  head_override=None, import_library=None,
-                 import_writer=None, apply=None, **kwargs):
+                 import_writer=None, apply=None, delete_overrides=None,
+                 **kwargs):
         # Before `super()`: App.__init__ calls get_css_variables() to build the
         # stylesheet, so the buffer must exist by then or the first frame is
         # painted against MISSING for every slot.
@@ -2310,6 +2490,7 @@ class Editor(App):
         self.slots = load_slots() if slots is None else dict(slots)
         self.write = write
         self.apply = apply
+        self.delete_overrides = delete_overrides
         self.backup_path = backup_path
         self.theme_name = theme
         self.library = library
@@ -2384,7 +2565,8 @@ class Editor(App):
         state = EditorState(self.slots, None, self.prompt_text,
                             self.backup_path, theme=self.theme_name,
                             fmt=self.fmt, library=self.library,
-                            path=self.path)
+                            path=self.path,
+                            delete_overrides=self.delete_overrides)
         state.prompt_name = self.prompt_text
         if self.write is not None:
             # bound to the state, not to this call's arguments: both the theme
@@ -2394,6 +2576,10 @@ class Editor(App):
         if self.apply is not None:
             state.apply = lambda values: self.apply(state.theme, state.path,
                                                     values)
+        if self.delete_overrides is not None:
+            # bound the same way: the warning names the main config its own
+            # deletion removes, and the session never imports `themes` (§13.6)
+            state.delete_overrides = self.delete_overrides
         state.sel = int(os.environ.get("HUEBOX_SEL", str(INITIAL_SEL)))
         state.mult = _mult_step(os.environ.get("HUEBOX_MULT"))
         state.status = os.environ.get("HUEBOX_STATUS", "")
@@ -3876,6 +4062,8 @@ class Editor(App):
             return          # the choice dialog re-lays itself the same way
         if self._themes_screen() is not None:
             return          # the themes dialog re-lays itself the same way
+        if self._overrides_screen() is not None:
+            return          # the warning dialog re-lays itself the same way
         if self.state is not None:
             self.request_redraw()
 
@@ -3911,6 +4099,13 @@ class Editor(App):
             event.stop()
             self.screen.themes_key(translate(event.key))
             return
+        if self._overrides_screen() is not None:
+            # The Ghostty warning owns the surface the same way: every key
+            # goes to the one key surface through the screen, which dismisses
+            # on delete/keep and repaints the dialog otherwise.
+            event.stop()
+            self.screen.overrides_key(translate(event.key))
+            return
         event.stop()
         if isinstance(self.focused, Swatches) and event.key in GRID_KEYS:
             return
@@ -3918,11 +4113,13 @@ class Editor(App):
         # `Import` button takes. While the picker owns the surface it has
         # no branch (popups never stack); `open_import` re-checks both.
         if translate(event.key) in ("i", "I"):
-            if self.state.overlay is not None:
+            if self.state.overlay is not None \
+                    or self.state.overrides is not None:
                 return
             self.open_import()
             return
         if (event.key in COLLAPSE_KEYS and self.state.overlay is None
+                and self.state.overrides is None
                 and collapsible_enabled()):
             block = COLLAPSE_KEYS[event.key]
             if block in self._collapsed:
@@ -3939,6 +4136,10 @@ class Editor(App):
                 # `t` opened the list: the popup over the editor, never a
                 # takeover — the frame behind stays as it was.
                 self.open_themes()
+            if self.state.overrides is not None:
+                # Ctrl+S / Ctrl+A shadowed its own export: the warning over
+                # the editor, never a takeover.
+                self.open_overrides()
             self.request_redraw()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -3965,6 +4166,8 @@ class Editor(App):
         else:
             if self.state.overlay is not None:
                 self.open_themes()
+            if self.state.overrides is not None:
+                self.open_overrides()
             self.redraw()
 
     def _setup_screen(self):
@@ -3996,18 +4199,23 @@ class Editor(App):
         Called after `apply_key` opens the list (`t`, the `Themes` button,
         or the harnessed first paint) — never from `build_state`, since
         pushing a screen needs a running app. Popups never stack: the
-        setup choice and the import popup each own the surface their own
-        way, and a second open while the dialog is up is a no-op.
+        setup choice, the overrides warning and the import popup each own
+        the surface their own way, and a second open while the dialog is up
+        is a no-op.
         """
         if self.state.overlay is None:
             return
         if self.state.setup is not None:
+            return
+        if self.state.overrides is not None:
             return
         if self._setup_screen() is not None:
             return
         if self._import_screen() is not None:
             return
         if self._themes_screen() is not None:
+            return
+        if self._overrides_screen() is not None:
             return
         if not self.is_running:
             return              # headless (no compositor): the list stays on
@@ -4039,18 +4247,23 @@ class Editor(App):
         Called once the session is up (never from `build_state` — pushing a
         screen needs a running app, so `on_mount` defers here), and again
         when the import popup closes still empty. Popups never stack:
-        the themes list and the import popup each own the surface their own
-        way, and a second open while a dialog is up is a no-op.
+        the themes list, the overrides warning and the import popup each own
+        the surface their own way, and a second open while a dialog is up is
+        a no-op.
         """
         if self.state.setup is None:
             return
         if self.state.overlay is not None:
+            return
+        if self.state.overrides is not None:
             return
         if self._setup_screen() is not None:
             return
         if self._import_screen() is not None:
             return
         if self._themes_screen() is not None:
+            return
+        if self._overrides_screen() is not None:
             return
         self.push_screen(SetupScreen(), self._setup_closed)
 
@@ -4070,6 +4283,64 @@ class Editor(App):
         elif self.state.import_pending:
             self.state.import_pending = False
             self.open_import()
+        else:
+            self.redraw()
+
+    def _overrides_screen(self):
+        """The overrides popup, if it is the top screen — else `None`.
+
+        One guard for every overrides check in this shell, mirroring
+        `_setup_screen` and `_themes_screen`.
+        """
+        if not self.is_running:
+            return None
+        screen = self.screen
+        return screen if isinstance(screen, OverridesScreen) else None
+
+    def open_overrides(self) -> None:
+        """Push the overrides warning: delete-or-keep over the dimmed editor.
+
+        Called after `apply_key` arms it (a save or an apply that shadowed
+        its own export) — never from `build_state`, since pushing a screen
+        needs a running app. Popups never stack: the setup choice, the themes
+        list and the import popup each own the surface their own way, and a
+        second open while the dialog is up is a no-op.
+        """
+        if self.state.overrides is None:
+            return
+        if self.state.setup is not None:
+            return
+        if self.state.overlay is not None:
+            return
+        if self._setup_screen() is not None:
+            return
+        if self._import_screen() is not None:
+            return
+        if self._themes_screen() is not None:
+            return
+        if self._overrides_screen() is not None:
+            return
+        if not self.is_running:
+            return              # headless (no compositor): the warning stays on
+                                # the state for `apply_key` to own; pushing
+                                # needs a running app like `open_setup` does
+        self.push_screen(OverridesScreen(), self._overrides_closed)
+
+    def _overrides_closed(self, result) -> None:
+        """The popup dismissed: paint the editor it stood over.
+
+        `result` is always `None` — closing is the state going
+        `overrides is None` (delete removed the lines, keep left them), so
+        this only routes: quit exits, anything else repaints the frame
+        behind it. A dialog dismissed with the warning still up (which
+        no key does) puts the popup back up, so the surface never drops.
+        """
+        if not self.is_running:
+            return
+        if self.state.quit:
+            self.exit()
+        elif self.state.overrides is not None:
+            self.open_overrides()
         else:
             self.redraw()
 
@@ -4133,11 +4404,14 @@ class Editor(App):
         injected library's formats (P5 builds it; `None` lists nothing, so
         a bare popup renders the `no themes found` row and never crashes).
         """
-        if self.state.overlay is not None or self.state.setup is not None:
+        if self.state.overlay is not None or self.state.setup is not None \
+                or self.state.overrides is not None:
             return
         if self._import_screen() is not None:
             return
         if self._themes_screen() is not None:
+            return
+        if self._overrides_screen() is not None:
             return
         library = self.import_library
         order = list(library.formats) if library is not None else []
@@ -4282,6 +4556,10 @@ class Editor(App):
             # The themes dialog answers its own clicks against its own cells.
             self.screen.click_at(fx, fy)
             return
+        if self._overrides_screen() is not None:
+            # The overrides dialog answers its own clicks against its own cells.
+            self.screen.click_at(fx, fy)
+            return
         # §15.7 — past the layout maxima the screen is fill, not a panel:
         # a click out there names no slot, like any other chrome click.
         layout_w = getattr(self, "_layout_w", None)
@@ -4344,6 +4622,8 @@ class Editor(App):
         """
         if self._setup_screen() is not None:
             return
+        if self._overrides_screen() is not None:
+            return
         if self._themes_screen() is not None:
             event.stop()
             if self.state.overlay is None:
@@ -4388,20 +4668,22 @@ class Editor(App):
 
 def run(fmt, path, slots, write, backup_path=None, theme=None, library=None,
         report=None, notes=None, import_library=None, import_writer=None,
-        apply=None):
+        apply=None, delete_overrides=None):
     """Run one session to completion, then say what it has to say.
 
     What `cli` calls. `report_session` runs here rather than in `cli` because the
     session state lives on the `Editor`, and the wording of what a user reads on
     exit is huebox's, not the driver's. `import_library` / `import_writer` are
     the import popup's injected seams (built by `cli`); `None` lists nothing
-    and writes nothing. The popup's per-theme failures join the session notes
+    and writes nothing. `delete_overrides` is the Ghostty warning's delete
+    seam (built by `cli`); `None` deletes nothing. The popup's per-theme failures join the session notes
     printed at exit — the picker-notes rule, no modal in the popup.
     """
     editor = Editor(fmt=fmt, path=path, slots=slots, write=write,
                     backup_path=backup_path, theme=theme, library=library,
                     import_library=import_library,
-                    import_writer=import_writer, apply=apply)
+                    import_writer=import_writer, apply=apply,
+                    delete_overrides=delete_overrides)
     try:
         editor.run()
     finally:

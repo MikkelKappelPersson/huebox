@@ -907,6 +907,101 @@ class ApplyKey(unittest.TestCase):
         self.assertFalse(st.dirty())
         self.assertTrue(st.written)
 
+    def overrides_state(self, over=("/tmp/main", ("background",))):
+        """A theme session whose save reports Ghostty overrides."""
+        deleted = []
+
+        def write(values):
+            return f"saved ember → ghostty", over
+
+        def delete(main):
+            deleted.append(main)
+            return f"removed 1 override(s) from {main} - theme now shows"
+
+        st = editor.EditorState(dict(FULL_SLOTS), write, theme="ember",
+                                path="/tmp/huebox/ember.toml",
+                                delete_overrides=delete)
+        st.sel = SLOTS.index("background")
+        return st, deleted
+
+    def test_a_save_with_overrides_arms_the_warning(self):
+        st, _ = self.overrides_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(SAVE, st)
+        self.assertFalse(st.dirty())
+        self.assertTrue(st.written)
+        self.assertIsNotNone(st.overrides)
+        self.assertEqual(st.overrides["main"], "/tmp/main")
+        self.assertEqual(st.overrides["keys"], ["background"])
+        # the safe default: Enter keeps
+        self.assertEqual(st.overrides_index, 1)
+
+    def test_delete_removes_and_keeps_the_buffer_clean(self):
+        st, deleted = self.overrides_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(SAVE, st)
+        editor.apply_key("y", st)
+        self.assertEqual(deleted, ["/tmp/main"])
+        self.assertIsNone(st.overrides)
+        self.assertIn("removed 1", st.status)
+        self.assertFalse(st.dirty())
+        self.assertTrue(st.written)
+
+    def test_keep_leaves_the_file_and_says_shadowed(self):
+        st, deleted = self.overrides_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(SAVE, st)
+        editor.apply_key("esc", st)
+        self.assertEqual(deleted, [])
+        self.assertIsNone(st.overrides)
+        self.assertIn("kept 1", st.status)
+        self.assertIn("shadowed", st.status)
+
+    def test_enter_confirms_the_highlighted_choice(self):
+        st, deleted = self.overrides_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(SAVE, st)
+        editor.apply_key("up", st)      # onto delete
+        self.assertEqual(st.overrides_index, 0)
+        editor.apply_key("\r", st)
+        self.assertEqual(deleted, ["/tmp/main"])
+        self.assertIsNone(st.overrides)
+
+    def test_the_warning_owns_the_surface(self):
+        st, _ = self.overrides_state()
+        self.dirty_and_adjust(st)
+        editor.apply_key(SAVE, st)
+        before = dict(st.slots)
+        editor.apply_key("e", st)       # a colour key behind the warning
+        self.assertEqual(st.slots, before)
+        self.assertIsNotNone(st.overrides)
+        self.assertFalse(st.quit)
+        editor.apply_key("esc", st)     # quits never happen behind it
+        self.assertFalse(st.quit)
+        self.assertIsNone(st.overrides)
+
+    def test_an_apply_with_overrides_stays_dirty_either_way(self):
+        pushes = []
+
+        def apply(values):
+            pushes.append(dict(values))
+            return "applied (unsaved) → ghostty", \
+                ("/tmp/main", ("background",))
+
+        st = editor.EditorState(dict(FULL_SLOTS), lambda values: None,
+                                theme="ember", path="/tmp/huebox/ember.toml",
+                                apply=apply,
+                                delete_overrides=lambda main: "removed 1")
+        st.sel = SLOTS.index("background")
+        self.dirty_and_adjust(st)
+        editor.apply_key(APPLY, st)
+        self.assertTrue(st.dirty())
+        self.assertIsNotNone(st.overrides)
+        editor.apply_key("n", st)
+        self.assertTrue(st.dirty())       # keep never touches truth
+        self.assertIsNone(st.overrides)
+        self.assertEqual(len(pushes), 1)
+
     def test_every_buffer_edit_is_written_only_on_save(self):
         st, writes = self.background_state()
         for key in ("e", "e", "d", "c"):
