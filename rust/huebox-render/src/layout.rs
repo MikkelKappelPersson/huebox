@@ -206,9 +206,7 @@ mod tests {
         let alphabet = ['a', ' ', '一', 'é', '\u{0301}', '\x1b', 'm', '[', '0'];
         for _ in 0..2000 {
             let n = next() % 12;
-            let text: String = (0..n)
-                .map(|_| alphabet[next() % alphabet.len()])
-                .collect();
+            let text: String = (0..n).map(|_| alphabet[next() % alphabet.len()]).collect();
             let cols = next() % 10;
             let cut = clip(&text, cols);
             // escapes never survive, and the cut never runs past cols

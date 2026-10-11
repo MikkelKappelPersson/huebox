@@ -7,13 +7,19 @@
 
 use huebox_core::Slots;
 
-use crate::{Cell, Row, slot_hex};
+use crate::{slot_hex, Cell, Row};
 
 /// Face letter `i` wears the base row, one hue per letter — black and
 /// white skipped like the wordmark skips them: black reads as no letter
 /// at all, white outshouts the five hues beside it.
-pub const BANNER_FACE_SLOTS: [&str; 6] =
-    ["palette-1", "palette-2", "palette-3", "palette-4", "palette-5", "palette-6"];
+pub const BANNER_FACE_SLOTS: [&str; 6] = [
+    "palette-1",
+    "palette-2",
+    "palette-3",
+    "palette-4",
+    "palette-5",
+    "palette-6",
+];
 /// Blank columns between letters.
 pub const BANNER_GAP: usize = 1;
 /// The shadow stands in the bevel's own seats: the font already offsets
@@ -38,12 +44,54 @@ pub const BANNER_BEVEL: &str = "╗║╝╚╔═";
 
 /// The shadow's texture: the same six arts with the bevel intact.
 pub const BANNER_SHADOWS: [[&str; 6]; 6] = [
-    ["██╗  ██╗", "██║  ██║", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
-    ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝"],
-    ["███████╗", "██╔════╝", "█████╗", "██╔══╝", "███████╗", "╚══════╝"],
-    ["██████╗", "██╔══██╗", "██████╔╝", "██╔══██╗", "██████╔╝", "╚═════╝"],
-    [" ██████╗", "██╔═══██╗", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝"],
-    ["██╗  ██╗", "╚██╗██╔╝", " ╚███╔╝", " ██╔██╗", "██╔╝ ██╗", "╚═╝  ╚═╝"],
+    [
+        "██╗  ██╗",
+        "██║  ██║",
+        "███████║",
+        "██╔══██║",
+        "██║  ██║",
+        "╚═╝  ╚═╝",
+    ],
+    [
+        "██╗   ██╗",
+        "██║   ██║",
+        "██║   ██║",
+        "██║   ██║",
+        "╚██████╔╝",
+        " ╚═════╝",
+    ],
+    [
+        "███████╗",
+        "██╔════╝",
+        "█████╗",
+        "██╔══╝",
+        "███████╗",
+        "╚══════╝",
+    ],
+    [
+        "██████╗",
+        "██╔══██╗",
+        "██████╔╝",
+        "██╔══██╗",
+        "██████╔╝",
+        "╚═════╝",
+    ],
+    [
+        " ██████╗",
+        "██╔═══██╗",
+        "██║   ██║",
+        "██║   ██║",
+        "╚██████╔╝",
+        " ╚═════╝",
+    ],
+    [
+        "██╗  ██╗",
+        "╚██╗██╔╝",
+        " ╚███╔╝",
+        " ██╔██╗",
+        "██╔╝ ██╗",
+        "╚═╝  ╚═╝",
+    ],
 ];
 
 /// Columns the banner stands in: letters, gaps, the shadow's fringe.
@@ -52,12 +100,19 @@ pub fn banner_width() -> usize {
     let mut x = 0;
     for (letter, silhouette) in BANNER_LETTERS.iter().zip(BANNER_SHADOWS.iter()) {
         let face_w = letter.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-        let sh_w = silhouette.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let sh_w = silhouette
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
         width = width.max(x + BANNER_DX + sh_w);
         x += face_w + BANNER_GAP;
     }
     width
 }
+
+/// One raster cell: ink, bold (faces only), glyph — `None` for air.
+type BannerCell = Option<(String, bool, char)>;
 
 /// The banner: each letter's face in its own base hue, its shadow with it.
 ///
@@ -82,18 +137,17 @@ pub fn banner_lines(slots: &Slots, cols: Option<usize>, shadow: Option<&str>) ->
         .chain(BANNER_SHADOWS.iter().map(|l| l.len()))
         .max()
         .unwrap_or(0);
-    // (ink, glyph) per cell, None for air. Faces first, so the flood fill
-    // can tell the letterforms from the air around them.
-    let mut cells: Vec<Vec<Option<(String, char)>>> =
-        vec![vec![None; width]; height + BANNER_DY];
+    // (ink, bold, glyph) per cell, None for air. Faces first, so the
+    // flood fill can tell the letterforms from the air around them.
+    // Faces wear bold like the one-line wordmark; shadows do not.
+    let mut cells: Vec<Vec<BannerCell>> = vec![vec![None; width]; height + BANNER_DY];
     let mut bounds: Vec<(usize, String)> = Vec::new();
     let mut x = 0;
     for (index, (letter, _silhouette)) in
         BANNER_LETTERS.iter().zip(BANNER_SHADOWS.iter()).enumerate()
     {
         let face = BANNER_FACE_SLOTS[index % BANNER_FACE_SLOTS.len()];
-        let bright =
-            crate::chrome::WORDMARK_SLOTS[index % crate::chrome::WORDMARK_SLOTS.len()];
+        let bright = crate::chrome::WORDMARK_SLOTS[index % crate::chrome::WORDMARK_SLOTS.len()];
         let tint = slot_hex(slots, face).to_owned();
         let shade = match shadow {
             Some(name) => slot_hex(slots, name).to_owned(),
@@ -102,7 +156,7 @@ pub fn banner_lines(slots: &Slots, cols: Option<usize>, shadow: Option<&str>) ->
         for (y, line) in letter.iter().enumerate() {
             for (dx, glyph) in line.chars().enumerate() {
                 if glyph != ' ' {
-                    cells[y][x + dx] = Some((tint.clone(), glyph));
+                    cells[y][x + dx] = Some((tint.clone(), true, glyph));
                 }
             }
         }
@@ -143,11 +197,8 @@ pub fn banner_lines(slots: &Slots, cols: Option<usize>, shadow: Option<&str>) ->
         let silhouette = &BANNER_SHADOWS[bounds.iter().position(|(bx, _)| bx == x0).unwrap()];
         for (y, line) in silhouette.iter().enumerate() {
             for (dx, glyph) in line.chars().enumerate() {
-                if BANNER_BEVEL.contains(glyph)
-                    && outside[y + BANNER_DY][x0 + dx + BANNER_DX]
-                {
-                    cells[y + BANNER_DY][x0 + dx + BANNER_DX] =
-                        Some((shade.clone(), glyph));
+                if BANNER_BEVEL.contains(glyph) && outside[y + BANNER_DY][x0 + dx + BANNER_DX] {
+                    cells[y + BANNER_DY][x0 + dx + BANNER_DX] = Some((shade.clone(), false, glyph));
                 }
             }
         }
@@ -157,17 +208,27 @@ pub fn banner_lines(slots: &Slots, cols: Option<usize>, shadow: Option<&str>) ->
 
 /// Paint cell grids to rows: adjacent cells share runs implicitly (every
 /// cell carries its own ink here), trailing air stripped.
-fn paint_cells(cells: &[Vec<Option<(String, char)>>], cols: Option<usize>) -> Vec<Row> {
+fn paint_cells(cells: &[Vec<BannerCell>], cols: Option<usize>) -> Vec<Row> {
     let mut out = Vec::new();
     for row in cells {
         let mut cells_row: Row = row
             .iter()
             .map(|cell| match cell {
-                Some((ink, glyph)) => Cell::new(*glyph, ink, ""),
+                Some((ink, bold, glyph)) => {
+                    let cell = Cell::new(*glyph, ink, "");
+                    if *bold {
+                        cell.bolded()
+                    } else {
+                        cell
+                    }
+                }
                 None => Cell::new(' ', "", ""),
             })
             .collect();
-        while cells_row.last().is_some_and(|c| c.ch == ' ' && c.fg.is_empty()) {
+        while cells_row
+            .last()
+            .is_some_and(|c| c.ch == ' ' && c.fg.is_empty())
+        {
             cells_row.pop();
         }
         out.push(match cols {
@@ -232,15 +293,14 @@ pub fn mini_banner_lines(slots: &Slots, cols: Option<usize>) -> Vec<Row> {
         return vec![];
     }
     let height = MINI_LETTERS.iter().map(|l| l.len()).max().unwrap_or(0);
-    let mut cells: Vec<Vec<Option<(String, char)>>> = vec![vec![None; MINI_WIDTH]; height];
+    let mut cells: Vec<Vec<BannerCell>> = vec![vec![None; MINI_WIDTH]; height];
     let mut x = 0;
     for (index, letter) in MINI_LETTERS.iter().enumerate() {
-        let tint = slot_hex(slots, BANNER_FACE_SLOTS[index % BANNER_FACE_SLOTS.len()])
-            .to_owned();
+        let tint = slot_hex(slots, BANNER_FACE_SLOTS[index % BANNER_FACE_SLOTS.len()]).to_owned();
         for (y, line) in letter.iter().enumerate() {
             for (dx, glyph) in line.chars().enumerate() {
                 if glyph != ' ' {
-                    cells[y][x + dx] = Some((tint.clone(), glyph));
+                    cells[y][x + dx] = Some((tint.clone(), true, glyph));
                 }
             }
         }
@@ -282,6 +342,27 @@ mod tests {
     }
 
     #[test]
+    fn banner_faces_wear_bold_shadows_do_not() {
+        // Python's raster cells are (ink, bold, glyph): faces bold like
+        // the one-line wordmark, the bevel shadow plain.
+        let s = slots();
+        let rows = banner_lines(&s, Some(96), None);
+        let faces: Vec<&crate::Cell> = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|c| c.ch != ' ' && BANNER_FACE_SLOTS.iter().any(|slot| s.get(slot) == c.fg))
+            .collect();
+        assert!(!faces.is_empty());
+        assert!(faces.iter().all(|c| c.bold));
+        let mini = mini_banner_lines(&s, Some(96));
+        assert!(mini
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|c| c.ch != ' ')
+            .all(|c| c.bold));
+    }
+
+    #[test]
     fn banner_faces_wear_the_base_row_in_order() {
         let s = slots();
         let rows = banner_lines(&s, Some(96), None);
@@ -318,7 +399,10 @@ mod tests {
     fn banner_shadow_takes_a_slot_name() {
         let s = slots();
         let rows = banner_lines(&s, Some(96), Some("palette-8"));
-        assert!(rows.iter().flat_map(|r| r.iter()).any(|c| c.fg == "#d0d0d8"));
+        assert!(rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .any(|c| c.fg == "#d0d0d8"));
     }
 
     #[test]
@@ -331,9 +415,9 @@ mod tests {
             .iter()
             .enumerate()
             .flat_map(|(y, r)| {
-                r.iter().enumerate().filter_map(move |(x, c)| {
-                    (c.ch == '█').then_some((x, y))
-                })
+                r.iter()
+                    .enumerate()
+                    .filter_map(move |(x, c)| (c.ch == '█').then_some((x, y)))
             })
             .collect();
         let width = banner_width();
@@ -366,9 +450,9 @@ mod tests {
         }
         // every painted non-face cell stands on exterior air
         for (x, y) in rows.iter().enumerate().flat_map(|(y, r)| {
-            r.iter().enumerate().filter_map(move |(x, c)| {
-                (c.ch != ' ' && c.ch != '█').then_some((x, y))
-            })
+            r.iter()
+                .enumerate()
+                .filter_map(move |(x, c)| (c.ch != ' ' && c.ch != '█').then_some((x, y)))
         }) {
             assert!(outside.contains(&(x, y)), "shadow at {x},{y} is interior");
         }
@@ -400,7 +484,10 @@ mod tests {
         let s = slots();
         let mut moved = s.clone();
         moved.set(BANNER_FACE_SLOTS[2], "#ff00ff");
-        assert_ne!(banner_lines(&s, Some(96), None), banner_lines(&moved, Some(96), None));
+        assert_ne!(
+            banner_lines(&s, Some(96), None),
+            banner_lines(&moved, Some(96), None)
+        );
         assert!(banner_lines(&moved, Some(96), None)
             .iter()
             .flat_map(|r| r.iter())
@@ -439,7 +526,10 @@ mod tests {
         let s = slots();
         let rows = mini_banner_lines(&s, Some(96));
         for slot in BANNER_FACE_SLOTS {
-            assert!(rows.iter().flat_map(|r| r.iter()).any(|c| c.fg == s.get(slot)));
+            assert!(rows
+                .iter()
+                .flat_map(|r| r.iter())
+                .any(|c| c.fg == s.get(slot)));
         }
         let mut moved = s.clone();
         moved.set(BANNER_FACE_SLOTS[2], "#ff00ff");
@@ -466,6 +556,9 @@ mod tests {
         assert!(mini_banner_lines(&s, Some(MINI_WIDTH - 1)).is_empty());
         let art = mini_banner_lines(&s, Some(MINI_WIDTH));
         assert_eq!(art.len(), 3);
-        assert_eq!(art.iter().map(|r| row_visible(r)).max().unwrap(), MINI_WIDTH);
+        assert_eq!(
+            art.iter().map(|r| row_visible(r)).max().unwrap(),
+            MINI_WIDTH
+        );
     }
 }

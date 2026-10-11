@@ -102,16 +102,22 @@ The tree must be build-ready or nothing below runs unattended:
 - [x] `reviewer`: audit against 001 §§13–14 behaviours one by one — pass,
   1 warning (is_name_char exotic-space approx, behaviour-preserving)
 
-## P5 — Ratatui shell (sequential: needs P3 + P4)
+## P5 — Ratatui shell (sequential: needs P3 + P4) — done, single worker (52 tests) + 3 review Criticals fixed at merge
 
-- [ ] `worker-a`: §2 loop + one translation table (table-tested) + footer +
+- [x] `worker-a`: §2 loop + one translation table (table-tested) + footer +
   `HUEBOX_DEBUG`/`HUEBOX_DEBUG_LOG` seam from the first UI commit
-- [ ] `worker-b`: four popups over dimmed base (never stacked/opaque) +
-  suspend-prompts + mouse-through-hits (PARALLEL with A after router shape
-  freezes — same handshake pattern as P2)
-- [ ] Gate: pty harness drives the binary through parity fixtures; clippy
+- [x] `worker-b`: folded into one P5 worker (loop/popups/prompts/mouse
+  cohere around one `App`; parallel split would serialise on it anyway)
+- [x] Gate: pty harness drives the binary through parity fixtures; clippy
   clean; background-hold feels instant before instruments confirm
-- [ ] `reviewer`: audit input routing (one handler per key) + popup rules
+  (pty smoke passed in-worktree; full harness = P6)
+- [x] `reviewer`: audit input routing (one handler per key) + popup rules —
+  3 Criticals, all fixed at merge: unknown-key sentinel `"?"`→`""`
+  (was typable into setup-name field), Ctrl+C-in-prompt now cancels via
+  `signal-hook` EINTR→None (001 §4.3; `fill_buf` loop — `read_line`
+  retries `Interrupted` forever), `Cell.bold` restores every Python `BOLD`
+  (titles, wordmark-adjacent headers, `>` marks, selected rows/cells,
+  banner faces, theme labels; harness still compares triples)
 
 ## P6 — CLI, harness, packaging, bench gate (sequential: needs everything)
 

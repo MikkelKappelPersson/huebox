@@ -15,7 +15,7 @@
 
 use huebox_core::Slots;
 
-use crate::{Row, painted, slot_hex};
+use crate::{painted, slot_hex, Row};
 
 /// The fixed sample text: nine lines spending the whole zig vocabulary.
 pub const SAMPLE_LINES: [(&str, &str); 9] = [
@@ -26,7 +26,10 @@ pub const SAMPLE_LINES: [(&str, &str); 9] = [
     ("pub fn main() !void {", "zig"),
     ("    var count: u32 = 42;   // your palette", "zig"),
     ("    if (count > 0xFF) {", "zig"),
-    ("        std.debug.print(\"{d} colours\\n\", .{count});", "zig"),
+    (
+        "        std.debug.print(\"{d} colours\\n\", .{count});",
+        "zig",
+    ),
     ("    }", "zig"),
 ];
 
@@ -89,7 +92,10 @@ const TYPES: [&str; 2] = ["u32", "void"];
 
 /// Chars the zig lexer calls operators (the fixed lines spend `= ! : >`).
 fn is_operator(ch: char) -> bool {
-    matches!(ch, '=' | '!' | '<' | '>' | ':' | '&' | '|' | '+' | '-' | '*' | '/' | '%' | '^' | '~' | '?')
+    matches!(
+        ch,
+        '=' | '!' | '<' | '>' | ':' | '&' | '|' | '+' | '-' | '*' | '/' | '%' | '^' | '~' | '?'
+    )
 }
 
 /// Split the fixed sample text into `(class, text)` tokens.
@@ -218,9 +224,7 @@ fn call_position(tokens: &[(Tok, String)], i: usize) -> bool {
     while after < tokens.len() && tokens[after].1.trim().is_empty() {
         after += 1;
     }
-    after < tokens.len()
-        && tokens[after].1 == "("
-        && !(before > 0 && tokens[before - 1].1 == "fn")
+    after < tokens.len() && tokens[after].1 == "(" && !(before > 0 && tokens[before - 1].1 == "fn")
 }
 
 /// Map one token class to the palette slot that colours it.
@@ -343,9 +347,8 @@ mod tests {
     fn full_slots() -> Slots {
         let mut s = Slots::default();
         for (i, hex) in [
-            "#1a1a20", "#c05c5c", "#5cc05c", "#c0a05c", "#5c8cc0", "#c05c8c",
-            "#5cc0c0", "#80808c", "#d0d0d8", "#e06c6c", "#6cc06c", "#e0c06c",
-            "#6c9ce0", "#e06c9c", "#6cc0c0", "#f0f0f4",
+            "#1a1a20", "#c05c5c", "#5cc05c", "#c0a05c", "#5c8cc0", "#c05c8c", "#5cc0c0", "#80808c",
+            "#d0d0d8", "#e06c6c", "#6cc06c", "#e0c06c", "#6c9ce0", "#e06c9c", "#6cc0c0", "#f0f0f4",
         ]
         .iter()
         .enumerate()
@@ -368,8 +371,7 @@ mod tests {
     #[test]
     fn splitter_spends_the_whole_lexer_vocabulary() {
         let runs = sample_runs();
-        let spent: std::collections::HashSet<&str> =
-            runs.iter().map(|(slot, _)| *slot).collect();
+        let spent: std::collections::HashSet<&str> = runs.iter().map(|(slot, _)| *slot).collect();
         let base: std::collections::HashSet<&str> =
             ["palette-2", "palette-3", "palette-5", "palette-6"]
                 .into_iter()
@@ -390,9 +392,7 @@ mod tests {
     #[test]
     fn splitter_maps_the_fixed_vocabulary() {
         let runs = sample_runs();
-        let slot_of = |want: &str| {
-            runs.iter().find(|(_, t)| t == want).map(|(s, _)| *s)
-        };
+        let slot_of = |want: &str| runs.iter().find(|(_, t)| t == want).map(|(s, _)| *s);
         assert_eq!(slot_of("u32"), Some("palette-6"));
         assert_eq!(slot_of("void"), Some("palette-6"));
         assert_eq!(slot_of("@import"), Some("palette-14"));

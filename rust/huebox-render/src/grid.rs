@@ -7,15 +7,18 @@
 
 use huebox_core::{hex_to_rgb, readable_fg, rgb_to_hsv};
 
-use crate::chrome::{CHROME_MUTED, chrome, title};
+use crate::chrome::{chrome, chrome_bold, title, CHROME_MUTED};
 use crate::diff::diff_lines;
 use crate::examples::example_lines;
 use crate::floor::backdrop;
-use crate::hsv::{HSV_FIELD, hsv_axis, hsv_numbers, hsv_readout};
+use crate::hsv::{hsv_axis, hsv_numbers, hsv_readout, HSV_FIELD};
 use crate::layout::{clip_row, row_visible, visible};
-use crate::palette::{CELL_FULL, CELL_MIN, NAMED, NAMED_ABBR_W, NAMED_COL_W, NAMED_MIN_W, PALETTE, SLOTS, named_cell, swatch_cell};
+use crate::palette::{
+    named_cell, swatch_cell, CELL_FULL, CELL_MIN, NAMED, NAMED_ABBR_W, NAMED_COL_W, NAMED_MIN_W,
+    PALETTE, SLOTS,
+};
 use crate::sample::sample_lines;
-use crate::{Cell, Row, painted, plain, slot_hex};
+use crate::{painted, plain, slot_hex, Cell, Row};
 
 /// The two colour grids as a frame of `cols` columns draws them (§15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,9 +115,27 @@ fn move_vertical(sel: usize, key: &str) -> usize {
         let col = if sel < 8 { 0 } else { 1 };
         let row = sel % 8;
         match key {
-            "left" => if col == 1 { sel - 8 } else { sel },
-            "right" => if col == 0 { sel + 8 } else { sel },
-            "up" => if row > 0 { sel - 1 } else { sel },
+            "left" => {
+                if col == 1 {
+                    sel - 8
+                } else {
+                    sel
+                }
+            }
+            "right" => {
+                if col == 0 {
+                    sel + 8
+                } else {
+                    sel
+                }
+            }
+            "up" => {
+                if row > 0 {
+                    sel - 1
+                } else {
+                    sel
+                }
+            }
             "down" => {
                 if row < 7 {
                     sel + 1
@@ -128,8 +149,20 @@ fn move_vertical(sel: usize, key: &str) -> usize {
         let pos = sel - PALETTE.len();
         let (col, row) = (pos % 2, pos / 2);
         match key {
-            "left" => if col == 1 { sel - 1 } else { sel },
-            "right" => if col == 0 { sel + 1 } else { sel },
+            "left" => {
+                if col == 1 {
+                    sel - 1
+                } else {
+                    sel
+                }
+            }
+            "right" => {
+                if col == 0 {
+                    sel + 1
+                } else {
+                    sel
+                }
+            }
             "up" => {
                 if row > 0 {
                     sel - 2
@@ -137,7 +170,13 @@ fn move_vertical(sel: usize, key: &str) -> usize {
                     7 + col * 8
                 }
             }
-            "down" => if row < 2 { sel + 2 } else { sel },
+            "down" => {
+                if row < 2 {
+                    sel + 2
+                } else {
+                    sel
+                }
+            }
             _ => sel,
         }
     }
@@ -156,7 +195,11 @@ pub fn move_slot(sel: usize, key: &str, grid: Grid) -> usize {
     let palette = sel < PALETTE.len();
     let base = if palette { 0 } else { PALETTE.len() };
     let size = if palette { PALETTE.len() } else { NAMED.len() };
-    let cols = if palette { grid.palette_cols } else { grid.named_cols };
+    let cols = if palette {
+        grid.palette_cols
+    } else {
+        grid.named_cols
+    };
     let (row, column) = ((sel - base) / cols, (sel - base) % cols);
     match key {
         "left" => {
@@ -241,7 +284,17 @@ pub fn side_named_cell(slots: &huebox_core::Slots, key: &str, sel: Option<usize>
         second.push(' ');
     }
     assert_eq!(first.chars().count(), SIDE_NAMED_W, "{first:?}");
-    [painted(&first, ink, &value), painted(&second, ink, &value)]
+    let paint = |text: &str| {
+        let row = painted(text, ink, &value);
+        // Both rows wear the slot's bold when selected, so the cell
+        // still reads as one swatch (Python's interface cell).
+        if Some(index) == sel {
+            row.into_iter().map(|cell| cell.bolded()).collect()
+        } else {
+            row
+        }
+    };
+    [paint(&first), paint(&second)]
 }
 
 /// The left panel's content: palette pairs, then interface pairs.
@@ -266,7 +319,11 @@ pub fn side_left_rows(
     } else {
         (NAMED_MIN_W, SIDE_LEFT_THIN_W)
     };
-    let content_h = if narrow { SIDE_LEFT_NARROW_ROWS } else { SIDE_LEFT_ROWS };
+    let content_h = if narrow {
+        SIDE_LEFT_NARROW_ROWS
+    } else {
+        SIDE_LEFT_ROWS
+    };
     let join = if narrow { " " } else { "  " };
     let mut out: Vec<Row> = Vec::new();
     out.push(title("Palette", slots, ""));
@@ -320,7 +377,10 @@ pub fn side_left_rows(
             }
             continue;
         }
-        let pair = [side_named_cell(slots, keys[0], sel), side_named_cell(slots, keys[1], sel)];
+        let pair = [
+            side_named_cell(slots, keys[0], sel),
+            side_named_cell(slots, keys[1], sel),
+        ];
         for (first, second) in pair[0].iter().zip(pair[1].iter()) {
             let y = y0 + out.len();
             let mut line = Row::new();
@@ -342,7 +402,9 @@ pub fn side_left_rows(
         }
     }
     assert_eq!(out.len(), content_h, "{out:?}");
-    out.into_iter().map(|line| backdrop(&line, slots, content_w)).collect()
+    out.into_iter()
+        .map(|line| backdrop(&line, slots, content_w))
+        .collect()
 }
 
 /// The right panel's content in exactly `height` rows, or `None`.
@@ -369,7 +431,11 @@ pub fn side_live_rows(
     if rest >= SIDE_DIFF_ROWS + 3 {
         diff_here = true;
         rows.push(title("live diff", slots, ""));
-        rows.extend(diff_lines(slots, Some(cols), "").into_iter().take(SIDE_DIFF_ROWS - 1));
+        rows.extend(
+            diff_lines(slots, Some(cols), "")
+                .into_iter()
+                .take(SIDE_DIFF_ROWS - 1),
+        );
         rest = height - rows.len();
     }
     let code = sample_lines(slots);
@@ -389,7 +455,11 @@ pub fn side_live_rows(
         }
         regions.push(("sample".to_owned(), at, height - at));
     }
-    Some(rows.into_iter().map(|line| backdrop(&line, slots, cols)).collect())
+    Some(
+        rows.into_iter()
+            .map(|line| backdrop(&line, slots, cols))
+            .collect(),
+    )
 }
 
 // --------------------------------------------------------------------------
@@ -421,16 +491,15 @@ pub const SELECTED_KEY_W: usize = 20;
 /// bars belongs to the bars, not the subject, so a bare row (no bars) is
 /// exactly the indent plus the title plus the pinned name field plus the
 /// hex: 40 columns stacked.
-pub fn selected_core(
-    slots: &huebox_core::Slots,
-    key: &str,
-    value: &str,
-    indent: &str,
-) -> Row {
+pub fn selected_core(slots: &huebox_core::Slots, key: &str, value: &str, indent: &str) -> Row {
     let mut row = plain(indent);
     row.extend(title("selected", slots, ""));
     row.extend(plain(" "));
-    row.extend(chrome(&format!("{key:<width$}", width = SELECTED_KEY_W), "foreground", slots));
+    row.extend(chrome(
+        &format!("{key:<width$}", width = SELECTED_KEY_W),
+        "foreground",
+        slots,
+    ));
     row.extend(plain(" "));
     row.extend(chrome(value, CHROME_MUTED, slots));
     row
@@ -444,7 +513,11 @@ pub fn selected_core(
 pub fn selected_swatch(slots: &huebox_core::Slots, key: &str, value: &str) -> Row {
     let mut row = painted("  ", "", value);
     row.extend(plain(" "));
-    row.extend(chrome(&format!("{key:<width$}", width = SELECTED_KEY_W), "foreground", slots));
+    row.extend(chrome(
+        &format!("{key:<width$}", width = SELECTED_KEY_W),
+        "foreground",
+        slots,
+    ));
     row.extend(plain(" "));
     row.extend(chrome(value, CHROME_MUTED, slots));
     row
@@ -509,24 +582,29 @@ pub fn top_meta_rows(
     spec.extend(plain("   "));
     spec.extend(chrome(&exact, CHROME_MUTED, slots));
     let meta_w = row_visible(&core).max(row_visible(&spec));
-    let theme = if !path.is_empty()
-        && label.chars().count() + 2 + path.chars().count() <= meta_w
-    {
-        let mut row = chrome(label, "foreground", slots);
+    let theme = if !path.is_empty() && label.chars().count() + 2 + path.chars().count() <= meta_w {
+        let mut row = chrome_bold(label, "foreground", slots);
         row.extend(plain("  "));
         row.extend(chrome(path, CHROME_MUTED, slots));
         row
     } else if !path.is_empty() {
         let keep = meta_w.saturating_sub(label.chars().count() + 2 + 1);
-        let mut row = chrome(label, "foreground", slots);
+        let mut row = chrome_bold(label, "foreground", slots);
         if keep > 0 {
-            let tail: String = path.chars().rev().take(keep).collect::<String>().chars().rev().collect();
+            let tail: String = path
+                .chars()
+                .rev()
+                .take(keep)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             row.extend(plain("  "));
             row.extend(chrome(&format!("…{tail}"), CHROME_MUTED, slots));
         }
         row
     } else {
-        chrome(label, "foreground", slots)
+        chrome_bold(label, "foreground", slots)
     };
     let rows = vec![
         pad_visible(clip_row(&theme, meta_w), meta_w),
@@ -560,24 +638,29 @@ pub fn top_editor_meta(
     let mut specimen = plain("  ");
     specimen.extend(painted("AaBbCc 0123", value, ""));
     let meta_w = meta_w.unwrap_or_else(|| row_visible(&core).max(row_visible(&specimen)));
-    let theme = if !path.is_empty()
-        && label.chars().count() + 2 + path.chars().count() <= meta_w
-    {
-        let mut row = chrome(label, "foreground", slots);
+    let theme = if !path.is_empty() && label.chars().count() + 2 + path.chars().count() <= meta_w {
+        let mut row = chrome_bold(label, "foreground", slots);
         row.extend(plain("  "));
         row.extend(chrome(path, CHROME_MUTED, slots));
         row
     } else if !path.is_empty() {
         let keep = meta_w.saturating_sub(label.chars().count() + 2 + 1);
-        let mut row = chrome(label, "foreground", slots);
+        let mut row = chrome_bold(label, "foreground", slots);
         if keep > 0 {
-            let tail: String = path.chars().rev().take(keep).collect::<String>().chars().rev().collect();
+            let tail: String = path
+                .chars()
+                .rev()
+                .take(keep)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             row.extend(plain("  "));
             row.extend(chrome(&format!("…{tail}"), CHROME_MUTED, slots));
         }
         row
     } else {
-        chrome(label, "foreground", slots)
+        chrome_bold(label, "foreground", slots)
     };
     let rows = vec![pad_visible(clip_row(&theme, meta_w), meta_w)];
     if stacked {
@@ -615,13 +698,19 @@ pub fn top_layout(
     if std::env::var("HUEBOX_TOP").as_deref() == Ok("0") {
         return None;
     }
-    let info_need = visible(&format!("{label}{}", if path.is_empty() { "" } else { "  " }))
-        + if path.is_empty() { 0 } else { visible(path) };
+    let info_need = visible(&format!(
+        "{label}{}",
+        if path.is_empty() { "" } else { "  " }
+    )) + if path.is_empty() { 0 } else { visible(path) };
     let info_min = visible(label).max(1);
     let (_, wide_head, _) = top_editor_meta(label, path, slots, sel, None, false);
     let (_, stacked_head, _) = top_editor_meta(label, path, slots, sel, None, true);
     let wide_need = wide_head.iter().map(|r| row_visible(r)).max().unwrap_or(0);
-    let stacked_need = stacked_head.iter().map(|r| row_visible(r)).max().unwrap_or(0);
+    let stacked_need = stacked_head
+        .iter()
+        .map(|r| row_visible(r))
+        .max()
+        .unwrap_or(0);
     for (stacked, content_need) in [(false, wide_need), (true, stacked_need)] {
         let outer_min = content_need + 2 + 2 * EDITOR_PAD_X + 2 * pad;
         for left_w in [BANNER_LEFT_W, MINI_LEFT_W, TOP_LEFT_W] {
@@ -699,7 +788,7 @@ pub fn top_right_panel_rows(
     }
     let key = SLOTS[sel.min(SLOTS.len() - 1)];
     let value = slot_hex(slots, key);
-    let mut right0 = chrome(label, "foreground", slots);
+    let mut right0 = chrome_bold(label, "foreground", slots);
     if !path.is_empty() {
         let mut tail = plain("  ");
         tail.extend(chrome(path, CHROME_MUTED, slots));
@@ -777,7 +866,10 @@ mod tests {
         assert!(!full.named_abbrev && full.named_show_hex);
         // 68 columns: two full cells need 2+64+2
         let g68 = grid_geometry(68, "  ");
-        assert_eq!((g68.named_cols, g68.named_abbrev, g68.named_show_hex), (2, false, true));
+        assert_eq!(
+            (g68.named_cols, g68.named_abbrev, g68.named_show_hex),
+            (2, false, true)
+        );
         let below = grid_geometry(67, "  ");
         assert_eq!((below.named_cols, below.named_abbrev), (2, true));
     }
@@ -808,7 +900,10 @@ mod tests {
     #[test]
     fn side_left_panel_is_seventeen_or_fourteen_rows() {
         let s = slots();
-        assert_eq!(side_left_rows(&s, Some(5), None, 0, false, true).len(), SIDE_LEFT_ROWS);
+        assert_eq!(
+            side_left_rows(&s, Some(5), None, 0, false, true).len(),
+            SIDE_LEFT_ROWS
+        );
         assert_eq!(
             side_left_rows(&s, Some(5), None, 0, true, true).len(),
             SIDE_LEFT_NARROW_ROWS

@@ -8,8 +8,8 @@
 
 use huebox_core::{hex_to_rgb, hsv_to_rgb, readable_fg, rgb_to_hex, rgb_to_hsv};
 
-use crate::chrome::{CHROME_MUTED, chrome};
-use crate::{Cell, Row, plain};
+use crate::chrome::{chrome, CHROME_MUTED};
+use crate::{plain, Cell, Row};
 
 /// The reading's own hairline through the bar: the thinnest line a cell
 /// can draw, one eighth of it wide, set into the cell the reading falls
@@ -36,7 +36,12 @@ pub const HSV_LADDER: [[usize; 3]; 3] = [HSV_FULL, HSV_COMPACT, HSV_TIGHT];
 
 /// `hue 207.0  sat 59.4%  val 93.7%` — the exact reading, below the bars.
 pub fn hsv_numbers(hue: f64, sat: f64, val: f64) -> String {
-    format!("hue {:5.1}  sat {:4.1}%  val {:4.1}%", hue * 360.0, sat * 100.0, val * 100.0)
+    format!(
+        "hue {:5.1}  sat {:4.1}%  val {:4.1}%",
+        hue * 360.0,
+        sat * 100.0,
+        val * 100.0
+    )
 }
 
 /// `width` steps of an axis, first to last, whole — 0.0 to 1.0.
@@ -91,9 +96,24 @@ fn chip(colour: impl Fn(f64) -> (f64, f64, f64), width: usize, at: f64) -> Row {
 /// grey → colour, val black → colour, each at the slot's own hue.
 fn axes(hue: f64, sat: f64, val: f64) -> [(String, f64, String, char); 3] {
     [
-        ("hue".to_owned(), hue, format!("{:>width$.0}°", hue * 360.0, width = HSV_FIELD - 1), 'h'),
-        ("sat".to_owned(), sat, format!("{:>width$.0}%", sat * 100.0, width = HSV_FIELD - 1), 's'),
-        ("val".to_owned(), val, format!("{:>width$.0}%", val * 100.0, width = HSV_FIELD - 1), 'v'),
+        (
+            "hue".to_owned(),
+            hue,
+            format!("{:>width$.0}°", hue * 360.0, width = HSV_FIELD - 1),
+            'h',
+        ),
+        (
+            "sat".to_owned(),
+            sat,
+            format!("{:>width$.0}%", sat * 100.0, width = HSV_FIELD - 1),
+            's',
+        ),
+        (
+            "val".to_owned(),
+            val,
+            format!("{:>width$.0}%", val * 100.0, width = HSV_FIELD - 1),
+            'v',
+        ),
     ]
 }
 
@@ -104,11 +124,7 @@ fn axes(hue: f64, sat: f64, val: f64) -> [(String, f64, String, char); 3] {
 /// digit. `cols` is the room the row has left: the ladder picks the first
 /// rung that fits — chrome and all — and when none does the row is empty
 /// and the caller prints the exact reading below instead.
-pub fn hsv_readout(
-    slots: &huebox_core::Slots,
-    value: &str,
-    cols: usize,
-) -> Row {
+pub fn hsv_readout(slots: &huebox_core::Slots, value: &str, cols: usize) -> Row {
     let (r, g, b) = hex_to_rgb(value);
     let (hue, sat, val) = rgb_to_hsv(r, g, b);
     let rung = HSV_LADDER
@@ -150,12 +166,7 @@ fn readout_row(
 /// Same chrome/number/ink rules as [`hsv_readout`], but a single row with
 /// an explicit `bar_w` so three stacked rows share one width. Empty when
 /// `bar_w` holds no bar.
-pub fn hsv_axis(
-    slots: &huebox_core::Slots,
-    value: &str,
-    axis: usize,
-    bar_w: usize,
-) -> Row {
+pub fn hsv_axis(slots: &huebox_core::Slots, value: &str, axis: usize, bar_w: usize) -> Row {
     if bar_w < 2 {
         return vec![];
     }
@@ -210,9 +221,14 @@ mod tests {
     #[test]
     fn readings_are_in_fixed_fields_so_bars_never_move() {
         let s = slots();
-        for value in ["#090000", "#ff0000", "#00ff00", "#00ffff", "#ffffff", "#61afef"] {
+        for value in [
+            "#090000", "#ff0000", "#00ff00", "#00ffff", "#ffffff", "#61afef",
+        ] {
             let row = hsv_readout(&s, value, wide());
-            assert_eq!(row_visible(&row) - HSV_FULL.iter().sum::<usize>(), HSV_CHROME);
+            assert_eq!(
+                row_visible(&row) - HSV_FULL.iter().sum::<usize>(),
+                HSV_CHROME
+            );
             assert_eq!(row_visible(&row), wide());
         }
         assert_eq!(HSV_CHROME, 31);
@@ -256,10 +272,7 @@ mod tests {
                     rgb_to_hex(rr, gg, bb)
                 })
                 .collect();
-            assert_eq!(
-                bar.iter().map(|c| c.bg.clone()).collect::<Vec<_>>(),
-                sweep
-            );
+            assert_eq!(bar.iter().map(|c| c.bg.clone()).collect::<Vec<_>>(), sweep);
             pos += w;
         }
     }
@@ -276,8 +289,7 @@ mod tests {
             let mut pos = 0;
             for (axis, w) in HSV_FULL.iter().enumerate() {
                 let bar = &bars[pos..pos + w];
-                let want = ((readings[axis] * (*w - 1) as f64 + 0.5).floor() as usize)
-                    .min(w - 1);
+                let want = ((readings[axis] * (*w - 1) as f64 + 0.5).floor() as usize).min(w - 1);
                 let marks: Vec<usize> = bar
                     .iter()
                     .enumerate()
@@ -356,8 +368,7 @@ mod tests {
     #[test]
     fn axis_rows_share_one_width() {
         let s = slots();
-        let rows: Vec<Row> =
-            (0..3).map(|a| hsv_axis(&s, "#61afef", a, 20)).collect();
+        let rows: Vec<Row> = (0..3).map(|a| hsv_axis(&s, "#61afef", a, 20)).collect();
         assert!(rows.iter().all(|r| row_visible(r) == row_visible(&rows[0])));
         assert!(hsv_axis(&s, "#61afef", 0, 1).is_empty());
     }

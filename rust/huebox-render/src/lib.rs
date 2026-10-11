@@ -50,15 +50,21 @@ pub struct Cell {
     pub fg: String,
     /// Background hex `"#rrggbb"`, or `""` for the buffer background.
     pub bg: String,
+    /// Bold emphasis, exactly where Python's frame wore `BOLD`: titles,
+    /// the wordmark-adjacent headers, selected rows/cells, banner faces.
+    /// The grid harness still compares `(ch, fg, bg)` triples — emphasis
+    /// rides along, never disturbing parity.
+    pub bold: bool,
 }
 
 impl Cell {
-    /// One cell with concrete paint.
+    /// One cell with concrete paint, unbolded.
     pub fn new(ch: char, fg: &str, bg: &str) -> Self {
         Self {
             ch,
             fg: fg.to_owned(),
             bg: bg.to_owned(),
+            bold: false,
         }
     }
 
@@ -68,7 +74,14 @@ impl Cell {
             ch: ' ',
             fg: String::new(),
             bg: String::new(),
+            bold: false,
         }
+    }
+
+    /// This cell with bold emphasis set.
+    pub fn bolded(mut self) -> Self {
+        self.bold = true;
+        self
     }
 }
 
@@ -121,9 +134,7 @@ pub fn painted(text: &str, fg: &str, bg: &str) -> Row {
 
 /// One unpainted run of text: a cell per char with empty paint.
 pub fn plain(text: &str) -> Row {
-    text.chars()
-        .map(|ch| Cell::new(ch, "", ""))
-        .collect()
+    text.chars().map(|ch| Cell::new(ch, "", "")).collect()
 }
 
 pub use layout::{clip, pack, visible};

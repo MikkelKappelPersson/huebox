@@ -10,18 +10,16 @@
 use huebox_core::Slots;
 
 use crate::banner::{banner_lines, mini_banner_lines};
-use crate::chrome::{CHROME_MUTED, chrome, hint_line, title, wordmark_default};
+use crate::chrome::{chrome, hint_line, title, wordmark_default, CHROME_MUTED};
 use crate::diff::diff_lines;
 use crate::examples::example_lines;
 use crate::floor::{backdrop, too_small_frame};
-use crate::grid::{
-    TOP_MIN_COLS, grid_geometry, pad_left, top_right_rows,
-};
+use crate::grid::{grid_geometry, pad_left, top_right_rows, TOP_MIN_COLS};
 use crate::hsv::{hsv_numbers, hsv_readout};
-use crate::layout::{MIN_COLS, MIN_ROWS, clip_row, row_visible};
-use crate::palette::{CELL_FULL, PALETTE, named_cell_width, palette_rows};
+use crate::layout::{clip_row, row_visible, MIN_COLS, MIN_ROWS};
+use crate::palette::{named_cell_width, palette_rows, CELL_FULL, PALETTE};
 use crate::sample::sample_lines;
-use crate::{Row, painted, plain, slot_hex};
+use crate::{painted, plain, slot_hex, Row};
 
 /// `0-7 base   8-15 bright` — a courtesy (the grid is numbered), so the
 /// first decoration the frame spends.
@@ -58,7 +56,9 @@ pub struct Hit {
 
 /// The slot a click at (`x`, `y`) lands on, or `None` for the chrome.
 pub fn slot_at(hits: &[Hit], x: usize, y: usize) -> Option<usize> {
-    hits.iter().find(|h| h.y == y && h.x0 <= x && x <= h.x1).map(|h| h.slot)
+    hits.iter()
+        .find(|h| h.y == y && h.x0 <= x && x <= h.x1)
+        .map(|h| h.slot)
 }
 
 /// The editor footer's `(key, what)` pairs — one source, two paints.
@@ -213,7 +213,11 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
     }
 
     let (per_row, show_hex) = (grid.palette_cols, grid.show_hex);
-    let cellw = if show_hex { CELL_FULL } else { crate::palette::CELL_MIN };
+    let cellw = if show_hex {
+        CELL_FULL
+    } else {
+        crate::palette::CELL_MIN
+    };
 
     marks.push(("palette".to_owned(), body.len()));
     {
@@ -231,9 +235,17 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
         row.extend(cell_row);
         body.push(row);
         let start = number * per_row;
-        for (column, index) in (start..start + per_row).take(PALETTE.len().saturating_sub(start)).enumerate() {
+        for (column, index) in (start..start + per_row)
+            .take(PALETTE.len().saturating_sub(start))
+            .enumerate()
+        {
             let x0 = indent.chars().count() + column * cellw;
-            hits.push(Hit { y, x0, x1: x0 + cellw - 1, slot: index });
+            hits.push(Hit {
+                y,
+                x0,
+                x1: x0 + cellw - 1,
+                slot: index,
+            });
         }
     }
     let legend = chrome(PALETTE_LEGEND, CHROME_MUTED, slots);
@@ -248,15 +260,10 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
         row.extend(title("Interface", slots, ""));
         body.push(row);
     }
-    for (number, cell_row) in crate::palette::interface_rows(
-        slots,
-        sel_opt,
-        per,
-        grid.named_abbrev,
-        grid.named_show_hex,
-    )
-    .into_iter()
-    .enumerate()
+    for (number, cell_row) in
+        crate::palette::interface_rows(slots, sel_opt, per, grid.named_abbrev, grid.named_show_hex)
+            .into_iter()
+            .enumerate()
     {
         let y = body.len();
         let mut row = plain(indent);
@@ -333,12 +340,20 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
     if examples >= EXAMPLES_FLOOR as isize {
         marks.push(("examples".to_owned(), body.len() + extra.len()));
         let mut row = plain(indent);
-        row.extend(title("examples", slots, "(live buffer: background / selection / cursor)"));
+        row.extend(title(
+            "examples",
+            slots,
+            "(live buffer: background / selection / cursor)",
+        ));
         extra.push(row);
         extra.extend(
-            example_lines(slots, Some(cols.saturating_sub(indent.chars().count())), indent)
-                .into_iter()
-                .take((examples as usize).saturating_sub(1)),
+            example_lines(
+                slots,
+                Some(cols.saturating_sub(indent.chars().count())),
+                indent,
+            )
+            .into_iter()
+            .take((examples as usize).saturating_sub(1)),
         );
     }
     let mut diff: Vec<Row> = Vec::new();
@@ -406,7 +421,10 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
         marks.push(("hints".to_owned(), body.len() + extra.len()));
     }
     if !opts.status.is_empty() && opts.footer {
-        marks.push(("status".to_owned(), body.len() + extra.len() + tail.len() - 1));
+        marks.push((
+            "status".to_owned(),
+            body.len() + extra.len() + tail.len() - 1,
+        ));
     }
 
     // The header draws only out of leftover: the raster banner where it
@@ -433,7 +451,11 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
             // The banner above is the only huebox on screen now: the top
             // block's wordmark stands back to air, and the right column
             // stays where it was, one banner below.
-            let palette_row = marks.iter().find(|(name, _)| name == "palette").map(|(_, r)| *r).unwrap_or(0);
+            let palette_row = marks
+                .iter()
+                .find(|(name, _)| name == "palette")
+                .map(|(_, r)| *r)
+                .unwrap_or(0);
             let mut blanked: Vec<Row> = (0..palette_row.min(3))
                 .map(|i| {
                     let mut row = pad_left(vec![]);
@@ -493,9 +515,15 @@ pub fn frame(opts: &FrameOpts, slots: &Slots) -> FrameOut {
     hits.retain(|hit| hit.y < kept);
 
     // §8.2 — every row stands on the buffer's own background
-    let painted_rows: Vec<Row> =
-        out.into_iter().map(|line| backdrop(&line, slots, cols)).collect();
-    FrameOut { rows: painted_rows, hits, regions }
+    let painted_rows: Vec<Row> = out
+        .into_iter()
+        .map(|line| backdrop(&line, slots, cols))
+        .collect();
+    FrameOut {
+        rows: painted_rows,
+        hits,
+        regions,
+    }
 }
 
 #[cfg(test)]
@@ -505,9 +533,8 @@ mod tests {
     fn slots() -> Slots {
         let mut s = Slots::default();
         for (i, h) in [
-            "#1a1a20", "#c05c5c", "#5cc05c", "#c0a05c", "#5c8cc0", "#c05c8c", "#5cc0c0",
-            "#80808c", "#d0d0d8", "#e06c6c", "#6cc06c", "#e0c06c", "#6c9ce0", "#e06c9c",
-            "#6cc0c0", "#f0f0f4",
+            "#1a1a20", "#c05c5c", "#5cc05c", "#c0a05c", "#5c8cc0", "#c05c8c", "#5cc0c0", "#80808c",
+            "#d0d0d8", "#e06c6c", "#6cc06c", "#e0c06c", "#6c9ce0", "#e06c9c", "#6cc0c0", "#f0f0f4",
         ]
         .iter()
         .enumerate()

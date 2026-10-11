@@ -10,7 +10,7 @@ use huebox_core::Slots;
 
 use crate::chrome::chrome;
 use crate::layout::{clip_row, pack, row_visible};
-use crate::{Row, painted, plain, slot_hex};
+use crate::{painted, plain, slot_hex, Row};
 
 /// The sentence every row demonstrates.
 pub const EXAMPLE_PHRASE: &str = "The quick brown fox jumps over the lazy dog";
@@ -64,7 +64,11 @@ pub fn pair_label(bg_slot: &str, fg_slot: &str) -> String {
 }
 
 /// One examples-strip row: label, slot pair, painted segments.
-type ExampleRow = (&'static str, (&'static str, &'static str), Vec<(String, String, String)>);
+type ExampleRow = (
+    &'static str,
+    (&'static str, &'static str),
+    Vec<(String, String, String)>,
+);
 
 /// The three live example rows: background, selection, cursor.
 ///
@@ -77,21 +81,28 @@ type ExampleRow = (&'static str, (&'static str, &'static str), Vec<(String, Stri
 pub fn example_lines(slots: &Slots, cols: Option<usize>, indent: &str) -> Vec<Row> {
     let fill = slot_hex(slots, "background").to_owned();
     let rows: [ExampleRow; 3] = {
-        let (sel_head, sel_text, sel_tail) =
-            split(EXAMPLE_PHRASE, SELECTION_INDEX, SELECTION_LEN);
+        let (sel_head, sel_text, sel_tail) = split(EXAMPLE_PHRASE, SELECTION_INDEX, SELECTION_LEN);
         let (cur_head, cur_char, cur_tail) = split(EXAMPLE_PHRASE, CURSOR_INDEX, 1);
         [
             (
                 "background",
                 ("background", "foreground"),
-                vec![(EXAMPLE_PHRASE.to_owned(), "background".to_owned(), "foreground".to_owned())],
+                vec![(
+                    EXAMPLE_PHRASE.to_owned(),
+                    "background".to_owned(),
+                    "foreground".to_owned(),
+                )],
             ),
             (
                 "selection-background",
                 ("selection-background", "selection-foreground"),
                 vec![
                     (sel_head, "background".to_owned(), "foreground".to_owned()),
-                    (sel_text, "selection-background".to_owned(), "selection-foreground".to_owned()),
+                    (
+                        sel_text,
+                        "selection-background".to_owned(),
+                        "selection-foreground".to_owned(),
+                    ),
                     (sel_tail, "background".to_owned(), "foreground".to_owned()),
                 ],
             ),
@@ -100,7 +111,11 @@ pub fn example_lines(slots: &Slots, cols: Option<usize>, indent: &str) -> Vec<Ro
                 ("cursor-color", "cursor-text"),
                 vec![
                     (cur_head, "background".to_owned(), "foreground".to_owned()),
-                    (cur_char, "cursor-color".to_owned(), "cursor-text".to_owned()),
+                    (
+                        cur_char,
+                        "cursor-color".to_owned(),
+                        "cursor-text".to_owned(),
+                    ),
                     (cur_tail, "background".to_owned(), "foreground".to_owned()),
                 ],
             ),
@@ -110,11 +125,22 @@ pub fn example_lines(slots: &Slots, cols: Option<usize>, indent: &str) -> Vec<Ro
     let label_width = if pairs { PAIR_WIDTH } else { LABEL_WIDTH };
     let mut out = Vec::new();
     for (name, pair, segments) in rows {
-        let label = if pairs { pair_label(pair.0, pair.1) } else { name.to_owned() };
+        let label = if pairs {
+            pair_label(pair.0, pair.1)
+        } else {
+            name.to_owned()
+        };
         let mut head = plain(indent);
-        head.extend(chrome(&format!("{label:<label_width$} "), "foreground", slots));
+        head.extend(chrome(
+            &format!("{label:<label_width$} "),
+            "foreground",
+            slots,
+        ));
         let room = cols.map(|c| c.saturating_sub(row_visible(&head)));
-        let plain_text: String = segments.iter().map(|(chunk, _, _)| chunk.as_str()).collect();
+        let plain_text: String = segments
+            .iter()
+            .map(|(chunk, _, _)| chunk.as_str())
+            .collect();
         // pack keeps whole words: fold instead of cutting mid-word
         let folded = match room {
             Some(r) => pack(
@@ -237,18 +263,20 @@ mod tests {
     fn selection_and_cursor_ride_on_their_colours() {
         let s = slots();
         let rows = example_lines(&s, Some(100), "  ");
-        let sel: Vec<(&String, &String)> = rows[1]
-            .iter()
-            .map(|c| (&c.bg, &c.fg))
-            .collect();
+        let sel: Vec<(&String, &String)> = rows[1].iter().map(|c| (&c.bg, &c.fg)).collect();
         let span: String = rows[1].iter().map(|c| c.ch).collect();
         let at = span.find(SELECTED_TEXT).unwrap();
         let cells: Vec<char> = span.chars().collect();
         let idx: usize = cells[..].iter().take(at).count();
         // the selected words sit on selection-background…
-        assert!(rows[1][idx..idx + SELECTED_TEXT.len()].iter().all(|c| c.bg == "#2a2a34" && c.fg == "#f0f0f8"));
+        assert!(rows[1][idx..idx + SELECTED_TEXT.len()]
+            .iter()
+            .all(|c| c.bg == "#2a2a34" && c.fg == "#f0f0f8"));
         // …exactly once, and the tail is background again
-        assert_eq!(rows[1].iter().filter(|c| c.bg == "#2a2a34").count(), SELECTED_TEXT.len());
+        assert_eq!(
+            rows[1].iter().filter(|c| c.bg == "#2a2a34").count(),
+            SELECTED_TEXT.len()
+        );
         let _ = sel;
         let cur: String = rows[2].iter().map(|c| c.ch).collect();
         let at = cur.find(CURSOR_CHAR).unwrap();
@@ -296,7 +324,10 @@ mod tests {
     fn without_width_rows_are_labelled_but_unfilled() {
         let s = Slots::default();
         let rows = example_lines(&s, None, "  ");
-        let labels: Vec<String> = rows.iter().map(|r| text(r).split_whitespace().next().unwrap().to_owned()).collect();
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|r| text(r).split_whitespace().next().unwrap().to_owned())
+            .collect();
         assert_eq!(
             labels,
             vec![
@@ -316,8 +347,8 @@ mod tests {
         let s = slots();
         let rows = example_lines(&s, Some(crate::layout::MIN_COLS - 2), "  ");
         let row = &rows[2];
-        assert!(row.iter().any(|c| c.ch.to_string() == CURSOR_CHAR
-            && c.bg == "#e6e6ea"
-            && c.fg == "#101014"));
+        assert!(row
+            .iter()
+            .any(|c| c.ch.to_string() == CURSOR_CHAR && c.bg == "#e6e6ea" && c.fg == "#101014"));
     }
 }

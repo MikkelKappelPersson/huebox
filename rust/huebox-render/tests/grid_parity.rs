@@ -6,7 +6,7 @@
 //! grids — same rows, same cells, same hits, same regions. Any visual
 //! drift fails here, not in a review.
 
-use huebox_render::frame::{FrameOpts, frame};
+use huebox_render::frame::{frame, FrameOpts};
 use huebox_render::{clip, pack, visible};
 
 // -- std-only JSON reader (test code only) -------------------------------
@@ -61,7 +61,10 @@ struct Parser<'a> {
 }
 
 fn parse(text: &str) -> J {
-    let mut p = Parser { bytes: text.as_bytes(), pos: 0 };
+    let mut p = Parser {
+        bytes: text.as_bytes(),
+        pos: 0,
+    };
     p.value()
 }
 
@@ -158,10 +161,8 @@ impl<'a> Parser<'a> {
                         b't' => out.push('\t'),
                         b'r' => out.push('\r'),
                         b'u' => {
-                            let hex = std::str::from_utf8(
-                                &self.bytes[self.pos + 1..self.pos + 5],
-                            )
-                            .unwrap();
+                            let hex = std::str::from_utf8(&self.bytes[self.pos + 1..self.pos + 5])
+                                .unwrap();
                             let cp = u32::from_str_radix(hex, 16).unwrap();
                             // fixtures never emit lone surrogates
                             out.push(char::from_u32(cp).unwrap());
@@ -188,7 +189,10 @@ impl<'a> Parser<'a> {
         {
             self.pos += 1;
         }
-        std::str::from_utf8(&self.bytes[start..self.pos]).unwrap().parse().unwrap()
+        std::str::from_utf8(&self.bytes[start..self.pos])
+            .unwrap()
+            .parse()
+            .unwrap()
     }
 }
 
@@ -236,7 +240,11 @@ fn frames_match_python_cell_for_cell() {
             assert_eq!(row.len(), want.len(), "{name} row {y}: width");
             for (x, (cell, triple)) in row.iter().zip(want.iter()).enumerate() {
                 let triple = triple.arr();
-                assert_eq!(cell.ch.to_string(), triple[0].text(), "{name} ({x},{y}): char");
+                assert_eq!(
+                    cell.ch.to_string(),
+                    triple[0].text(),
+                    "{name} ({x},{y}): char"
+                );
                 assert_eq!(cell.fg, triple[1].text(), "{name} ({x},{y}): fg");
                 assert_eq!(cell.bg, triple[2].text(), "{name} ({x},{y}): bg");
             }
@@ -245,13 +253,21 @@ fn frames_match_python_cell_for_cell() {
         assert_eq!(out.hits.len(), hits.len(), "{name}: hit count");
         for (hit, want) in out.hits.iter().zip(hits.iter()) {
             let want = want.arr();
-            assert_eq!([hit.y, hit.x0, hit.x1, hit.slot], [want[0].num(), want[1].num(), want[2].num(), want[3].num()], "{name}: hit");
+            assert_eq!(
+                [hit.y, hit.x0, hit.x1, hit.slot],
+                [want[0].num(), want[1].num(), want[2].num(), want[3].num()],
+                "{name}: hit"
+            );
         }
         let regions = fr.get("regions").arr();
         assert_eq!(out.regions.len(), regions.len(), "{name}: region count");
         for ((n, first, count), want) in out.regions.iter().zip(regions.iter()) {
             let want = want.arr();
-            assert_eq!((n.as_str(), *first, *count), (want[0].text(), want[1].num(), want[2].num()), "{name}: region");
+            assert_eq!(
+                (n.as_str(), *first, *count),
+                (want[0].text(), want[1].num(), want[2].num()),
+                "{name}: region"
+            );
         }
     }
 }
@@ -262,7 +278,11 @@ fn clip_matches_python_on_adversarial_strings() {
     let corpus = parse(&text);
     for case in corpus.arr() {
         let input = case.get("input").text();
-        assert_eq!(visible(input), case.get("visible").num(), "{input:?}: visible");
+        assert_eq!(
+            visible(input),
+            case.get("visible").num(),
+            "{input:?}: visible"
+        );
         if let J::Obj(pairs) = case.get("clips") {
             for (cols, want) in pairs {
                 let cols: usize = cols.parse().unwrap();
@@ -277,12 +297,15 @@ fn pack_matches_python_vectors() {
     let text = std::fs::read_to_string(fixture_dir().join("pack_cases.json")).unwrap();
     let cases = parse(&text);
     for case in cases.arr() {
-        let items: Vec<String> =
-            case.get("items").arr().iter().map(|i| i.text().to_owned()).collect();
+        let items: Vec<String> = case
+            .get("items")
+            .arr()
+            .iter()
+            .map(|i| i.text().to_owned())
+            .collect();
         let cols = case.get("cols").num();
         let sep = case.get("sep").text();
-        let want: Vec<&str> =
-            case.get("lines").arr().iter().map(|i| i.text()).collect();
+        let want: Vec<&str> = case.get("lines").arr().iter().map(|i| i.text()).collect();
         assert_eq!(pack(items, cols, sep), want);
     }
 }

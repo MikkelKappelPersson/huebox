@@ -1,0 +1,15 @@
+[package]
+name = "huebox-app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "huebox_app"
+path = "src/lib.rs"
+
+[dependencies]
+huebox-core = { path = "../huebox-core" }
+huebox-render = { path = "../huebox-render" }
+huebox-editor = { path = "../huebox-editor" }
+ratatui = { version = "0.30", features = ["crossterm"] }
+signal-hook = "0.3"

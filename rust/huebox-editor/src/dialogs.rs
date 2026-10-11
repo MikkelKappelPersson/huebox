@@ -5,15 +5,17 @@
 //! `huebox/editor.py`. Where the Python builds ANSI strings, these build
 //! [`huebox_render`] cell rows plus the row-announced hits — cells are
 //! built styled, never serialised and reparsed. Same windows, same marks,
-//! same footers; bold does not survive (the cell model carries no bold —
-//! selection reads through `>` and text, not weight).
+//! same footers, same bold (`Cell.bold` on titles, `>` marks and
+//! selected labels, exactly where Python wore `BOLD`).
 //!
 //! The import popup's rows live in the compositor (P5): behaviour-only
 //! [`crate::import`] owns its cursor/selection/confirm, and this module
 //! owns nothing of its paint.
 
 use huebox_core::Slots;
-use huebox_render::chrome::{chrome, hint_line, title, wordmark_default, CHROME_MUTED};
+use huebox_render::chrome::{
+    chrome, chrome_bold, hint_line, title, wordmark_default, CHROME_MUTED,
+};
 use huebox_render::frame::Hit;
 use huebox_render::layout::clip_row;
 use huebox_render::{plain, Row};
@@ -171,15 +173,21 @@ pub fn theme_lines(
                 x1: cols.saturating_sub(1),
                 slot: row,
             });
+            // The `>` mark and the selected name wear bold like
+            // Python's `chrome(..., bold=True)` / `bold=selected`.
             let mut line = plain("  ");
             if row == index {
-                line.extend(chrome(">", "foreground", slots));
+                line.extend(chrome_bold(">", "foreground", slots));
             }
             if name == current {
                 line.extend(chrome("*", CHROME_MUTED, slots));
             }
             line.extend(plain(" "));
-            line.extend(chrome(name, "foreground", slots));
+            if row == index {
+                line.extend(chrome_bold(name, "foreground", slots));
+            } else {
+                line.extend(chrome(name, "foreground", slots));
+            }
             out.push(line);
         }
         if start > 0 || names.len() > start + room {
@@ -224,14 +232,27 @@ pub fn theme_hits(
 /// One setup row: `> label (key)`, the selected choice marked.
 fn setup_row(choice: usize, selected: bool, slots: &Slots) -> Row {
     let mut row = plain("  ");
-    row.extend(plain(if selected { "> " } else { "  " }));
-    // Name and key in the session foreground (bold does not survive the
-    // cell model; the `>` carries the selection).
-    let mut text = chrome(
-        &format!("{}  ({})", SETUP_LABELS[choice], SETUP_KEYS[choice]),
-        "foreground",
-        slots,
-    );
+    // The `>` mark and the selected label wear bold like Python's
+    // `chrome(..., bold=True)` / `bold=selected`.
+    if selected {
+        row.extend(chrome_bold(">", "foreground", slots));
+        row.extend(plain(" "));
+    } else {
+        row.extend(plain("  "));
+    }
+    let mut text = if selected {
+        chrome_bold(
+            &format!("{}  ({})", SETUP_LABELS[choice], SETUP_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    } else {
+        chrome(
+            &format!("{}  ({})", SETUP_LABELS[choice], SETUP_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    };
     row.append(&mut text);
     row
 }
@@ -271,8 +292,10 @@ pub fn setup_lines(
             },
             vec![],
             {
+                // The field wears bold like Python's `chrome(name + "_",
+                // bold=True)`; the `>` mark stays plain.
                 let mut row = plain("  > ");
-                row.extend(chrome(&format!("{name}_"), "foreground", slots));
+                row.extend(chrome_bold(&format!("{name}_"), "foreground", slots));
                 row
             },
             vec![],
@@ -329,12 +352,27 @@ pub fn setup_hits(index: usize, cols: usize, rows: usize, status: &str, slots: &
 /// One overrides row: `> label (key)`, the selected choice marked.
 fn overrides_row(choice: usize, selected: bool, slots: &Slots) -> Row {
     let mut row = plain("  ");
-    row.extend(plain(if selected { "> " } else { "  " }));
-    let mut text = chrome(
-        &format!("{}  ({})", OVERRIDES_LABELS[choice], OVERRIDES_KEYS[choice]),
-        "foreground",
-        slots,
-    );
+    // The `>` mark and the selected label wear bold like Python's
+    // `chrome(..., bold=True)` / `bold=selected`.
+    if selected {
+        row.extend(chrome_bold(">", "foreground", slots));
+        row.extend(plain(" "));
+    } else {
+        row.extend(plain("  "));
+    }
+    let mut text = if selected {
+        chrome_bold(
+            &format!("{}  ({})", OVERRIDES_LABELS[choice], OVERRIDES_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    } else {
+        chrome(
+            &format!("{}  ({})", OVERRIDES_LABELS[choice], OVERRIDES_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    };
     row.append(&mut text);
     row
 }

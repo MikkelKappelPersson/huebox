@@ -7,8 +7,8 @@
 
 use huebox_core::Slots;
 
-use crate::layout::{MIN_COLS, MIN_ROWS, clip_row, row_visible};
-use crate::{Cell, Row, slot_hex};
+use crate::layout::{clip_row, row_visible, MIN_COLS, MIN_ROWS};
+use crate::{slot_hex, Cell, Row};
 
 /// One frame row, standing on the buffer's own background (§8.2).
 ///
@@ -44,7 +44,10 @@ pub fn too_small_frame(cols: usize) -> Row {
     let hint = format!("terminal too small — need {MIN_COLS}x{MIN_ROWS}");
     let pad = " ".repeat(cols.saturating_sub(hint.chars().count()) / 2);
     let text = format!("{pad}{hint}");
-    crate::layout::clip(&text, cols).chars().map(|ch| Cell::new(ch, "", "")).collect()
+    crate::layout::clip(&text, cols)
+        .chars()
+        .map(|ch| Cell::new(ch, "", ""))
+        .collect()
 }
 
 #[cfg(test)]
@@ -128,7 +131,9 @@ mod tests {
         let s = slots();
         let row = backdrop(&crate::chrome::chrome("aa", "foreground", &s), &s, 30);
         assert_eq!(text(&row).len(), 30);
-        assert!(row[2..].iter().all(|c| c.bg == "#101014" && c.fg.is_empty()));
+        assert!(row[2..]
+            .iter()
+            .all(|c| c.bg == "#101014" && c.fg.is_empty()));
     }
 
     #[test]

@@ -9,7 +9,7 @@
 use huebox_core::Slots;
 
 use crate::layout::clip_row;
-use crate::{Row, painted, plain, slot_hex};
+use crate::{painted, plain, slot_hex, Row};
 
 /// The `@@` that opens a hunk.
 pub const DIFF_MARKS: &str = "palette-6";
@@ -86,7 +86,10 @@ mod tests {
         let rows = diff_lines(&s, Some(100), DIFF_INDENT);
         assert_eq!(rows.len(), DIFF_BODY.len() + 1);
         let plain: Vec<String> = rows.iter().map(text).collect();
-        assert_eq!(plain[0], format!("    {} {} {}", DIFF_HUNK.0, DIFF_HUNK.1, DIFF_HUNK.2));
+        assert_eq!(
+            plain[0],
+            format!("    {} {} {}", DIFF_HUNK.0, DIFF_HUNK.1, DIFF_HUNK.2)
+        );
         assert!(plain[1].trim_start().starts_with('-'));
         assert!(plain[2].trim_start().starts_with('+'));
     }

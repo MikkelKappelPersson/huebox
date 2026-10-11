@@ -8,7 +8,7 @@
 
 use huebox_core::Slots;
 
-use crate::{Row, painted, plain, slot_hex};
+use crate::{painted, plain, slot_hex, Row};
 
 /// `arrows`, `Ctrl+S`: the half you look for.
 pub const CHROME_KEY: &str = "palette-11";
@@ -33,12 +33,20 @@ pub const WORDMARK_SLOTS: [&str; 6] = [
 ///
 /// Everything the frame says about itself comes through here, so a chrome
 /// slot the buffer moves repaints the chrome on the same frame as
-/// everything else (§14.1). The Python `bold` has no cell to live in —
-/// [`Cell`](crate::Cell) is `(ch, fg, bg)` and the grid harness compares
-/// exactly that triple — so downstream maps emphasis from position, and
-/// this function takes none.
+/// everything else (§14.1). Unbolded; [`chrome_bold`] is the `bold=True`
+/// twin for headers, marks and selected labels.
 pub fn chrome(text: &str, slot: &str, slots: &Slots) -> Row {
     painted(text, slot_hex(slots, slot), "")
+}
+
+/// One run of frame text with bold emphasis: Python's
+/// `chrome(text, slot, slots, bold=True)` — titles, the wordmark, `>`
+/// marks and selected labels. Same paint, `bold` set on every cell.
+pub fn chrome_bold(text: &str, slot: &str, slots: &Slots) -> Row {
+    painted(text, slot_hex(slots, slot), "")
+        .into_iter()
+        .map(|cell| cell.bolded())
+        .collect()
 }
 
 /// The `huebox` wordmark: one letter in one colour, in palette order.
@@ -58,12 +66,13 @@ pub fn wordmark_default(slots: &Slots) -> Row {
     wordmark(slots, WORDMARK)
 }
 
-/// A frame header: the word in the theme's foreground, its aside muted.
+/// A frame header: the word in the theme's foreground and bold, its
+/// aside muted.
 ///
 /// `note` is the parenthetical beside it — `(live buffer: …)` — which is
-/// commentary, so it recedes.
+/// commentary, so it recedes (unbolded).
 pub fn title(word: &str, slots: &Slots, note: &str) -> Row {
-    let mut row = chrome(word, "foreground", slots);
+    let mut row = chrome_bold(word, "foreground", slots);
     if !note.is_empty() {
         row.extend(plain(" "));
         row.extend(chrome(note, CHROME_MUTED, slots));
@@ -183,10 +192,15 @@ mod tests {
         let row = title("palette", &s, "");
         assert_eq!(row.iter().map(|c| c.ch).collect::<String>(), "palette");
         assert!(row.iter().all(|c| c.fg == "#e6e6ea"));
+        // the word wears bold like Python's `chrome(word, bold=True)` …
+        assert!(row.iter().all(|c| c.bold));
         let row = title("examples", &s, "(live buffer: ...)");
         let text: String = row.iter().map(|c| c.ch).collect();
         assert_eq!(text, "examples (live buffer: ...)");
         assert!(row[9..].iter().all(|c| c.fg == "#d0d0d8"));
+        // … while the muted aside recedes unbolded.
+        assert!(row[..8].iter().all(|c| c.bold));
+        assert!(row[9..].iter().all(|c| !c.bold));
     }
 
     #[test]

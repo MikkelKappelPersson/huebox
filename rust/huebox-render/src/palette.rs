@@ -6,9 +6,9 @@
 //! bare frame calls these with its live [`Grid`](crate::grid::Grid)
 //! shares, the popup with its own compact shares.
 
-use huebox_core::{Slots, readable_fg};
+use huebox_core::{readable_fg, Slots};
 
-use crate::{Row, painted, slot_hex};
+use crate::{painted, slot_hex, Row};
 
 /// A palette swatch with its hex; the frame drops the hex before it drops
 /// a swatch, and gives up cells before width.
@@ -125,7 +125,13 @@ pub fn swatch_cell(
     } else {
         format!(" {mark}{index:>2}")
     };
-    painted(&ljust(&label, cellw), readable_fg(&value), &value)
+    let row = painted(&ljust(&label, cellw), readable_fg(&value), &value);
+    // The selected swatch wears bold like Python's `BOLD if sel == index`.
+    if Some(index) == sel {
+        row.into_iter().map(|cell| cell.bolded()).collect()
+    } else {
+        row
+    }
 }
 
 /// The painted width of one interface cell.
@@ -173,11 +179,17 @@ pub fn named_cell(
     } else {
         format!(" {mark}{name}")
     };
-    painted(
+    let row = painted(
         &ljust(&label, named_cell_width(abbrev, show_hex)),
         readable_fg(&value),
         &value,
-    )
+    );
+    // The selected cell wears bold like Python's `style`.
+    if Some(index) == sel {
+        row.into_iter().map(|cell| cell.bolded()).collect()
+    } else {
+        row
+    }
 }
 
 /// The 16 palette slots as rows of swatch cells — the compact form.
@@ -218,7 +230,10 @@ pub fn interface_rows(
         .step_by(per.max(1))
         .map(|start| {
             let mut row = Row::new();
-            for (n, key) in NAMED[start..(start + per).min(NAMED.len())].iter().enumerate() {
+            for (n, key) in NAMED[start..(start + per).min(NAMED.len())]
+                .iter()
+                .enumerate()
+            {
                 if n > 0 {
                     row.extend(painted("  ", "", ""));
                 }
@@ -285,6 +300,14 @@ mod tests {
         assert_eq!(t.len(), CELL_FULL);
         assert!(t.starts_with(" > 4 "));
         assert!(row.iter().all(|c| c.bg == crate::MISSING));
+        // the selected swatch wears bold like Python's `BOLD if sel`.
+        assert!(row.iter().all(|c| c.bold));
+        let row = swatch_cell(&s, 4, Some(5), true, None);
+        assert!(row.iter().all(|c| !c.bold));
+        let row = named_cell(&s, "background", Some(16), false, true);
+        assert!(row.iter().all(|c| c.bold));
+        let row = named_cell(&s, "background", None, false, true);
+        assert!(row.iter().all(|c| !c.bold));
         let row = swatch_cell(&s, 4, None, false, None);
         let t: String = row.iter().map(|c| c.ch).collect();
         assert_eq!(t.len(), CELL_MIN);
