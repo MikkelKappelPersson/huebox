@@ -128,6 +128,56 @@ pub fn bar_line(fold: &FooterFold, cols: usize, slots: &Slots) -> Line<'static> 
     line
 }
 
+/// The main editor bar as ONE line: every pair plus the status,
+/// hard-cut at `cols` — the Textual footer this mirrors never folds,
+/// it truncates mid-row at the window edge. Dialog bars keep the
+/// folding [`bar_lines`]; only the bottom-docked editor bar stands.
+pub fn bar_line_single(
+    pairs: &[(&str, &str)],
+    status: &str,
+    cols: usize,
+    slots: &Slots,
+) -> Line<'static> {
+    let all: Vec<(String, String)> = pairs
+        .iter()
+        .map(|(key, what)| ((*key).to_owned(), (*what).to_owned()))
+        .collect();
+    let refs: Vec<(String, String)> = all;
+    let fold = FooterFold {
+        pairs: refs,
+        status: if status.is_empty() {
+            None
+        } else {
+            Some(status.to_owned())
+        },
+    };
+    // `cols: 0` skips `bar_line`'s fill-to-width padding, leaving the
+    // full unpadded row to cut down below.
+    let line = bar_line(&fold, 0, slots);
+    let mut spans: Vec<Span<'static>> = vec![];
+    let mut taken = 0usize;
+    for span in line.spans {
+        if taken >= cols {
+            break;
+        }
+        let rest = cols - taken;
+        let text: String = span.content.chars().take(rest).collect();
+        taken += text.chars().count();
+        if text.is_empty() {
+            continue;
+        }
+        spans.push(Span::styled(text, span.style));
+    }
+    let bg = hex_color(slot_hex(slots, "background"));
+    while taken < cols {
+        spans.push(Span::styled(" ", Style::new().bg(bg)));
+        taken += 1;
+    }
+    let mut line = Line::from(spans);
+    line.style = Style::new().bg(bg);
+    line
+}
+
 /// The folded bar as lines, bottom-docked by the caller.
 pub fn bar_lines(
     pairs: &[(&str, &str)],

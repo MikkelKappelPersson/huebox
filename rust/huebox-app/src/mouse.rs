@@ -1,16 +1,25 @@
 //! The mouse: an alternative way to point at something on the frame.
 //!
-//! Ports `on_click` / `_scroll_picker` (§4.3.2): a click resolves through
-//! the same row-announced hits plus `slot_at`, then goes through the
-//! `apply_key` path — never directly at a colour or a frame. Three things
-//! are deliberately absent, as in the Python shell:
+//! Ports `on_click` / `_scroll_picker` plus the `Panel` / button clicks
+//! (§4.3.2): a click resolves through the same row-announced hits plus
+//! `slot_at`, then goes through the `apply_key` path — never directly at
+//! a colour or a frame. Three things are deliberately absent, as in the
+//! Python shell:
 //!
 //! * Chrome clicks do nothing: clicking nothing is not an error and does
-//!   not move the selection.
+//!   not move the selection. Panel borders, titles, air and every other
+//!   top/frame row outside hits and buttons is chrome — a border click
+//!   routes to no-op, never to a slot.
 //! * The wheel does nothing in the editor: only the picker and the import
 //!   list scroll, because only they have a window.
 //! * Nothing hovers or highlights on its own: the `>` mark already says
 //!   where the selection is.
+//!
+//! Buttons resolve through the same key surface as the keyboard, never
+//! direct state edits: `Themes` is exactly what `t` does, `Import`
+//! exactly what `i` does (both via [`route_key`]), and the import
+//! dialog's `Import` / `Cancel` are click-only mirrors of its `Enter` /
+//! `Esc` bindings through the same call.
 //!
 //! Coordinates are frame-relative; dialog origins recompute live from the
 //! cached layout, exactly as the popup screens recompute theirs — no
@@ -28,26 +37,74 @@ pub fn click_at(shell: &mut Shell, x: usize, y: usize) -> Outcome {
     match shell.screen() {
         Screen::Import => click_import(shell, x, y),
         Screen::Setup | Screen::Themes | Screen::Overrides => click_dialog(shell, x, y),
-        Screen::Editor => {
-            // A swatch or an interface cell: selection, not an edit —
-            // no undo, no status, no arm. Chrome: not an error.
-            if let Some(slot) = slot_at(&shell.hits, x, y) {
-                click_slot(&mut shell.state, slot);
-            }
-            Outcome::Continue
-        }
+        Screen::Editor => click_editor(shell, x, y),
     }
 }
 
-/// A click while the import popup is top: a theme row toggles, a group
-/// title collapses/expands — the mouse spellings of space and arrows.
+/// A click on the editor frame: top buttons first, then slots, else chrome.
+///
+/// `Themes` is exactly what `t` does and `Import` exactly what `i` does
+/// — both through [`route_key`], so the button and the key cannot disagree
+/// about what the picker/popup is. Never a direct state edit. Border,
+/// title, air and every other chrome cell selects nothing.
+fn click_editor(shell: &mut Shell, x: usize, y: usize) -> Outcome {
+    if let Some(top) = shell.top.clone() {
+        if in_rect(&top.themes_btn, x, y) {
+            return route_key(shell, "t");
+        }
+        if in_rect(&top.import_btn, x, y) {
+            return route_key(shell, "i");
+        }
+    }
+    // A live header toggles its block shut/open — the mouse spelling of
+    // `E`/`D`/`C`, through the same key surface so click and key cannot
+    // disagree. Never a direct state edit.
+    if let Some(name) = shell
+        .live_headers
+        .iter()
+        .find(|(hy, x0, x1, _)| *hy as usize == y && (*x0 as usize) <= x && x < (*x1 as usize))
+        .map(|(_, _, _, name)| name.clone())
+    {
+        let key = crate::panel::COLLAPSE_KEYS
+            .iter()
+            .find(|(_, block)| *block == name)
+            .map(|(key, _)| *key)
+            .unwrap_or("E");
+        return route_key(shell, key);
+    }
+    // A swatch or an interface cell: selection, not an edit —
+    // no undo, no status, no arm. Chrome: not an error.
+    if let Some(slot) = slot_at(&shell.hits, x, y) {
+        click_slot(&mut shell.state, slot);
+    }
+    Outcome::Continue
+}
+
+/// A click while the import popup is top: footer buttons first (click-only
+/// mirrors of `Enter` / `Esc` through the same key surface), then a theme
+/// row toggles — the mouse spelling of cursor-move + toggle.
 fn click_import(shell: &mut Shell, x: usize, y: usize) -> Outcome {
+    if let Some(layout) = shell.popup.clone() {
+        if layout.kind == PopupKind::Import {
+            if let Some(rect) = layout.confirm_btn {
+                if in_rect(&rect, x, y) {
+                    return route_key(shell, "\r");
+                }
+            }
+            if let Some(rect) = layout.cancel_btn {
+                if in_rect(&rect, x, y) {
+                    return route_key(shell, "esc");
+                }
+            }
+        }
+    }
     let Some(layout) = shell.popup.as_ref() else {
         return Outcome::Continue;
     };
     if layout.kind != PopupKind::Import {
         return Outcome::Continue;
     }
+    // (Footer buttons already routed above; what follows is list rows.)
     let (ox, oy) = (layout.ox, layout.oy);
     let (Some(lx), Some(ly)) = (x.checked_sub(ox + 1), y.checked_sub(oy + 1)) else {
         return Outcome::Continue;
@@ -96,6 +153,17 @@ fn click_dialog(shell: &mut Shell, x: usize, y: usize) -> Outcome {
     // `click_*` already confirmed through `apply_key`; settle routes the
     // outcome (quit, or the import popup after a setup choice).
     settle(shell)
+}
+
+/// Whether frame-relative (`x`, `y`) lands inside `rect`.
+fn in_rect(rect: &ratatui::layout::Rect, x: usize, y: usize) -> bool {
+    let (rx, ry, rw, rh) = (
+        rect.x as usize,
+        rect.y as usize,
+        rect.width as usize,
+        rect.height as usize,
+    );
+    x >= rx && x < rx + rw && y >= ry && y < ry + rh
 }
 
 /// A wheel detent: `delta > 0` scrolls down, `< 0` scrolls up.

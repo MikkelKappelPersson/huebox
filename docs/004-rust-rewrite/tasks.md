@@ -138,8 +138,10 @@ The tree must be build-ready or nothing below runs unattended:
 - [x] Gate (all three, no exceptions): harness agrees on every fixture
   (parity replay + save bytes + per-format push bytes, all green);
   live pty bench shows worst-case p50 under 16.6ms both sizes —
-  100x24 p50 0.66/max 0.77/mean 0.63ms, 150x50 p50 1.26/max 1.38/
-  mean 1.22ms (release binary, real compositor, `e` flood);
+  post-panels re-measured 100x24 p50 1.74/max 1.88/mean 1.70ms,
+  150x50 p50 1.63/max 1.89/mean 1.56ms (release binary, real
+  compositor, `e` flood on slot 16; panels cost ~1ms/frame, still
+  ~10x under budget — was 0.66/1.26ms pre-panels);
   Python tree retirement stays a HUMAN morning decision (see below)
 - [x] `reviewer`: final audit — NOGO on ledger/uncommitted evidence only;
   code verdict clean (dep rule, no from_ansi/todo/dbg, zero bare
@@ -156,3 +158,29 @@ unattended): `git grep -l` the last Python-only consumers, then remove
 `tests/fixtures/` + `tests/test_pty_rust.py` + `tests/dump_grid.py` as
 the Rust harness inputs), and update README/CONTRIBUTING to the single
 binary. Until then the Python suite stays the reference: 525 green.
+
+## Phase 7 — full screen/popup parity sweep (then done)
+
+- [ ] `worker` (P5b, in flight in `../huebox-p5b`): bordered panels +
+  buttons restore (`rust/huebox-app/src/panel.rs`, click routing,
+  env toggles), pty side-by-side for the touched layouts
+- [x] Main-layout sweep DONE (orchestrator, pty, `parity` theme):
+  76/90/100x24 IDENTICAL (0 differing lines); 80 + 110x24 differ in 2
+  lines only — squeezed `Themes`/`Import` label tails (`Th`/`Im` at 80,
+  `Theme`/`Impor` at 110) where Textual's flex-squeezed `Button` clips
+  its label inside an identical box/row/click rect. ACCEPTED deviation:
+  same buttons, same rows, same clicks; only the clipped tail differs.
+  Fixed en route: `╭─ TITLE ─` dashes, Import top-margin blank row,
+  single-row truncating main footer (status scrolls out, as in Python),
+  `Live` collapsibles (`▼/▶ Interface text/Live diff/Live code`,
+  `E`/`D`/`C`, header-click toggle, `HUEBOX_COLLAPSIBLE`).
+- [ ] `worker` P7 sweep: EVERY screen and popup, Python binary vs Rust
+  binary, same size/theme/fixture — Setup, Themes, Overrides, Import
+  (list + collapsible + footer buttons), hex prompt, name prompt, save
+  flow, apply flow (both Esc arms), too-small frame, footer variants,
+  each under grid/side/bare layouts where applicable. Per screen:
+  IDENTICAL or a gap note with the decisive differing line. Fix
+  panel/button-class gaps; log the rest as P7 gap list.
+- [ ] Gate: sweep matrix all IDENTICAL (or accepted deviations recorded
+  here); `reviewer` sign-off on the matrix + the P5b diff; land one
+  phase-commit; close out 001 spec, guidelines, tasks. Then done.

@@ -110,8 +110,8 @@ close the rewrite out.
 
 Result: ALL GREEN. Harness 6/6 (`tests/test_pty_rust.py` on the release
 binary: parity replay, save bytes, per-format push bytes). Live bench
-(real compositor, background-hold `e` flood): 100x24 p50 0.66 / max 0.77 /
-mean 0.63ms; 150x50 p50 1.26 / max 1.38 / mean 1.22ms — ~25x/13x under
-the 16.6ms budget. `cargo install --path rust/huebox-cli` proven
+(real compositor, `e` flood on slot 16): post-panels 100x24 p50 1.74 /
+max 1.88 / mean 1.70ms; 150x50 p50 1.63 / max 1.89 / mean 1.56ms —
+~10x under the 16.6ms budget (pre-panels: 0.66/1.26ms). `cargo install --path rust/huebox-cli` proven
 (2.7MB `huebox 0.4.1`). Retirement left as a human morning decision
 (see tasks.md); Python suite (525) stays the reference until then.

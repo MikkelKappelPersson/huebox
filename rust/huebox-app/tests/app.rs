@@ -102,26 +102,36 @@ fn footer_bar_carries_hints_and_status() {
     shell.state.status = "saved ember → ghostty".to_owned();
     let buffer = shell.snapshot(100, 30);
     let last = row_text(&buffer, 29, 100);
-    assert!(last.contains("saved ember → ghostty"), "{last:?}");
-    let start = last.find("saved").expect("status text");
-    for x in start..start + 5 {
-        let cell = &buffer[(x as u16, 29)];
-        assert_eq!(cell.symbol(), &last[x..x + 1]);
-        assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
-    }
-    // A hint key stands bright and bold on the bar (whichever fold row).
-    let key_cell = (28..30u16)
-        .flat_map(|y| (0..100u16).map(move |x| (x, y)))
-        .map(|(x, y)| &buffer[(x, y)])
+    // Python parity (pty capture): the height-1 footer scrolls
+    // horizontally, so overflowing hints truncate mid-row and the status
+    // scrolls out of view — the bar shows the hints' head only.
+    assert_eq!(
+        last,
+        "arrows move  w/e hue  s/d sat  x/c val  ^S save  ^A apply  N save as new  u undo(0)  r revert  t the",
+        "{last:?}"
+    );
+    // A hint key stands bright and bold on the bar.
+    let key_cell = (0..100u16)
+        .map(|x| &buffer[(x, 29)])
         .find(|cell| cell.symbol() == "a" && cell.fg == Color::Rgb(0xe0, 0xc0, 0x6c));
     assert!(key_cell.is_some(), "{last:?}");
+    // Where the status fits it rides the same row, bold foreground.
+    let probe = EditorState::new(ramp(), write_ok());
+    let line = huebox_app::bar_line_single(&[], "saved ember", 20, &probe.slots);
+    let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    assert!(text.starts_with("saved ember"), "{text:?}");
 }
 
 /// The wordmark stands bold in the top rows, live from the buffer.
+///
+/// Pinned to the bare stack (`HUEBOX_PANELS=0`): under panels the top
+/// carries the banner ladder instead, and the wordmark is its last rung.
 #[test]
 fn wordmark_stands_bold() {
+    std::env::set_var("HUEBOX_PANELS", "0");
     let mut shell = shell();
     let buffer = shell.snapshot(100, 30);
+    std::env::remove_var("HUEBOX_PANELS");
     let wordmark: Vec<Color> = [
         "#e06c6c", "#6cc06c", "#e0c06c", "#6c9ce0", "#e06c9c", "#6cc0c0",
     ]
@@ -158,11 +168,12 @@ fn popups_stand_centered_and_theme_closed() {
     let mut shell = shell();
     // Themes.
     shell.state.overlay = Some(vec!["ember".to_owned(), "dusk".to_owned()]);
-    shell.refresh();
+    let buffer = shell.snapshot(100, 30);
+    // Layout recomputes live from the size: read it after the paint,
+    // never the pre-snapshot centering at the old size.
     let layout = shell.popup.clone().expect("themes dialog");
     // Centered: the margins match on both sides at whatever size stands.
     assert_eq!(layout.ox * 2 + layout.w + 2, shell.cols);
-    let buffer = shell.snapshot(100, 30);
     let bg = Color::Rgb(0x10, 0x10, 0x14);
     // The dialog border wears the muted furniture slot, never foreign.
     let top = layout.oy as u16;

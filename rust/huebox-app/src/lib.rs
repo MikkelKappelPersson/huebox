@@ -48,13 +48,14 @@ pub mod dialog;
 pub mod footer;
 pub mod keys;
 pub mod mouse;
+pub mod panel;
 pub mod prompts;
 pub mod router;
 
-pub use app::{run, PopupKind, PopupLayout, Shell};
+pub use app::{run, BodyMode, PopupKind, PopupLayout, Shell, SideCache, StackedCache, TopCache};
 pub use cells::{hex_color, line_for, render_rows, span_for};
 pub use dialog::{popup_rect, IMPORT_HINTS};
-pub use footer::{bar_lines, fold_footer, FooterFold};
+pub use footer::{bar_line_single, bar_lines, fold_footer, FooterFold};
 pub use keys::translate;
 pub use mouse::{click_at, wheel};
 pub use prompts::{read_prompt_line, suspending_prompter};

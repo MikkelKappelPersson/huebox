@@ -68,6 +68,21 @@ pub fn route_key(shell: &mut Shell, key: &str) -> Outcome {
     if shell.import_open {
         return import_key(shell, key);
     }
+    // Live collapsibles: `E`/`D`/`C` toggle their block wherever the
+    // picker and the warning do not own the surface (never stacked over
+    // a popup, never through the import list). The setup screen does not
+    // gate them — the same rule as the Python `on_key`.
+    if let Some(block) = crate::panel::collapse_target(key) {
+        if shell.state.overlay.is_none()
+            && shell.state.overrides.is_none()
+            && crate::panel::collapsible_enabled()
+        {
+            if !shell.collapsed.remove(block) {
+                shell.collapsed.insert(block.to_owned());
+            }
+            return settle(shell);
+        }
+    }
     if shell.state.setup.is_some() {
         // The first-run popup owns the surface: every key goes to the one
         // key surface, which routes outcomes from the state.

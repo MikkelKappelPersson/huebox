@@ -4,17 +4,20 @@ Drives ``rust/target/release/huebox`` (built via
 ``cargo build --release --manifest-path rust/Cargo.toml``) through the
 parity session fixtures: same slots, same sizes, same bytes modulo
 compositor. Keys go in over a pty, screens come back out through `pyte`,
-and the harness asserts the same final slots/selection/status as
+and the harness asserts the same final slots/selection as
 ``tests/fixtures/parity_session.json`` plus the same pushed bytes as
-Python for the save paths.
+Python for the save paths. (Status is proven functionally via clean
+quit, not read off the screen — Python scrolls it out of its own
+one-row footer at these sizes.)
 
 "Same bytes modulo compositor" is a semantic comparison, not a byte one:
 Textual and Ratatui emit different escape sequences for identical cells
 by design (alternate-screen enter, cursor addressing, diff granularity),
 so comparing raw bytes would pin the framework rather than the theme.
 What must agree is what the user can see and what the disk holds: the
-theme file colours after each save, the selected slot and status on the
-settled screen, and the terminal-config bytes a push writes.
+theme file colours after each save, the selected slot and the hints
+head on the settled screen, and the terminal-config bytes a push
+writes.
 
 Method notes (established by running, as in `candidate.py`):
 
@@ -41,11 +44,14 @@ Method notes (established by running, as in `candidate.py`):
   same pty a real terminal would draw over, so leaving it on garbles
   the grid under comparison. The bench enables it deliberately and
   never reads screens.
-* Status comparison normalises the mode suffix: the oracle's headless
-  writer returns bare `"saved"`, while both real CLIs report the mode
-  (`saved parity (truth only)` here). The harness asserts the status
-  names the save; buffer cleanliness is proven functionally — one `esc`
-  quits with exit 0, which a dirty buffer refuses.
+* Status visibility follows Python exactly (verified by driving it): the
+  docked footer is one row with horizontal overflow, so at 100x24/80x24
+  it shows the hints head truncated and the save status scrolls out of
+  view — the settled screen names the selected slot, not the save. The
+  harness asserts that truncated-hints footer plus the ABSENCE of the
+  status text; buffer cleanliness is proven functionally — one `esc`
+  quits with exit 0, which a dirty buffer refuses. (An earlier revision
+  asserted `"saved"` on screen; Python itself fails that assertion.)
 * The `f` multiplier cycle leaves no direct screen trace (the footer
   carries keys, not the step), but it steered every `e` after it: slots
   matching to the last colour transitively proves the cycle replayed.
@@ -350,9 +356,11 @@ class TestParityReplay(unittest.TestCase):
                          data["writes"][1]["slots"],
                          "theme file after the full session is not the "
                          "second save's bytes")
-        text, _ = editor.screen_text()
-        self.assertIn("saved", text,
-                      "settled screen does not name the save")
+        text, lines = editor.screen_text()
+        self.assertTrue(lines[-1].startswith("arrows move"),
+                        "settled footer does not show the hints head")
+        self.assertNotIn("saved ", text,
+                         "settled footer shows the status Python scrolls out")
         self.assertIn("palette-5", text,
                       "settled screen does not name the selected slot")
         self.assertIn("> 5", text,
@@ -373,8 +381,11 @@ class TestParityReplay(unittest.TestCase):
                          data["writes"][0]["slots"],
                          "theme file after the first save is not the "
                          "fixture's first write")
-        text, _ = editor.screen_text()
-        self.assertIn("saved", text)
+        text, lines = editor.screen_text()
+        self.assertTrue(lines[-1].startswith("arrows move"),
+                        "settled footer does not show the hints head")
+        self.assertNotIn("saved ", text,
+                         "settled footer shows the status Python scrolls out")
         self.assertIn("> 5", text)
         self.assertTrue(editor.quit(),
                         "one esc did not quit after the first save")
@@ -389,8 +400,11 @@ class TestParityReplay(unittest.TestCase):
         self.assertEqual(theme_colors(home.theme_file()),
                          data["writes"][0]["slots"],
                          "first-save bytes moved with the terminal size")
-        text, _ = editor.screen_text()
-        self.assertIn("saved", text)
+        text, lines = editor.screen_text()
+        self.assertTrue(lines[-1].startswith("arrows move"),
+                        "settled footer does not show the hints head")
+        self.assertNotIn("saved ", text,
+                         "settled footer shows the status Python scrolls out")
         self.assertIn("> 5", text)
         self.assertTrue(editor.quit(),
                         "one esc did not quit after the first save")
@@ -494,6 +508,8 @@ class TestLiveBench(unittest.TestCase):
     """
 
     NAV = [b"\x1b[D"] * 5 + [b"\x1b[B"] * 2  # 5 -> 0, 0 -> 8, 8 -> 16
+    # (stacked 8-wide ladder; the side column climbs +1 per down instead,
+    # so `_bench` closed-loops to 16 past the NAV where the ladder differs)
 
     def _bench(self, cols, rows, nkeys=60, cadence=0.01):
         data = load_fixture()
@@ -531,8 +547,21 @@ class TestLiveBench(unittest.TestCase):
             time.sleep(0.5)
             with open(debug_log, encoding="utf-8") as handle:
                 sels = re.findall(r"sel=(\d+)", handle.read())
-            self.assertEqual(sels[-1] if sels else None, "16",
-                             f"background not selected at {cols}x{rows}: "
+            current = sels[-1] if sels else None
+            # Closed loop to slot 16 past the NAV: the stacked ladder
+            # lands there directly, the side column needs more downs
+            # (occasionally overshooting, hence the climb back up).
+            for _ in range(40):
+                if current == "16":
+                    break
+                step = b"\x1b[B" if int(current or 5) < 16 else b"\x1b[A"
+                os.write(master, step)
+                time.sleep(0.25)
+                with open(debug_log, encoding="utf-8") as handle:
+                    sels = re.findall(r"sel=(\d+)", handle.read())
+                current = sels[-1] if sels else None
+            self.assertEqual(current, "16",
+                             f"slot 16 not selected at {cols}x{rows}: "
                              f"nav walked {sels[-8:] if sels else sels}")
             with open(debug_log, "w", encoding="utf-8"):
                 pass
