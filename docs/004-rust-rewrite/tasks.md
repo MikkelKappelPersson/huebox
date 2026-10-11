@@ -121,8 +121,12 @@ The tree must be build-ready or nothing below runs unattended:
 
 ## P6 — CLI, harness, packaging, bench gate (sequential: needs everything)
 
-- [ ] `worker-a`: clap surface identical (commands, flags, `huebox: ` +
-  exit 1, no tracebacks); composition root wires all seams
+- [x] `worker-a`: clap surface identical (commands, flags, `huebox: ` +
+  exit 1, no tracebacks); composition root wires all seams (15 tests;
+  review: no Criticals; merge fixes: piped-edit exit→0 to match cli.py
+  despite review Accept of 1 — oracle binds; `show` banner wired to
+  byte-identical incl. separate-`\x1b[1m` run shape; direct-apply
+  garbage-fmt branch fixed to save via `direct_fmt`)
 - [ ] `worker-b`: pty closure harness ported from `tests/candidate.py`;
   `cargo install` single binary; README/CONTRIBUTING updated
   (PARALLEL with A after CLI shape freezes)

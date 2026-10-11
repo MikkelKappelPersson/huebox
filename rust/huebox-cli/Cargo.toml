@@ -1,0 +1,23 @@
+[package]
+name = "huebox-cli"
+version = "0.4.1"
+edition = "2021"
+
+[[bin]]
+name = "huebox"
+path = "src/main.rs"
+
+[lib]
+name = "huebox_cli"
+path = "src/lib.rs"
+
+[dependencies]
+huebox-core = { path = "../huebox-core" }
+huebox-format = { path = "../huebox-format" }
+huebox-lib = { path = "../huebox-lib" }
+huebox-editor = { path = "../huebox-editor" }
+huebox-render = { path = "../huebox-render" }
+huebox-app = { path = "../huebox-app" }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
