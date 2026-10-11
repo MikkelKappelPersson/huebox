@@ -1,0 +1,12 @@
+[package]
+name = "huebox-editor"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "huebox_editor"
+path = "src/lib.rs"
+
+[dependencies]
+huebox-core = { path = "../huebox-core" }
+huebox-render = { path = "../huebox-render" }

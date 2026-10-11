@@ -7,6 +7,14 @@ name = "huebox-core"
 version = "0.1.0"
 
 [[package]]
+name = "huebox-editor"
+version = "0.1.0"
+dependencies = [
+ "huebox-core",
+ "huebox-render",
+]
+
+[[package]]
 name = "huebox-format"
 version = "0.1.0"
 dependencies = [

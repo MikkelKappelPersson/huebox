@@ -93,13 +93,14 @@ The tree must be build-ready or nothing below runs unattended:
 - [x] `reviewer`: audit purity (no I/O, no Ratatui in this crate) — pass,
   no phase-failing defect
 
-## P4 — editor state machine, headless (starts when core API frozen)
+## P4 — editor state machine, headless (starts when core API frozen) — done (126 cargo green, replay IDENTICAL)
 
-- [ ] `worker-a`: `EditorState` + `apply_key` + draw/lines/hits + all
-  injected seams; Ratatui import here fails the phase
-- [ ] Gate: `parity_session.json` replays to identical trace + final;
-  ported editor unit tests green
-- [ ] `reviewer`: audit against 001 §§13–14 behaviours one by one
+- [x] `worker-a`: `EditorState` + `apply_key` + draw/lines/hits + all
+  injected seams; Ratatui import here fails the phase (grep empty)
+- [x] Gate: `parity_session.json` replays to identical trace + final;
+  ported editor unit tests green (2 parity + 93 editor + 31 import)
+- [x] `reviewer`: audit against 001 §§13–14 behaviours one by one — pass,
+  1 warning (is_name_char exotic-space approx, behaviour-preserving)
 
 ## P5 — Ratatui shell (sequential: needs P3 + P4)
 
