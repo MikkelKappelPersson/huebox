@@ -161,9 +161,11 @@ binary. Until then the Python suite stays the reference: 525 green.
 
 ## Phase 7 — full screen/popup parity sweep (then done)
 
-- [ ] `worker` (P5b, in flight in `../huebox-p5b`): bordered panels +
-  buttons restore (`rust/huebox-app/src/panel.rs`, click routing,
-  env toggles), pty side-by-side for the touched layouts
+- [x] P5b LANDED (`0719512`): bordered panels + buttons restore
+  (`rust/huebox-app/src/panel.rs`, click routing, env toggles) plus
+  `Live` collapsibles, `╭─ TITLE ─` dashes, Import margin row,
+  truncating main footer — orchestrator-finished after the worker's
+  `shepherd_done` (handles died with the old session)
 - [x] Main-layout sweep DONE (orchestrator, pty, `parity` theme):
   76/90/100x24 IDENTICAL (0 differing lines); 80 + 110x24 differ in 2
   lines only — squeezed `Themes`/`Import` label tails (`Th`/`Im` at 80,
