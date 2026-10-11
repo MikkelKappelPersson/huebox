@@ -107,3 +107,11 @@ Gate (all three, no exceptions): full pty harness agrees on every fixture;
 live pty bench (§1's method) shows worst-case p50 under 16.6ms at both sizes;
 Python tree retired only after both hold. Then 001 spec, guidelines and tasks
 close the rewrite out.
+
+Result: ALL GREEN. Harness 6/6 (`tests/test_pty_rust.py` on the release
+binary: parity replay, save bytes, per-format push bytes). Live bench
+(real compositor, background-hold `e` flood): 100x24 p50 0.66 / max 0.77 /
+mean 0.63ms; 150x50 p50 1.26 / max 1.38 / mean 1.22ms — ~25x/13x under
+the 16.6ms budget. `cargo install --path rust/huebox-cli` proven
+(2.7MB `huebox 0.4.1`). Retirement left as a human morning decision
+(see tasks.md); Python suite (525) stays the reference until then.

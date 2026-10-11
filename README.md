@@ -26,6 +26,15 @@ source ~/.bashrc
 
 Beyond the stdlib it needs [Pygments](https://pygments.org) (the code sample) and [Textual](https://textual.textualize.io/) (the editor), both installed automatically.
 
+The Rust port builds to a single binary with no runtime language dependency:
+
+```sh
+rustup toolchain install stable   # once (yay -S rustup if needed)
+cargo install --path rust/huebox-cli   # installs `huebox` (~2.6MB)
+```
+
+Or run it uninstalled from this checkout: `cargo build --release --manifest-path rust/Cargo.toml`, then `rust/target/release/huebox`. The Python install above stays the reference until the Rust binary passes parity plus the live-redraw bench — retirement needs both gates.
+
 ## 🚀 Use
 
 ### 🖥️ TUI editor

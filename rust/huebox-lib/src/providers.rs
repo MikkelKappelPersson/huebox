@@ -165,8 +165,7 @@ pub fn list_themes<F: FormatStub>(
     // dir (the user dir shadows shipped). Keyed EXACT-case like Python's
     // `found[display] = path` — names differing only by case list twice;
     // the final sort below is the only case-folded step.
-    let mut found: std::collections::HashMap<String, PathBuf> =
-        std::collections::HashMap::new();
+    let mut found: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
     let mut notes = Vec::new();
     for directory in dirs.unwrap_or(&[]) {
         let entries = match std::fs::read_dir(directory) {

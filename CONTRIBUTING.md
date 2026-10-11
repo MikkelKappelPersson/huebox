@@ -12,6 +12,15 @@ Fallback without `uv`:
 pip install -e .[test]
 ```
 
+Rust (the in-progress port under `rust/`): stable toolchain via rustup, then
+
+```sh
+cargo build --release --manifest-path rust/Cargo.toml   # single binary at rust/target/release/huebox
+cargo install --path rust/huebox-cli                    # or install `huebox` from this checkout
+```
+
+The pty closure harness (`tests/test_pty_rust.py`) drives that release binary, so build it before running the suite. The Python tree stays the reference until the harness and the live-redraw bench both gate green.
+
 Read `docs/dev/code-guidelines.md` before touching code. It is binding.
 
 Keep scope: colour slots in, colour slots out. Not a config editor, not a theme store.

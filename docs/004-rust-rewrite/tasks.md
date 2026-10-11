@@ -76,9 +76,13 @@ The tree must be build-ready or nothing below runs unattended:
   (hex/int) / 1e-9 (floats)
 - [x] `reviewer`: audit all three crates (dependency rule: no cycles,
   editor-ward seams untouched)
-- Known gaps (deferred to P6 hardening): UTC-vs-local `created` stamp,
-  lossy non-UTF8 edge, `{value}` vs `{value!r}` warnings, Linux SIGUSR
-  consts, hex-helper 3-way duplication (core/format/lib fold pass)
+- Gaps ledger (final): UTC-vs-local stamps FIXED via `chrono::Local`
+  (`system_now` + cli `local_stamp`; `list` verified byte-equal);
+  `{value}` vs `{value!r}` verified IDENTICAL (both parsers yield strings
+  only — not a gap); SIGUSR consts documented (live path shells symbolic
+  `-USR1`/`-USR2` flags); lossy non-UTF8 edge accepted (Python reads
+  `errors="replace"` too); hex-helper 3-way duplication kept as
+  post-retirement fold work (all three match Python today)
 
 ## P3 — render + preview, pure (PARALLEL with P2-C, needs core only) — done (80 cargo green)
 
@@ -127,11 +131,28 @@ The tree must be build-ready or nothing below runs unattended:
   despite review Accept of 1 — oracle binds; `show` banner wired to
   byte-identical incl. separate-`\x1b[1m` run shape; direct-apply
   garbage-fmt branch fixed to save via `direct_fmt`)
-- [ ] `worker-b`: pty closure harness ported from `tests/candidate.py`;
+- [x] `worker-b`: pty closure harness ported from `tests/candidate.py`;
   `cargo install` single binary; README/CONTRIBUTING updated
-  (PARALLEL with A after CLI shape freezes)
-- [ ] Gate (all three, no exceptions): harness agrees on every fixture;
-  live pty bench shows worst-case p50 under 16.6ms both sizes; Python tree
-  retires only after both hold
-- [ ] `reviewer`: final audit; close-out updates to 001 spec, guidelines,
-  tasks
+  (`tests/test_pty_rust.py`, 6 tests; install proof 2.7MB `huebox 0.4.1`;
+  docs install sections only)
+- [x] Gate (all three, no exceptions): harness agrees on every fixture
+  (parity replay + save bytes + per-format push bytes, all green);
+  live pty bench shows worst-case p50 under 16.6ms both sizes —
+  100x24 p50 0.66/max 0.77/mean 0.63ms, 150x50 p50 1.26/max 1.38/
+  mean 1.22ms (release binary, real compositor, `e` flood);
+  Python tree retirement stays a HUMAN morning decision (see below)
+- [x] `reviewer`: final audit — NOGO on ledger/uncommitted evidence only;
+  code verdict clean (dep rule, no from_ansi/todo/dbg, zero bare
+  unwrap/panic in cli, counts check out, harness asserts real parity).
+  This commit lands the ledger + evidence; hardening gaps tracked under
+  P2 as before.
+
+## Morning decision (human): Python retirement
+
+Both P6 gates hold (harness green, bench ~13–25x under budget), so spec
+§8 permits retiring the Python tree. Suggested cutover (NOT run
+unattended): `git grep -l` the last Python-only consumers, then remove
+`huebox/` + the Python-only `tests/test_*.py` (keeping
+`tests/fixtures/` + `tests/test_pty_rust.py` + `tests/dump_grid.py` as
+the Rust harness inputs), and update README/CONTRIBUTING to the single
+binary. Until then the Python suite stays the reference: 525 green.

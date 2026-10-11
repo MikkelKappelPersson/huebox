@@ -1089,7 +1089,7 @@ fn cmd_list(out: &mut dyn Write) -> i32 {
             .unwrap_or("")
             .to_owned();
         let origin = if origin.is_empty() { "-" } else { &origin };
-        let stamp = utc_stamp(*mtime);
+        let stamp = local_stamp(*mtime);
         let mark = if Some(name) == current.as_ref() {
             "*"
         } else {
@@ -1100,30 +1100,16 @@ fn cmd_list(out: &mut dyn Write) -> i32 {
     0
 }
 
-/// `YYYY-MM-DD HH:MM` for an epoch-seconds mtime.
-///
-/// NOTE: UTC, like `themes::system_now` — Python prints local time. Same
-/// shape, different zone; a hand-read stamp may differ by the UTC offset.
-fn utc_stamp(secs: f64) -> String {
-    let secs = secs as i64;
-    let days = secs.div_euclid(86_400);
-    let clock = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}",
-        clock / 3_600,
-        (clock % 3_600) / 60
-    )
-    .replace('T', " ")
+/// `YYYY-MM-DD HH:MM` for an epoch-seconds mtime, local time like Python's
+/// `datetime.fromtimestamp` — the `list` stamp a hand-read compares.
+fn local_stamp(secs: f64) -> String {
+    chrono::DateTime::from_timestamp(secs as i64, 0)
+        .map(|utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "1970-01-01 00:00".to_owned())
 }
 
 // ---------------------------------------------------------------------------
