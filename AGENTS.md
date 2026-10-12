@@ -4,7 +4,7 @@ huebox is a terminal theme editor with live preview. It shows the colours a
 terminal is actually using and lets users change them from a keyboard-driven
 interface — no hex codes, no hand-editing, no restarting.
 
-- Python ≥ 3.9; runtime dependencies are Pygments (the code sample) and Textual (the editor), everything else is stdlib
+- Rust stable; single static binary, no runtime dependencies
 - Supported terminals: Ghostty, kitty, Alacritty
 - `~/.config/huebox` is the truth (one file per theme plus `state.toml`); a terminal config is a push target, not where a theme lives
 - Keep it single-purpose: colour slots in, colour slots out. Not a config editor, not a theme store.
@@ -18,11 +18,11 @@ Binding code, architecture, and design rules live in
 or modifying any code, or doing any architecture or design work on this project.**
 
 Summary (details in the linked document):
-- **Modular Design** — one job per module, minimal cross-module deps, no cycles
-- **Facade Pattern** — `FORMATS` registry, `themes.save`/`push`, `detect.resolve()`; callers never reach into format internals
-- **Dependency Injection** — `editor` reaches the world only through injected callables `cli` builds; never import `themes`/`detect` into `editor`; the import popup follows the same rule (`ImportLibrary` + writer injected, `app`/`import_state` import neither); `cli` is the composition root
-- **State/View Separation** — `EditorState` + `apply_key` own all behaviour, `app` is a thin shell over `render`'s rows, buffer renders every frame and disk writes on Ctrl+S only
-- **Coding Notes** — line-level config writes, `with open(...)`, 3.9-compatible code, `huebox: ` errors to stderr with exit 1, tests mirror modules and stay clean under `-W always`
+- **Modular Design** — one job per crate, minimal cross-crate deps, no cycles
+- **Facade Pattern** — `format::lookup`/`read`/`write`, `themes::{save, push}`, `detect::resolve()`; callers never reach into format internals
+- **Dependency Injection** — `huebox-editor` reaches the world only through injected seams (`WriteFn`/`ApplyFn`/`DeleteFn`, `Library`, `ImportLibrary`) `huebox-cli` builds; the import popup follows the same rule; `huebox-cli` is the composition root
+- **State/View Separation** — `EditorState` + `apply_key` own all behaviour, `huebox-app` is a thin shell over `huebox-render`'s rows, buffer renders every frame and disk writes on Ctrl+S only
+- **Coding Notes** — line-level config writes, `huebox: ` errors to stderr with exit 1, tests mirror crates and stay clean under clippy `-D warnings` + `cargo fmt`
 
 # Response Style
 
@@ -33,8 +33,9 @@ When a decision is needed from the user, ask structured: state the question, lis
 # Shell Commands
 
 ```sh
-python3 -m unittest discover -s tests
-python3 -W always -m unittest discover -s tests   # before calling a phase done
+cargo test --workspace
+cargo clippy --workspace -- -D warnings && (cd rust && cargo fmt --check)   # before calling a phase done
+.venv/bin/python -m unittest discover -s tests   # pty harness, needs the release binary
 ```
 
 Always put a timer (`timeout` / `-timeout`) on `find` and similar long-running commands.

@@ -1,6 +1,6 @@
 ![HUEBOX](assets/huebox-header-transparent.png)
 
-[![PyPI](https://img.shields.io/pypi/v/huebox)](https://pypi.org/p/huebox/) [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](pyproject.toml) [![License](https://img.shields.io/github/license/MikkelKappelPersson/huebox)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/huebox)](https://crates.io/crates/huebox) [![License](https://img.shields.io/github/license/MikkelKappelPersson/huebox)](LICENSE)
 
 A terminal theme editor with live preview — repaint your terminal without leaving it.
 
@@ -9,13 +9,13 @@ A terminal theme editor with live preview — repaint your terminal without leav
 ## 📦 Install
 
 ```sh
-uv tool install huebox   # or: pip install --user huebox
+cargo install huebox
 ```
 
-The command lands in `~/.local/bin`. If your shell cannot find `huebox` afterwards, add that directory to your `PATH` (e.g. at the end of `~/.bashrc` or `~/.zshrc`) and reload the shell:
+The command lands in `~/.cargo/bin`. If your shell cannot find `huebox` afterwards, add that directory to your `PATH` (e.g. at the end of `~/.bashrc` or `~/.zshrc`) and reload the shell:
 
 ```sh
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 To use it in the terminal you already have open, reload the config instead of restarting it:
@@ -24,16 +24,7 @@ To use it in the terminal you already have open, reload the config instead of re
 source ~/.bashrc
 ```
 
-Beyond the stdlib it needs [Pygments](https://pygments.org) (the code sample) and [Textual](https://textual.textualize.io/) (the editor), both installed automatically.
-
-The Rust port builds to a single binary with no runtime language dependency:
-
-```sh
-rustup toolchain install stable   # once (yay -S rustup if needed)
-cargo install --path rust/huebox-cli   # installs `huebox` (~2.6MB)
-```
-
-Or run it uninstalled from this checkout: `cargo build --release --manifest-path rust/Cargo.toml`, then `rust/target/release/huebox`. The Python install above stays the reference until the Rust binary passes parity plus the live-redraw bench — retirement needs both gates.
+One static binary, no runtime dependencies. Or run it uninstalled from this checkout: `cargo build --release --manifest-path rust/Cargo.toml`, then `rust/target/release/huebox`.
 
 ## 🚀 Use
 
@@ -122,7 +113,7 @@ Writes are line-level: only the colour tokens are replaced, so comments, orderin
 ## 🛠️ Development
 
 ```sh
-python3 -m unittest discover -s tests
+cargo test --workspace
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, commit format, and PRs.

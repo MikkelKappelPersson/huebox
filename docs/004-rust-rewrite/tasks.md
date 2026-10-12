@@ -1,6 +1,6 @@
 # huebox 004 — tasks
 
-Status: **draft** · Plan: `plan.md` · Spec: `spec.md` · Research: `research.md`
+Status: **done** (0.5.0: Python retired, Rust-only) · Plan: `plan.md` · Spec: `spec.md` · Research: `research.md`
 · Rules: `AGENTS.md` + `docs/dev/code-guidelines.md`
 
 Execution order is top to bottom unless marked `PARALLEL`. Phases are
@@ -202,5 +202,4 @@ binary. Until then the Python suite stays the reference: 525 green.
   explicit `f0f0f0` chip fg (terminal-independent; Python default),
   80-col squeezed label tails (`Them`/`Impo`; Python `Th`/`Im`),
   `[<u` absence (Python-only kitty-query leakage).
-- [ ] Gate: land one phase-commit; close out 001 spec, guidelines,
-  tasks. Then done.
+- [x] Gate: `release: retire python, rust-only 0.5.0` lands the retirement (Python tree + packaging removed, harness on a frozen oracle, docs + guidelines rebound, versions 0.5.0); closes the rewrite.

@@ -5,28 +5,28 @@ Drives ``rust/target/release/huebox`` (built via
 parity session fixtures: same slots, same sizes, same bytes modulo
 compositor. Keys go in over a pty, screens come back out through `pyte`,
 and the harness asserts the same final slots/selection as
-``tests/fixtures/parity_session.json`` plus the same pushed bytes as
-Python for the save paths. (Status is proven functionally via clean
-quit, not read off the screen — Python scrolls it out of its own
+``tests/fixtures/parity_session.json``. (Status is proven functionally
+via clean quit, not read off the screen — it scrolls out of the
 one-row footer at these sizes.)
 
 "Same bytes modulo compositor" is a semantic comparison, not a byte one:
-Textual and Ratatui emit different escape sequences for identical cells
-by design (alternate-screen enter, cursor addressing, diff granularity),
-so comparing raw bytes would pin the framework rather than the theme.
+The compositor emits its own escape sequences for identical cells
+by design, so comparing raw bytes would pin the framework rather than
+the theme.
 What must agree is what the user can see and what the disk holds: the
 theme file colours after each save, the selected slot and the hints
 head on the settled screen, and the terminal-config bytes a push
 writes.
 
-Method notes (established by running, as in `candidate.py`):
+Method notes (established by running):
 
 * The session runs under an isolated `HOME`/`XDG_CONFIG_HOME` with the
-  fixture's `initial_slots` seeded as theme `parity` (via `themes`, so
-  the seed is the canonical writer's own layout) and `current = parity`.
-  Editor runs use `--no-push`: push bytes are covered separately and
-  deterministically by `TestPushBytes`, and `--no-push` keeps the replay
-  hermetic on machines that own real terminal configs.
+  fixture's `initial_slots` seeded as theme `parity` (via the frozen
+  seed below, byte-frozen to the retired writer's canonical layout)
+  and `current = parity`.
+  Editor runs use `--no-push`: push bytes are covered deterministically
+  by the Rust format tests, and `--no-push` keeps the replay hermetic
+  on machines that own real terminal configs.
 * Full-trace replay runs at 100x24 only — the fixture's own size. Its
   `down`/`up` pair walks the 8-wide palette ladder, and narrower sizes
   lay the palette out differently, so the same arrows select different
@@ -44,21 +44,21 @@ Method notes (established by running, as in `candidate.py`):
   same pty a real terminal would draw over, so leaving it on garbles
   the grid under comparison. The bench enables it deliberately and
   never reads screens.
-* Status visibility follows Python exactly (verified by driving it): the
+* Status visibility (verified by driving it): the
   docked footer is one row with horizontal overflow, so at 100x24/80x24
   it shows the hints head truncated and the save status scrolls out of
   view — the settled screen names the selected slot, not the save. The
   harness asserts that truncated-hints footer plus the ABSENCE of the
   status text; buffer cleanliness is proven functionally — one `esc`
   quits with exit 0, which a dirty buffer refuses. (An earlier revision
-  asserted `"saved"` on screen; Python itself fails that assertion.)
+  asserted `"saved"` on screen; the reference fails that assertion.)
 * The `f` multiplier cycle leaves no direct screen trace (the footer
   carries keys, not the step), but it steered every `e` after it: slots
   matching to the last colour transitively proves the cycle replayed.
 
 Skips (only what genuinely needs a tty this machine lacks):
 
-* `pyte` missing: screens cannot be read; install with `.[test]`.
+* `pyte` missing: screens cannot be read; `.venv/bin/python` carries it.
 * release binary missing: build it with the cargo command above.
 * `pty.openpty` failing (no `/dev/ptmx`, e.g. a locked-down container):
   nothing here can run without a pty, so the file skips instead of
@@ -86,21 +86,16 @@ import time
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
-sys.path.insert(0, _ROOT)  # repo root: `import huebox`
 sys.path.insert(0, _HERE)  # tests dir: `import harness`
 
 import harness  # noqa: E402
-from huebox import themes  # noqa: E402
-from huebox.color import SLOTS  # noqa: E402
-from huebox.formats import FORMATS  # noqa: E402
 
 try:
     import pyte  # noqa: E402
 except ImportError:
     pyte = None
 
-BIN = os.path.join(_ROOT, "rust", "target", "release", "huebox")
+BIN = os.path.join(os.path.dirname(_HERE), "rust", "target", "release", "huebox")
 FIXTURE = os.path.join(_HERE, "fixtures", "parity_session.json")
 
 #: Editor key name to the bytes a terminal sends (`translate` inverts
@@ -130,6 +125,36 @@ STAGES = re.compile(
 BUDGET_MS = 16.6
 
 
+#: Frozen oracle of the retired Python tree: the 22-slot order and the
+#: canonical theme-file layout the harness seeds. Byte-frozen by
+#: construction — the fixtures under tests/fixtures/ are the reference
+#: now, so this writer must never change shape.
+SLOTS = ([f"palette-{i}" for i in range(16)]
+         + ["background", "foreground", "cursor-color", "cursor-text",
+            "selection-background", "selection-foreground"])
+
+THEME_HEADER = "# owned by huebox — values are yours, structure is ours"
+
+
+def _seed_theme(config_home, slots):
+    """Seed theme `parity` plus `current`: the retired writer's layout."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+    lines = [THEME_HEADER, "[theme]", 'name = "parity"',
+             f'created = "{now}"', f'modified = "{now}"', "", "[colors]"]
+    lines += [f'{slot} = "{slots.get(slot, "#808080")}"' for slot in SLOTS]
+    home = os.path.join(config_home, "huebox")
+    themes_dir = os.path.join(home, "themes")
+    os.makedirs(themes_dir, exist_ok=True)
+    path = os.path.join(themes_dir, "parity.toml")
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+    with open(os.path.join(home, "state.toml"), "w",
+              encoding="utf-8") as handle:
+        handle.write('current = "parity"\n')
+
+
 def needs_pty(test):
     """Skip the test when this machine cannot offer a pty at all."""
     def wrapper(self):
@@ -153,9 +178,8 @@ def load_fixture():
 class IsolatedHome:
     """A `HOME` + `XDG_CONFIG_HOME` holding the parity theme, then gone.
 
-    `themes.*` reads the environment at call time, so the swap is scoped
-    to seeding; the child gets the paths as explicit variables and the
-    parent's environment is restored whatever happens.
+    Seeded by the frozen writer above; the child gets the paths as
+    explicit variables and the parent's environment is never touched.
     """
 
     def __init__(self, initial_slots):
@@ -165,13 +189,7 @@ class IsolatedHome:
         os.makedirs(self.home)
         self.config_home = os.path.join(self.home, ".config")
         os.makedirs(self.config_home, exist_ok=True)
-        os.environ["HOME"] = self.home
-        os.environ["XDG_CONFIG_HOME"] = self.config_home
-        try:
-            themes.create("parity", initial_slots)
-            themes.set_current("parity")
-        finally:
-            self.restore()
+        _seed_theme(self.config_home, initial_slots)
 
     def restore(self):
         home, xdg = self.saved
@@ -186,15 +204,6 @@ class IsolatedHome:
 
     def theme_file(self):
         return os.path.join(self.config_home, "huebox", "themes", "parity.toml")
-
-    def save_theme(self, name, slots):
-        """Write truth through `themes` under the isolated home."""
-        os.environ["HOME"] = self.home
-        os.environ["XDG_CONFIG_HOME"] = self.config_home
-        try:
-            themes.save(name, slots)
-        finally:
-            self.restore()
 
     def child_env(self, debug_log=None):
         env = {key: value for key, value in os.environ.items()
@@ -213,10 +222,6 @@ class IsolatedHome:
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-
-def _read(path):
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
 
 
 def theme_colors(path):
@@ -318,7 +323,7 @@ class PtyEditor:
         return self.process.returncode
 
 
-@unittest.skipUnless(pyte is not None, "pyte missing: pip install -e '.[test]'")
+@unittest.skipUnless(pyte is not None, "pyte missing: .venv/bin/python carries it")
 @unittest.skipUnless(os.path.isfile(BIN),
                      "release binary missing: "
                      "cargo build --release --manifest-path rust/Cargo.toml")
@@ -360,7 +365,7 @@ class TestParityReplay(unittest.TestCase):
         self.assertTrue(lines[-1].startswith("arrows move"),
                         "settled footer does not show the hints head")
         self.assertNotIn("saved ", text,
-                         "settled footer shows the status Python scrolls out")
+                         "settled footer shows the save status, which scrolls out of the one-row footer")
         self.assertIn("palette-5", text,
                       "settled screen does not name the selected slot")
         self.assertIn("> 5", text,
@@ -385,7 +390,7 @@ class TestParityReplay(unittest.TestCase):
         self.assertTrue(lines[-1].startswith("arrows move"),
                         "settled footer does not show the hints head")
         self.assertNotIn("saved ", text,
-                         "settled footer shows the status Python scrolls out")
+                         "settled footer shows the save status, which scrolls out of the one-row footer")
         self.assertIn("> 5", text)
         self.assertTrue(editor.quit(),
                         "one esc did not quit after the first save")
@@ -404,92 +409,10 @@ class TestParityReplay(unittest.TestCase):
         self.assertTrue(lines[-1].startswith("arrows move"),
                         "settled footer does not show the hints head")
         self.assertNotIn("saved ", text,
-                         "settled footer shows the status Python scrolls out")
+                         "settled footer shows the save status, which scrolls out of the one-row footer")
         self.assertIn("> 5", text)
         self.assertTrue(editor.quit(),
                         "one esc did not quit after the first save")
-
-
-def _seed_config(fmt, path, slots):
-    if fmt == "kitty":
-        lines = [f"background {slots['background']}",
-                 f"foreground {slots['foreground']}",
-                 f"cursor {slots['cursor-color']}",
-                 f"selection_background {slots['selection-background']}",
-                 f"selection_foreground {slots['selection-foreground']}"]
-        lines += [f"color{i} {slots[f'palette-{i}']}" for i in range(16)]
-        body = "# seeded for the pty harness\n" + "\n".join(lines) + "\n"
-    elif fmt == "ghostty":
-        lines = [f"background = {slots['background']}",
-                 f"foreground = {slots['foreground']}",
-                 f"cursor-color = {slots['cursor-color']}",
-                 f"cursor-text = {slots['cursor-text']}",
-                 f"selection-background = {slots['selection-background']}",
-                 f"selection-foreground = {slots['selection-foreground']}"]
-        lines += [f"palette = {i}={slots[f'palette-{i}']}" for i in range(16)]
-        body = "# seeded for the pty harness\n" + "\n".join(lines) + "\n"
-    else:
-        lines = [f"colors.primary.background = \"{slots['background']}\"",
-                 f"colors.primary.foreground = \"{slots['foreground']}\"",
-                 f"colors.cursor.cursor = \"{slots['cursor-color']}\"",
-                 f"colors.cursor.text = \"{slots['cursor-text']}\"",
-                 "colors.selection.background = "
-                 f"\"{slots['selection-background']}\"",
-                 "colors.selection.foreground = "
-                 f"\"{slots['selection-foreground']}\""]
-        lines += [f"colors.normal.{i} = \"{slots[f'palette-{i}']}\""
-                  for i in range(16)]
-        body = "# seeded for the pty harness\n" + "\n".join(lines) + "\n"
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(body)
-    return body
-
-
-@unittest.skipUnless(os.path.isfile(BIN),
-                     "release binary missing: "
-                     "cargo build --release --manifest-path rust/Cargo.toml")
-class TestPushBytes(unittest.TestCase):
-    """`use --to <fmt>` writes byte-identical configs to the Python writer."""
-
-    CONFIGS = {"kitty": "kitty/kitty.conf",
-               "ghostty": "ghostty/config",
-               "alacritty": "alacritty/alacritty.toml"}
-
-    def test_push_matches_python_per_format(self):
-        data = load_fixture()
-        for fmt in ("kitty", "ghostty", "alacritty"):
-            with self.subTest(fmt=fmt):
-                home = IsolatedHome(data["initial_slots"])
-                try:
-                    path = os.path.join(home.config_home,
-                                        self.CONFIGS[fmt])
-                    os.makedirs(os.path.dirname(path), exist_ok=True)
-                    seed = _seed_config(fmt, path, data["initial_slots"])
-                    # The Python no-op write holds the seed byte-for-byte,
-                    # so both writers start from the same file.
-                    FORMATS[fmt]["write"](path, data["initial_slots"])
-                    self.assertEqual(_read(path), seed,
-                                     f"Python no-op write moved {fmt} bytes")
-                    FORMATS[fmt]["write"](path, data["final"]["slots"])
-                    expected = _read(path)
-                    with open(path, "w", encoding="utf-8") as handle:
-                        handle.write(seed)
-                    # Truth holds the final buffer: `use` pushes the file.
-                    home.save_theme("parity", data["final"]["slots"])
-                    env = home.child_env()
-                    result = subprocess.run(
-                        [BIN, "use", "parity", "--to", fmt, "--no-reload"],
-                        env=env, capture_output=True, text=True, timeout=30)
-                    self.assertEqual(result.returncode, 0,
-                                     f"rust use --to {fmt} failed: "
-                                     f"{result.stderr.strip()[:200]}")
-                    self.assertEqual(_read(path),
-                                     expected,
-                                     f"rust {fmt} push bytes differ from "
-                                     "the Python writer")
-                finally:
-                    home.close()
-
 
 @unittest.skipUnless(os.path.isfile(BIN),
                      "release binary missing: "
