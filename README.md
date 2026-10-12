@@ -8,6 +8,10 @@ A terminal theme editor with live preview — repaint your terminal without leav
 
 ## 📦 Install
 
+Grab the prebuilt binary for your platform from the [latest release](https://github.com/MikkelKappelPersson/huebox/releases/latest) (Linux x86_64 + aarch64, macOS Apple Silicon + Intel) — unpack, put `huebox` on your `PATH`, done. One static binary, no runtime dependencies.
+
+Or install from source:
+
 ```sh
 cargo install huebox
 ```
@@ -23,6 +27,8 @@ To use it in the terminal you already have open, reload the config instead of re
 ```sh
 source ~/.bashrc
 ```
+
+Package managers: `yay -S huebox` (Arch, binary), `brew install mikkelkappelpersson/huebox/huebox` (macOS/Linux, binary), `uv tool install huebox` (Linux x86_64, binary wheel).
 
 One static binary, no runtime dependencies. Or run it uninstalled from this checkout: `cargo build --release --manifest-path rust/Cargo.toml`, then `rust/target/release/huebox`.
 

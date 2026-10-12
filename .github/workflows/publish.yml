@@ -10,7 +10,8 @@ name: Publish
 #   GitHub     — prebuilt binaries per tag (linux x86_64 + aarch64,
 #                mac arm64 + Intel), each tarball + sha256
 #   PyPI       — binary wheel (prebuilt binary + launcher, ruff-style)
-#   AUR        — PKGBUILD builds from the Git tag archive with cargo
+#   AUR        — `huebox` ships the prebuilt x86_64-linux Release tarball
+#                (binary in the package, not a source build)
 #   Homebrew   — formula builds from the Git tag archive with cargo
 # The pty replay harness stays a local gate (needs pyte + minutes); CI
 # runs the cargo suite, clippy, fmt and the release build.
@@ -139,9 +140,10 @@ jobs:
           T="huebox-$VER-${{ matrix.label }}"
           BIN="rust/target/${{ matrix.target }}/release/huebox"
           chmod +x "$BIN"
-          mkdir "$T" && cp "$BIN" "$T/"
-          if [ "${{ matrix.native }}" = "true" ]; then ./"$T"/huebox --version; fi
-          tar -czf "$T.tar.gz" "$T"
+          # Flat tarball: the binary rides at the root, so every consumer
+          # (AUR, Homebrew, humans) installs it the same way.
+          tar -czf "$T.tar.gz" -C "$(dirname "$BIN")" huebox
+          if [ "${{ matrix.native }}" = "true" ]; then tar -xzf "$T.tar.gz" -O huebox > ./smoke && chmod +x ./smoke && ./smoke --version && rm ./smoke; fi
           (sha256sum "$T.tar.gz" || shasum -a 256 "$T.tar.gz") | tee "$T.tar.gz.sha256"
           mkdir release && mv "$T.tar.gz" "$T.tar.gz.sha256" release/
 
@@ -253,11 +255,11 @@ jobs:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed git openssh base-devel curl
 
-      - name: Fetch tag tarball + sha256
+      - name: Fetch release tarball + sha256
         run: |
           set -e
           VER="${GITHUB_REF#refs/tags/v}"
-          curl -sL -o huebox.tar.gz "https://github.com/MikkelKappelPersson/huebox/archive/refs/tags/v$VER.tar.gz"
+          curl -sL -o huebox.tar.gz "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-x86_64-linux.tar.gz"
           SUM="$(sha256sum huebox.tar.gz | cut -d' ' -f1)"
           echo "aur release $VER sha256 $SUM"
           echo "VER=$VER" >> "$GITHUB_ENV"
@@ -284,13 +286,13 @@ jobs:
           git config --global --add safe.directory /home/builder/huebox
           su builder -c "git clone ssh://aur@aur.archlinux.org/huebox.git /home/builder/huebox"
 
-      - name: Bootstrap cargo PKGBUILD on first run
+      - name: Bootstrap binary PKGBUILD on first run
         run: |
           set -e
-          if su builder -c "cd /home/builder/huebox && grep -q 'archive/refs/tags' PKGBUILD"; then
-            echo "PKGBUILD already cargo-shaped - version bump only"
+          if su builder -c "cd /home/builder/huebox && grep -q 'releases/download' PKGBUILD"; then
+            echo "PKGBUILD already binary-shaped - version bump only"
           else
-            echo "one-time bootstrap: writing cargo PKGBUILD (no local AUR key needed)"
+            echo "one-time bootstrap: writing binary PKGBUILD (no local AUR key needed)"
             {
               printf '%s\n' \
                 '# Maintainer: Mikkel Kappel Persson <mikkel@kappelpersson.dk>' \
@@ -302,19 +304,11 @@ jobs:
                 "url='https://github.com/MikkelKappelPersson/huebox'" \
                 "license=('MIT')" \
                 "depends=('gcc-libs')" \
-                "makedepends=('cargo')" \
-                'source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")' \
+                'source=("huebox-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/huebox-$pkgver-x86_64-linux.tar.gz")' \
                 "sha256sums=('PKGSUM')" \
                 '' \
-                'build() {' \
-                '  cd "$pkgname-$pkgver"' \
-                '  cargo build --release --locked --manifest-path rust/Cargo.toml' \
-                '}' \
-                '' \
                 'package() {' \
-                '  cd "$pkgname-$pkgver"' \
-                '  install -Dm755 rust/target/release/huebox "$pkgdir/usr/bin/huebox"' \
-                '  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"' \
+                '  install -Dm755 huebox "$pkgdir/usr/bin/huebox"' \
                 '}'
             } > /home/builder/huebox/PKGBUILD
             chown builder:builder /home/builder/huebox/PKGBUILD
@@ -325,7 +319,7 @@ jobs:
           set -e
           su builder -c "export VER='$VER' SUM='$SUM'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums=.*/sha256sums=('\$SUM')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)=' PKGBUILD"
           su builder -c "cd /home/builder/huebox && makepkg --printsrcinfo > .SRCINFO"
-          # the tag archive must actually be fetchable before the AUR
+          # the release asset must actually be fetchable before the AUR
           # points at it. The flag matters: a bare retry loop exits 0
           # even when every attempt fails, which would push a PKGBUILD
           # whose source 404s.
@@ -349,17 +343,19 @@ jobs:
       name: homebrew
       url: https://github.com/MikkelKappelPersson/homebrew-huebox
     steps:
-      - name: Fetch tag tarball + sha256
+      - name: Fetch release shas
         run: |
           set -e
           VER="${GITHUB_REF#refs/tags/v}"
-          curl -sL -o huebox.tar.gz "https://github.com/MikkelKappelPersson/huebox/archive/refs/tags/v$VER.tar.gz"
-          SUM="$(sha256sum huebox.tar.gz | cut -d' ' -f1)"
-          echo "tap release $VER sha256 $SUM"
+          for asset in x86_64-linux aarch64-linux arm64-macos x86_64-macos; do
+            curl -sL -o "huebox-$asset.tar.gz" "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-$asset.tar.gz"
+            var="SUM_$(echo "$asset" | tr 'a-z-' 'A-Z_')"
+            echo "$var=$(sha256sum "huebox-$asset.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          done
+          echo "tap release $VER assets fetched"
           echo "VER=$VER" >> "$GITHUB_ENV"
-          echo "SUM=$SUM" >> "$GITHUB_ENV"
 
-      - name: Bump url + sha256, push to the tap
+      - name: Clone the tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
@@ -369,11 +365,71 @@ jobs:
             exit 1
           fi
           git clone "https://x-access-token:$TAP_TOKEN@github.com/MikkelKappelPersson/homebrew-huebox.git" tap
+
+      - name: Bootstrap pour formula on first run
+        run: |
+          set -e
+          if [ -f tap/Formula/huebox.rb ] && grep -q 'releases/download' tap/Formula/huebox.rb && grep -q 'bin.install "huebox"' tap/Formula/huebox.rb; then
+            echo "formula already pour-shaped - version bump only"
+          else
+            echo "one-time bootstrap: writing pour formula"
+            mkdir -p tap/Formula
+            {
+              printf '%s\n' \
+                'class Huebox < Formula' \
+                '  desc "Terminal theme editor with live preview"' \
+                '  homepage "https://github.com/MikkelKappelPersson/huebox"' \
+                '  version "PH_VERSION"' \
+                '  license "MIT"' \
+                '' \
+                '  on_macos do' \
+                '    on_arm do' \
+                '      url "https://github.com/MikkelKappelPersson/huebox/releases/download/v#{version}/huebox-#{version}-arm64-macos.tar.gz"' \
+                '      sha256 "PH_ARM64_MACOS"' \
+                '    end' \
+                '    on_intel do' \
+                '      url "https://github.com/MikkelKappelPersson/huebox/releases/download/v#{version}/huebox-#{version}-x86_64-macos.tar.gz"' \
+                '      sha256 "PH_X86_64_MACOS"' \
+                '    end' \
+                '  end' \
+                '  on_linux do' \
+                '    on_arm do' \
+                '      url "https://github.com/MikkelKappelPersson/huebox/releases/download/v#{version}/huebox-#{version}-aarch64-linux.tar.gz"' \
+                '      sha256 "PH_AARCH64_LINUX"' \
+                '    end' \
+                '    on_intel do' \
+                '      url "https://github.com/MikkelKappelPersson/huebox/releases/download/v#{version}/huebox-#{version}-x86_64-linux.tar.gz"' \
+                '      sha256 "PH_X86_64_LINUX"' \
+                '    end' \
+                '  end' \
+                '' \
+                '  def install' \
+                '    bin.install "huebox"' \
+                '  end' \
+                '' \
+                '  livecheck do' \
+                '    url "https://github.com/MikkelKappelPersson/huebox"' \
+                '    strategy :github_latest' \
+                '  end' \
+                '' \
+                '  test do' \
+                '    assert_match "huebox #{version}", shell_output("#{bin}/huebox --version")' \
+                '  end' \
+                'end'
+            } > tap/Formula/huebox.rb
+          fi
+
+      - name: Bump version + shas, push to the tap
+        run: |
+          set -e
           cd tap
-          grep -q 'archive/refs/tags' Formula/huebox.rb || { echo "::error::formula still points at the PyPI sdist - do the one-time cargo rewrite first"; exit 1; }
-          sed -i -e "s|archive/refs/tags/v[0-9.]*\.tar\.gz|archive/refs/tags/v$VER.tar.gz|" \
-                 -e "0,/^  sha256 \".*\"/s//  sha256 \"$SUM\"/" Formula/huebox.rb
-          grep -E '^  (url|sha256) "' Formula/huebox.rb | head -n 2
+          sed -i \
+            -e "s/^  version \".*\"/  version \"$VER\"/" \
+            -e "/arm64-macos.tar.gz/,/sha256/s/sha256 \".*\"/sha256 \"$SUM_ARM64_MACOS\"/" \
+            -e "/x86_64-macos.tar.gz/,/sha256/s/sha256 \".*\"/sha256 \"$SUM_X86_64_MACOS\"/" \
+            -e "/aarch64-linux.tar.gz/,/sha256/s/sha256 \".*\"/sha256 \"$SUM_AARCH64_LINUX\"/" \
+            -e "/x86_64-linux.tar.gz/,/sha256/s/sha256 \".*\"/sha256 \"$SUM_X86_64_LINUX\"/" Formula/huebox.rb
+          grep -E '^ +(version|sha256) "' Formula/huebox.rb
           if git diff --quiet; then echo "tap already at this version - nothing to do"; exit 0; fi
           git -c user.name='huebox-release' -c user.email='huebox-release@users.noreply.github.com' commit -am "huebox $VER"
           git push origin main
