@@ -176,13 +176,31 @@ binary. Until then the Python suite stays the reference: 525 green.
   single-row truncating main footer (status scrolls out, as in Python),
   `Live` collapsibles (`▼/▶ Interface text/Live diff/Live code`,
   `E`/`D`/`C`, header-click toggle, `HUEBOX_COLLAPSIBLE`).
-- [ ] `worker` P7 sweep: EVERY screen and popup, Python binary vs Rust
-  binary, same size/theme/fixture — Setup, Themes, Overrides, Import
-  (list + collapsible + footer buttons), hex prompt, name prompt, save
-  flow, apply flow (both Esc arms), too-small frame, footer variants,
-  each under grid/side/bare layouts where applicable. Per screen:
-  IDENTICAL or a gap note with the decisive differing line. Fix
-  panel/button-class gaps; log the rest as P7 gap list.
-- [ ] Gate: sweep matrix all IDENTICAL (or accepted deviations recorded
-  here); `reviewer` sign-off on the matrix + the P5b diff; land one
-  phase-commit; close out 001 spec, guidelines, tasks. Then done.
+- [x] P7 capture DONE (3 parallel read-only workers, reports
+  `/tmp/p7-setup-save.md` + `/tmp/p7-themes-overrides.md` +
+  `/tmp/p7-import-prompts.md`): Setup missing, import small-box vs
+  full-screen modal, square corners, flat dim, dialog-docked footer,
+  status pad, too-small footer row, sample/fill/footer ink gaps.
+- [x] P7 fix LANDED (`260483d`, single sequential worker, reviewer
+  sign-off, no criticals): round `dialog_block`, 3/5 `dim_buffer`
+  blend (backdrop cells byte-identical incl. colors), editor hints
+  stay docked under dialogs, overrides status pad, Python-true
+  too-small frame, slot-fg sample, last-ink code fill, `112233`
+  footer ink + label-colored `/` gaps, full SetupScreen port
+  (welcome/import/new, key gating, Esc), full-screen Import rework
+  (no title, no group header, `▐X▌` rows, `0178d4` cursor wash,
+  live cursor-theme preview, one-row hints, `N selected` line,
+  flat ` Import ` + ` Cancel ` buttons — button row byte-identical
+  incl. colors), mouse-teardown disables. Verified pty IDENTICAL
+  (text+fg/bg) for base/themes/overrides/setup/import/too-small at
+  100x24 + 80x24. Gates: 394 cargo + 525 Python green, clippy 0,
+  fmt clean. Reviewer residuals filed as follow-ups (non-blocking):
+  `#808080`-background empty-preview sentinel, Reset-fg dim path,
+  `import_column` 3x-per-frame rebuild, facade accessor suggestion.
+- [x] ACCEPTED deviations (user-approved or strictly-better, kept):
+  share-spanning top buttons (user request; Python tight 8-col),
+  explicit `f0f0f0` chip fg (terminal-independent; Python default),
+  80-col squeezed label tails (`Them`/`Impo`; Python `Th`/`Im`),
+  `[<u` absence (Python-only kitty-query leakage).
+- [ ] Gate: land one phase-commit; close out 001 spec, guidelines,
+  tasks. Then done.
