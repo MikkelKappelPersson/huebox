@@ -624,17 +624,13 @@ impl Shell {
 
         let logo = render_rows(&logo_backed, slots);
         let mut info = render_rows(&info_rows, slots);
-        info.push(crate::panel::themes_button_line(info_w, slots));
+        // Buttons as air + box + air: one air cell of margin each side,
+        // the box spanning the rest of the share; the blank between
+        // stands (Python's import-button top margin).
+        info.push(button_row_in(info_w, air, btn_w, "Themes", slots));
         info.push(render_rows(&[backdrop(&[], slots, info_w)], slots).remove(0));
-        info.push(crate::panel::import_button_line(info_w, slots));
-        // Narrow the button paint to the button rect: full-width styled
-        // rows would read as a wash across the column. Rebuild the
-        // button rows as air + button + air; the blank between stands.
-        if info.len() == top_screen {
-            let n = info.len();
-            info[n - 3] = button_row_in(info_w, air, btn_w, "Themes", slots);
-            info[n - 1] = button_row_in(info_w, air, btn_w, "Import", slots);
-        }
+        info.push(button_row_in(info_w, air, btn_w, "Import", slots));
+        debug_assert_eq!(info.len(), top_screen, "button rows cost no row");
         let editor_inner = render_rows(&editor_backed, slots);
 
         Some(TopCache {

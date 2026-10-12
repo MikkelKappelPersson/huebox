@@ -154,36 +154,31 @@ fn button_style(slots: &Slots) -> Style {
 /// One flat top button row, centered in `width`.
 ///
 /// Never keeps focus (the shell never routes arrows into it); a drag
-/// across it never begins a text selection. Painted only in the theme's
-/// own selection pair so it reads as part of the theme. Narrow columns
-/// clip the label rather than vetoing the top (Python squeezes the
-/// button with its share the same way).
+/// across it never begins a text selection. The WHOLE box wears the
+/// theme's selection pair — like Textual's `Button`, the padding around
+/// the label is button, not background — so it reads as part of the
+/// theme. Narrow boxes clip the label rather than vetoing the top.
+/// Margin air outside the box stays the caller's (`button_row_in`).
 pub fn button_line(label: &str, width: usize, slots: &Slots) -> Line<'static> {
     let style = button_style(slots);
-    let fill = hex_color(slot_hex(slots, "background"));
+    let width = width.max(1);
     // Squeezed shares clip, like the Python button squeezing with its
     // column rather than overflowing it.
-    let mut label: String = label.chars().take(width.max(1)).collect();
+    let mut label: String = label.chars().take(width).collect();
     if label.is_empty() {
         label.push(' ');
     }
     let label_w = label.chars().count();
-    let pad = width.saturating_sub(label_w) / 2;
-    let mut spans = vec![];
-    for _ in 0..pad {
-        spans.push(Span::styled(" ", Style::new().bg(fill)));
+    let left = width.saturating_sub(label_w) / 2;
+    let mut text = String::new();
+    for _ in 0..left {
+        text.push(' ');
     }
-    spans.push(Span::styled(label.to_owned(), style));
-    while spans
-        .iter()
-        .map(|s: &Span| s.content.chars().count())
-        .sum::<usize>()
-        < width
-    {
-        spans.push(Span::styled(" ", Style::new().bg(fill)));
+    text.push_str(&label);
+    while text.chars().count() < width {
+        text.push(' ');
     }
-    let mut line = Line::from(spans);
-    line.style = Style::new().bg(fill);
+    let line = Line::from(Span::styled(text, style));
     line
 }
 
