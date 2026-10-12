@@ -78,12 +78,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Publish the crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -e
           if out=$(cd rust && cargo publish 2>&1); then echo "$out"; exit 0; fi
           echo "$out"
           case "$out" in
             *"already uploaded"*|*"already exists"*) echo "huebox already on crates.io - nothing to do";;
+            *"no token found"*)
+              # OIDC trusted publishing should have covered this; if cargo
+              # never attempted the exchange, fall back to the token secret.
+              if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+                echo "::error::cargo found no token and CARGO_REGISTRY_TOKEN is unset - add a scoped crates.io token as the CARGO_REGISTRY_TOKEN repo secret"; exit 1
+              fi
+              echo "retrying with CARGO_REGISTRY_TOKEN"
+              out2=$(cd rust && cargo publish 2>&1) && { echo "$out2"; exit 0; }
+              echo "$out2"
+              case "$out2" in
+                *"already uploaded"*|*"already exists"*) echo "huebox already on crates.io - nothing to do";;
+                *) echo "::error::publishing huebox failed"; exit 1;;
+              esac;;
             *) echo "::error::publishing huebox failed"; exit 1;;
           esac
 
