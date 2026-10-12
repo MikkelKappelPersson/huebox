@@ -247,10 +247,45 @@ jobs:
           git config --global --add safe.directory /home/builder/huebox
           su builder -c "git clone ssh://aur@aur.archlinux.org/huebox.git /home/builder/huebox"
 
+      - name: Bootstrap cargo PKGBUILD on first run
+        run: |
+          set -e
+          if su builder -c "cd /home/builder/huebox && grep -q 'archive/refs/tags' PKGBUILD"; then
+            echo "PKGBUILD already cargo-shaped - version bump only"
+          else
+            echo "one-time bootstrap: writing cargo PKGBUILD (no local AUR key needed)"
+            {
+              printf '%s\n' \
+                '# Maintainer: Mikkel Kappel Persson <mikkel@kappelpersson.dk>' \
+                'pkgname=huebox' \
+                'pkgver=PKGVER' \
+                'pkgrel=1' \
+                "pkgdesc='Terminal theme editor with live preview'" \
+                "arch=('x86_64')" \
+                "url='https://github.com/MikkelKappelPersson/huebox'" \
+                "license=('MIT')" \
+                "depends=('gcc-libs')" \
+                "makedepends=('cargo')" \
+                'source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")' \
+                "sha256sums=('PKGSUM')" \
+                '' \
+                'build() {' \
+                '  cd "$pkgname-$pkgver"' \
+                '  cargo build --release --locked --manifest-path rust/Cargo.toml' \
+                '}' \
+                '' \
+                'package() {' \
+                '  cd "$pkgname-$pkgver"' \
+                '  install -Dm755 rust/target/release/huebox "$pkgdir/usr/bin/huebox"' \
+                '  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"' \
+                '}'
+            } > /home/builder/huebox/PKGBUILD
+            chown builder:builder /home/builder/huebox/PKGBUILD
+          fi
+
       - name: Bump pkgver + sums, regenerate .SRCINFO
         run: |
           set -e
-          su builder -c "cd /home/builder/huebox && grep -q 'archive/refs/tags' PKGBUILD || { echo '::error::PKGBUILD still points at the PyPI sdist - do the one-time cargo rewrite first'; exit 1; }"
           su builder -c "export VER='$VER' SUM='$SUM'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums=.*/sha256sums=('\$SUM')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)=' PKGBUILD"
           su builder -c "cd /home/builder/huebox && makepkg --printsrcinfo > .SRCINFO"
           # the tag archive must actually be fetchable before the AUR
