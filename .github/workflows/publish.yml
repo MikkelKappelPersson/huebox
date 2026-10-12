@@ -137,25 +137,26 @@ jobs:
   wheels:
     name: Build wheels
     needs: gates
-    runs-on: ubuntu-latest
+    # Pinned to 22.04 (glibc 2.35): the wheel binary is built here, not in
+    # gates, so the manylinux tag below stays honest and widely installable.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: huebox-bin
-          path: bin
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: Release build for the wheel
+        run: cargo build --release --manifest-path rust/Cargo.toml
+
       - name: Pack wheel
         run: |
           set -e
-          chmod +x bin/huebox
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/v}"; else VER="0.0.0.dev$(date +%s)"; fi
-          python .github/pack-wheel.py --binary bin/huebox --version "$VER" --plat linux_x86_64 --out wheels
+          python .github/pack-wheel.py --binary rust/target/release/huebox --version "$VER" --plat manylinux_2_35_x86_64 --out wheels
           ls -l wheels
 
       - name: Smoke test the wheel
