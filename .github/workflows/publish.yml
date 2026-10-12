@@ -255,15 +255,17 @@ jobs:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed git openssh base-devel curl
 
-      - name: Fetch release tarball + sha256
+      - name: Fetch release tarballs + sha256
         run: |
           set -e
           VER="${GITHUB_REF#refs/tags/v}"
-          curl -sL -o huebox.tar.gz "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-x86_64-linux.tar.gz"
-          SUM="$(sha256sum huebox.tar.gz | cut -d' ' -f1)"
-          echo "aur release $VER sha256 $SUM"
+          for asset in x86_64-linux aarch64-linux; do
+            curl -sfL -o "huebox-$asset.tar.gz" "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-$asset.tar.gz"
+            var="SUM_$(echo "$asset" | tr 'a-z-' 'A-Z_')"
+            echo "$var=$(sha256sum "huebox-$asset.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          done
+          echo "aur release $VER assets fetched"
           echo "VER=$VER" >> "$GITHUB_ENV"
-          echo "SUM=$SUM" >> "$GITHUB_ENV"
 
       - name: Clone the AUR repo as a non-root builder
         env:
@@ -286,13 +288,13 @@ jobs:
           git config --global --add safe.directory /home/builder/huebox
           su builder -c "git clone ssh://aur@aur.archlinux.org/huebox.git /home/builder/huebox"
 
-      - name: Bootstrap binary PKGBUILD on first run
+      - name: Bootstrap multi-arch PKGBUILD on first run
         run: |
           set -e
-          if su builder -c "cd /home/builder/huebox && grep -q 'releases/download' PKGBUILD"; then
-            echo "PKGBUILD already binary-shaped - version bump only"
+          if su builder -c "cd /home/builder/huebox && grep -q 'source_aarch64' PKGBUILD"; then
+            echo "PKGBUILD already multi-arch - version bump only"
           else
-            echo "one-time bootstrap: writing binary PKGBUILD (no local AUR key needed)"
+            echo "one-time bootstrap: writing multi-arch binary PKGBUILD (no local AUR key needed)"
             {
               printf '%s\n' \
                 '# Maintainer: Mikkel Kappel Persson <mikkel@kappelpersson.dk>' \
@@ -300,12 +302,14 @@ jobs:
                 'pkgver=PKGVER' \
                 'pkgrel=1' \
                 "pkgdesc='Terminal theme editor with live preview'" \
-                "arch=('x86_64')" \
+                "arch=('x86_64' 'aarch64')" \
                 "url='https://github.com/MikkelKappelPersson/huebox'" \
                 "license=('MIT')" \
                 "depends=('gcc-libs')" \
-                'source=("huebox-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/huebox-$pkgver-x86_64-linux.tar.gz")' \
-                "sha256sums=('PKGSUM')" \
+                'source_x86_64=("huebox-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/huebox-$pkgver-x86_64-linux.tar.gz")' \
+                'source_aarch64=("huebox-$pkgver-aarch64-linux.tar.gz::$url/releases/download/v$pkgver/huebox-$pkgver-aarch64-linux.tar.gz")' \
+                "sha256sums_x86_64=('PKGSUM_X86_64')" \
+                "sha256sums_aarch64=('PKGSUM_AARCH64')" \
                 '' \
                 'package() {' \
                 '  install -Dm755 huebox "$pkgdir/usr/bin/huebox"' \
@@ -317,7 +321,7 @@ jobs:
       - name: Bump pkgver + sums, regenerate .SRCINFO
         run: |
           set -e
-          su builder -c "export VER='$VER' SUM='$SUM'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums=.*/sha256sums=('\$SUM')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)=' PKGBUILD"
+          su builder -c "export VER='$VER' SUM_X86_64='$SUM_X86_64_LINUX' SUM_AARCH64='$SUM_AARCH64_LINUX'; cd /home/builder/huebox && sed -i -e \"s/^pkgver=.*/pkgver=\$VER/\" -e \"s/^sha256sums_x86_64=.*/sha256sums_x86_64=('\$SUM_X86_64')/\" -e \"s/^sha256sums_aarch64=.*/sha256sums_aarch64=('\$SUM_AARCH64')/\" PKGBUILD && grep -E '^(pkgver|sha256sums)' PKGBUILD"
           su builder -c "cd /home/builder/huebox && makepkg --printsrcinfo > .SRCINFO"
           # the release asset must actually be fetchable before the AUR
           # points at it. The flag matters: a bare retry loop exits 0
@@ -348,7 +352,7 @@ jobs:
           set -e
           VER="${GITHUB_REF#refs/tags/v}"
           for asset in x86_64-linux aarch64-linux arm64-macos x86_64-macos; do
-            curl -sL -o "huebox-$asset.tar.gz" "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-$asset.tar.gz"
+            curl -sfL -o "huebox-$asset.tar.gz" "https://github.com/MikkelKappelPersson/huebox/releases/download/v$VER/huebox-$VER-$asset.tar.gz"
             var="SUM_$(echo "$asset" | tr 'a-z-' 'A-Z_')"
             echo "$var=$(sha256sum "huebox-$asset.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           done
