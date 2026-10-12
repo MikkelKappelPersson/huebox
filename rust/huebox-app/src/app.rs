@@ -597,15 +597,11 @@ impl Shell {
         }
         // Buttons: flat `Themes` / `Import` under the theme subject, each
         // exactly what its key does through the same call. Never
-        // focusable; painted only in the selection pair. Squeezed shares
-        // keep the air where the label fits, else spend it on the label —
-        // a clipped button still answers its click.
-        let mut air = if info_w > 2 { 1 } else { 0 };
-        let mut btn_w = info_w.saturating_sub(2 * air);
-        if btn_w < 6 && air > 0 {
-            air = 0;
-            btn_w = info_w;
-        }
+        // focusable; painted only in the selection pair. The button
+        // spans the share with one air cell each side — a clipped
+        // button still answers its click.
+        let air = if info_w > 2 { 1 } else { 0 };
+        let btn_w = info_w.saturating_sub(2 * air);
         if btn_w == 0 {
             return None;
         }

@@ -115,8 +115,14 @@ fn stacked_panels_show_borders_and_titles() {
     assert!(!stacked.controls.is_empty());
     assert!(!stacked.examples.is_empty());
     let body = frame_text(&buffer, 80, 24);
-    for title in ["THEME", "EXAMPLES", "EDITOR", "Themes", "Import"] {
+    for title in ["THEME", "EXAMPLES", "EDITOR"] {
         assert!(body.contains(title), "missing {title}\n{body}");
+    }
+    // The 80-column info share clips the button labels to its box
+    // (Python's Textual squeeze clips harder — accepted deviation);
+    // the click test below pins the spans that remain.
+    for label in ["Them", "Impo"] {
+        assert!(body.contains(label), "missing {label}\n{body}");
     }
     // Round corners, not square ones: the native `border: round`.
     assert!(body.contains('╭'), "{body:?}");
@@ -130,16 +136,18 @@ fn stacked_panels_show_borders_and_titles() {
     assert_eq!(corner.symbol(), "╭");
     assert_eq!(corner.fg, Color::Rgb(0xd0, 0xd0, 0xd8));
     assert_eq!(corner.bg, Color::Rgb(0x10, 0x10, 0x14));
-    // The title wears Textual's `─ TITLE ` shape in bold foreground on
-    // background — never a wash.
+    // The title wears Textual's `─ TITLE ` shape: the dash is BORDER ink
+    // (palette-8, unbolded), the ` THEME ` that follows bold foreground.
     let title_x = stacked.controls_rect.x as usize + 1;
     let title_y = stacked.controls_rect.y;
-    let title_cells: Vec<&ratatui::buffer::Cell> = (0..7)
+    let title_cells: Vec<&ratatui::buffer::Cell> = (0..8)
         .map(|i| &buffer[(title_x as u16 + i, title_y)])
         .collect();
     let title_text: String = title_cells.iter().map(|c| c.symbol()).collect::<String>();
-    assert_eq!(title_text, "─ THEME");
-    for cell in title_cells {
+    assert_eq!(title_text, "─ THEME ");
+    assert_eq!(title_cells[0].fg, Color::Rgb(0xd0, 0xd0, 0xd8), "{:?}", title_cells[0]);
+    assert!(!title_cells[0].modifier.contains(Modifier::BOLD), "{:?}", title_cells[0]);
+    for cell in &title_cells[1..] {
         assert_eq!(cell.fg, Color::Rgb(0xe6, 0xe6, 0xea), "{cell:?}");
         assert_eq!(cell.bg, Color::Rgb(0x10, 0x10, 0x14), "{cell:?}");
         assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");

@@ -127,15 +127,21 @@ pub fn panel_block(title: &str, slots: &Slots) -> Block<'static> {
     let bg = hex_color(slot_hex(slots, "background"));
     let border = hex_color(slot_hex(slots, "palette-8"));
     let fg = hex_color(slot_hex(slots, "foreground"));
+    // Two runs: the leading dash wears the BORDER ink (it is border,
+    // not text), the ` TITLE ` that follows wears bold foreground.
+    let heading = Line::from(vec![
+        Span::styled("─", Style::new().fg(border).bg(bg)),
+        Span::styled(
+            format!(" {title} "),
+            Style::new().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+        ),
+    ]);
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border).bg(bg))
         .style(Style::new().bg(bg))
-        .title(Span::styled(
-            format!("─ {title} "),
-            Style::new().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
-        ))
+        .title(heading)
 }
 
 /// Selection-pair ink both top buttons wear (theme-closed, like Python).
