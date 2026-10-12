@@ -7,7 +7,8 @@ name: Publish
 #
 # Source of truth per target:
 #   crates.io  — the single `huebox` crate (Trusted Publishing)
-#   GitHub     — prebuilt x86_64-linux binary tarball + sha256
+#   GitHub     — prebuilt binaries per tag (linux x86_64 + aarch64,
+#                mac arm64 + Intel), each tarball + sha256
 #   PyPI       — binary wheel (prebuilt binary + launcher, ruff-style)
 #   AUR        — PKGBUILD builds from the Git tag archive with cargo
 #   Homebrew   — formula builds from the Git tag archive with cargo
@@ -58,12 +59,6 @@ jobs:
       - name: Release build
         run: cargo build --release --manifest-path rust/Cargo.toml
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: huebox-bin
-          path: rust/target/release/huebox
-          if-no-files-found: error
-
   crates:
     name: Publish to crates.io
     # tags only: a manual run must never touch the real index. One crate,
@@ -103,31 +98,56 @@ jobs:
           esac
 
   binaries:
-    name: Prebuilt Linux binary
+    name: Prebuilt binary (${{ matrix.label }})
     if: startsWith(github.ref, 'refs/tags/')
     needs: gates
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64-linux
+            runs-on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            native: true
+          - label: aarch64-linux
+            runs-on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            native: true
+          - label: arm64-macos
+            runs-on: macos-14
+            target: aarch64-apple-darwin
+            native: true
+          - label: x86_64-macos
+            runs-on: macos-14
+            target: x86_64-apple-darwin
+            native: false
+    runs-on: ${{ matrix.runs-on }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: huebox-bin
-          path: bin
+          targets: ${{ matrix.target }}
+
+      - name: Release build
+        run: cargo build --release --manifest-path rust/Cargo.toml --target ${{ matrix.target }}
 
       - name: Tarball + sha256
         run: |
           set -e
           VER="${GITHUB_REF#refs/tags/v}"
-          chmod +x bin/huebox
-          T="huebox-$VER-x86_64-linux"
-          mkdir "$T" && cp bin/huebox "$T/"
+          T="huebox-$VER-${{ matrix.label }}"
+          BIN="rust/target/${{ matrix.target }}/release/huebox"
+          chmod +x "$BIN"
+          mkdir "$T" && cp "$BIN" "$T/"
+          if [ "${{ matrix.native }}" = "true" ]; then ./"$T"/huebox --version; fi
           tar -czf "$T.tar.gz" "$T"
-          sha256sum "$T.tar.gz" | tee "$T.tar.gz.sha256"
+          (sha256sum "$T.tar.gz" || shasum -a 256 "$T.tar.gz") | tee "$T.tar.gz.sha256"
           mkdir release && mv "$T.tar.gz" "$T.tar.gz.sha256" release/
-          ./"$T"/huebox --version
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-bin
+          name: release-bin-${{ matrix.label }}
           path: release/*
           if-no-files-found: error
 
@@ -139,8 +159,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: release-bin
+          pattern: release-bin-*
           path: release
+          merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
         with:
