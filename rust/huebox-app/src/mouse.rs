@@ -113,8 +113,14 @@ fn click_import(shell: &mut Shell, x: usize, y: usize) -> Outcome {
         return Outcome::Continue;
     }
     let id = layout.import_ids.get(ly).and_then(|id| id.clone());
-    // A theme row: the mouse spelling of cursor-move + toggle. Group
-    // and chrome rows hold still — a group toggles only through its key.
+    // A group title: the mouse spelling of collapse/expand.
+    if id.is_none() {
+        if let Some(provider) = layout.import_groups.get(ly).and_then(|group| group.clone()) {
+            huebox_editor::toggle_group(&mut shell.import, &provider);
+        }
+        return Outcome::Continue;
+    }
+    // A theme row: the mouse spelling of cursor-move + toggle.
     if let Some((provider, display)) = id {
         if let Some(index) = shell
             .import

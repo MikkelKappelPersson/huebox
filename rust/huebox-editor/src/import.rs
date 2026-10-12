@@ -277,6 +277,26 @@ pub fn move_down(st: &mut ImportState) {
     step(st, 1);
 }
 
+/// `home` / `pageup`: park the cursor on the first visible row.
+///
+/// The lists are exact-fit, so a native page always lands on an end.
+pub fn move_first(st: &mut ImportState) {
+    let rows = visible_rows(st);
+    if let Some((provider, index, _)) = rows.first() {
+        st.cursor = (provider.clone(), *index);
+    }
+}
+
+/// `end` / `pagedown`: park the cursor on the last visible row.
+///
+/// The lists are exact-fit, so a native page always lands on an end.
+pub fn move_last(st: &mut ImportState) {
+    let rows = visible_rows(st);
+    if let Some((provider, index, _)) = rows.last() {
+        st.cursor = (provider.clone(), *index);
+    }
+}
+
 /// A wheel tick over the list: the highlight follows, ±1 per detent.
 ///
 /// `delta > 0` steps down, `< 0` steps up; `0` holds still.
@@ -500,6 +520,14 @@ pub fn handle_key(st: &mut ImportState, key: &str) -> &'static str {
         } else {
             move_down(st);
         }
+        return "moved";
+    }
+    if key == "home" || key == "pageup" {
+        move_first(st);
+        return "moved";
+    }
+    if key == "end" || key == "pagedown" {
+        move_last(st);
         return "moved";
     }
     if key == "left" {

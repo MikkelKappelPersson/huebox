@@ -40,6 +40,7 @@ use huebox_render::grid::{
 use huebox_render::hsv::{hsv_axis, HSV_FIELD};
 use huebox_render::layout::{row_visible, MIN_COLS, MIN_ROWS};
 use huebox_render::palette::SLOTS;
+use huebox_render::sample::pad_code_row;
 use huebox_render::{slot_hex, Cell, Row};
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
@@ -51,9 +52,10 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::cells::{hex_color, render_rows};
 use crate::debug;
 use crate::dialog::{
-    clamp_width, dialog_block, dim_block, import_body, overrides_pairs, popup_rect, setup_pairs,
-    themes_pairs, IMPORT_DIALOG_MAX_H, IMPORT_DIALOG_W, IMPORT_HINTS, OVERRIDES_DIALOG_W,
-    SETUP_DIALOG_W, THEMES_DIALOG_MAX_H, THEMES_DIALOG_W,
+    apply_import_thumb, clamp_width, dialog_block, dim_buffer, import_body, import_column_height,
+    import_count_text, import_cursor_y, import_preview, import_scrollbar, overrides_pairs,
+    popup_rect, setup_pairs, themes_pairs, IMPORT_DIALOG_MAX_H, IMPORT_DIALOG_W, IMPORT_HINTS,
+    IMPORT_LEFT_W, OVERRIDES_DIALOG_W, SETUP_DIALOG_W, THEMES_DIALOG_MAX_H, THEMES_DIALOG_W,
 };
 use crate::footer::{bar_line_single, bar_lines, fold_footer};
 use crate::panel::{
@@ -118,6 +120,10 @@ pub struct PopupLayout {
     pub hits: Vec<Hit>,
     /// Row-aligned theme ids (import dialog; `None` on group/chrome rows).
     pub import_ids: Vec<Option<ThemeId>>,
+    /// Row-aligned title providers (import dialog; `None` on theme rows).
+    pub import_groups: Vec<Option<String>>,
+    /// No border chrome: the too-small fallback owns its rows alone.
+    pub bare: bool,
     /// Import-dialog confirm button, frame coords (click-only `Enter`).
     pub confirm_btn: Option<Rect>,
     /// Import-dialog cancel button, frame coords (click-only `Esc`).
@@ -223,6 +229,10 @@ pub struct Shell {
     pub import: ImportState,
     /// Route keys to the import popup while open.
     pub import_open: bool,
+    /// The import list's viewport head, in column rows (titles counted).
+    /// `None` re-seeds past the title on the next paint; the router
+    /// clears it whenever the popup opens or closes.
+    pub import_scroll: Option<usize>,
     /// The import confirm writer (truth files only).
     pub import_writer: Option<ImportWriter>,
     /// Per-theme failures plus writer problems, for the exit report.
@@ -275,6 +285,7 @@ impl Shell {
             state,
             import,
             import_open: false,
+            import_scroll: None,
             import_writer,
             import_notes: vec![],
             cols: 80,
@@ -322,25 +333,15 @@ impl Shell {
         }
     }
 
-    /// The footer pairs for the screen on top: one source, two paints.
+    /// The footer pairs for the screen on top: always the editor's.
+    ///
+    /// The docked bar lives on the stack bottom with the frame, so a
+    /// dialog dims it along with everything behind it — the dialog's own
+    /// hints ride its in-flow bar instead, never the docked one.
     fn footer_pairs(&self) -> Vec<(String, String)> {
         // Owned: the editor source builds a fresh `Vec` per frame, so no
         // branch can hand out borrows into a temporary.
-        let editor = editor_hints(self.state.undo.len());
-        let pairs: Vec<(&str, &str)> = match self.screen() {
-            Screen::Editor => editor
-                .iter()
-                .map(|(key, what)| (key.as_str(), what.as_str()))
-                .collect(),
-            Screen::Setup => setup_pairs(self.state.setup_name.is_some()).to_vec(),
-            Screen::Themes => themes_pairs().to_vec(),
-            Screen::Overrides => overrides_pairs().to_vec(),
-            Screen::Import => IMPORT_HINTS.to_vec(),
-        };
-        pairs
-            .into_iter()
-            .map(|(key, what)| (key.to_owned(), what.to_owned()))
-            .collect()
+        editor_hints(self.state.undo.len())
     }
 
     /// State → cells: grid, body frame, footer bar, dialog layout.
@@ -355,7 +356,14 @@ impl Shell {
             .map(|(key, what)| (key.as_str(), what.as_str()))
             .collect();
         let status = self.state.status.clone();
-        self.foot_lines = vec![bar_line_single(&pair_refs, &status, cols, &slots)];
+        // Below one row past the floor there is no row for the bar:
+        // the frame (or the fallback) owns the whole window instead.
+        let show_footer = cols >= MIN_COLS && rows > MIN_ROWS;
+        self.foot_lines = if show_footer {
+            vec![bar_line_single(&pair_refs, &status, cols, &slots)]
+        } else {
+            vec![]
+        };
         let body_rows = rows.saturating_sub(self.foot_lines.len());
 
         // Reset the compositor caches; each path below sets what stands.
@@ -368,6 +376,10 @@ impl Shell {
         self.widest = 0;
         self.live_headers = vec![];
 
+        // Below the floor the frame is one centred hint and nothing
+        // else: the hint stays fully unstyled and the bar stays down,
+        // so the frame owns the whole window.
+
         // Layout size (§15.7): past the maxima content stops reflowing
         // and the extra screen stays fill.
         let (layout_cols, layout_rows) = if panel_limits_enabled() {
@@ -379,7 +391,9 @@ impl Shell {
         let frame_h = layout_rows.saturating_sub(foot_len);
 
         let panels_wanted = panels_enabled() && cols >= MIN_COLS && rows >= MIN_ROWS;
-        if panels_wanted && self.try_side(layout_cols, frame_h, body_rows) {
+        if cols < MIN_COLS || rows < MIN_ROWS {
+            self.body_lines = small_lines(cols, body_rows, &slots);
+        } else if panels_wanted && self.try_side(layout_cols, frame_h, body_rows) {
             // Side-by-side mounted everything; grid + counts set inside.
         } else if panels_wanted
             && cols >= MIN_COLS + 2
@@ -488,6 +502,19 @@ impl Shell {
             .map(|row| row_visible(row))
             .max()
             .unwrap_or(0);
+        // Code-sample rows pad in their own last ink (the frame
+        // parser's unclosed trailing style); every other row pads plain.
+        if let Some((_, first, count)) = out.regions.iter().find(|(name, _, _)| name == "sample") {
+            let (first, count) = (*first, *count);
+            let stop = (first + count).min(new_y.len());
+            for y in first.saturating_add(1)..stop {
+                if let Some(by) = new_y.get(y).copied().flatten() {
+                    if let Some(row) = bare_rows.get_mut(by) {
+                        *row = pad_code_row(std::mem::take(row), &slots, cols);
+                    }
+                }
+            }
+        }
         self.blocks = out.regions.len();
         self.hits = bare_hits;
         self.body_lines = pad_lines(render_rows(&bare_rows, &slots), cols, &slots);
@@ -865,7 +892,18 @@ impl Shell {
         }
         let examples_rows: Vec<Row> = built
             .into_iter()
-            .flat_map(|(_, block_rows, _, _)| block_rows)
+            .flat_map(|(name, block_rows, _, _)| {
+                let slots = slots.clone();
+                block_rows.into_iter().enumerate().map(move |(i, row)| {
+                    // Code rows pad in their own last ink; the block's
+                    // title row and every other block pad plain.
+                    if name == "sample" && i > 0 {
+                        pad_code_row(row, &slots, inner_w)
+                    } else {
+                        row
+                    }
+                })
+            })
             .collect();
         // Lines: content rows backdropped at the inner width, then aired
         // past the borders. Chrome rows re-back to the full layout width.
@@ -1237,14 +1275,8 @@ impl Shell {
                 )
             }
             Screen::Import => {
-                let pairs: Vec<(&str, &str)> = IMPORT_HINTS.to_vec();
-                let dlg_w = clamp_width(IMPORT_DIALOG_W, cols);
-                // The footer buttons cost one row inside the dialog.
-                let budget = rows
-                    .saturating_sub(2 + bar_height(&pairs) + 1)
-                    .clamp(1, IMPORT_DIALOG_MAX_H);
-                let view = import_body(&mut self.import, dlg_w, budget, &status, &slots);
-                (PopupKind::Import, dlg_w, view.rows, vec![], view.ids, pairs)
+                self.refresh_import(cols, rows);
+                return;
             }
         };
         let bar = bar_lines(&pairs, &status, dlg_w, &slots);
@@ -1307,8 +1339,141 @@ impl Shell {
             h: self.popup_lines.len(),
             hits,
             import_ids: ids,
+            import_groups: vec![],
             confirm_btn,
             cancel_btn,
+            bare: false,
+        });
+    }
+
+    /// The import dialog over the dimmed base: full-screen list plus live
+    /// preview plus its in-flow bar and buttons — one bordered dialog,
+    /// the same kind as every other popup, at the import size.
+    fn refresh_import(&mut self, cols: usize, rows: usize) {
+        use huebox_render::floor::too_small_frame;
+        let slots = self.state.slots.clone();
+        // Below the floor the popup keeps the editor's own fallback —
+        // the hint line instead of a squeezed modal, no border chrome.
+        if cols < MIN_COLS || rows < MIN_ROWS {
+            let hint: String = too_small_frame(cols).iter().map(|cell| cell.ch).collect();
+            self.popup_lines = vec![Line::from(vec![ratatui::text::Span::styled(
+                hint,
+                Style::new()
+                    .fg(ratatui::style::Color::Reset)
+                    .bg(ratatui::style::Color::Reset),
+            )])];
+            self.popup = Some(PopupLayout {
+                kind: PopupKind::Import,
+                ox: 0,
+                oy: 0,
+                w: cols,
+                h: 1,
+                hits: vec![],
+                import_ids: vec![],
+                import_groups: vec![],
+                confirm_btn: None,
+                cancel_btn: None,
+                bare: true,
+            });
+            return;
+        }
+        let pairs: Vec<(&str, &str)> = IMPORT_HINTS.to_vec();
+        let dlg_w = clamp_width(IMPORT_DIALOG_W, cols);
+        let dlg_h = rows.saturating_sub(2).min(IMPORT_DIALOG_MAX_H);
+        let count = import_count_text(&self.import);
+        let bar = bar_lines(&pairs, &count, dlg_w, &slots);
+        // The buttons cost one row inside the dialog, like every bar.
+        let body_h = dlg_h.saturating_sub(bar.len() + 1).max(1);
+        let left_w = IMPORT_LEFT_W.min(dlg_w.saturating_sub(8));
+        let preview_w = dlg_w.saturating_sub(left_w);
+        // The viewport head: past the title while overflowing, then
+        // minimal to the cursor, clamped when the column shrinks.
+        let col_h = import_column_height(&self.import);
+        let mut scroll = self
+            .import_scroll
+            .unwrap_or(if col_h > body_h { 1 } else { 0 });
+        if let Some(cy) = import_cursor_y(&self.import) {
+            if cy < scroll {
+                scroll = cy;
+            } else if body_h > 0 && cy + 1 > scroll + body_h {
+                scroll = cy + 1 - body_h;
+            }
+        }
+        scroll = scroll.min(col_h.saturating_sub(body_h.max(1)));
+        self.import_scroll = Some(scroll);
+        let view = import_body(&self.import, left_w, scroll, body_h, &slots);
+        let tid = huebox_editor::cursor_id(&self.import);
+        let name = tid
+            .as_ref()
+            .and_then(|id| self.import.display.get(id))
+            .cloned()
+            .unwrap_or_default();
+        let preview = huebox_editor::cursor_slots(&mut self.import);
+        let right = import_preview(&name, &preview, &slots, preview_w, body_h);
+        let bg = huebox_render::slot_hex(&slots, "background").to_owned();
+        let content: Vec<Row> = view
+            .rows
+            .into_iter()
+            .zip(right)
+            .map(|(mut left, right)| {
+                left.extend(right);
+                let mut row = huebox_render::layout::clip_row(&left, dlg_w);
+                while huebox_render::layout::row_visible(&row) < dlg_w {
+                    row.push(huebox_render::Cell::new(' ', "", &bg));
+                }
+                row
+            })
+            .collect();
+        let mut lines = render_rows(&content, &slots);
+        // The list column's scrollbar rides over the content's last two
+        // cells — transparent track, thumb only.
+        for (line, thumb) in lines
+            .iter_mut()
+            .zip(import_scrollbar(col_h, body_h, scroll).iter())
+        {
+            if let Some(thumb) = thumb {
+                apply_import_thumb(line, *thumb, left_w, &slots);
+            }
+        }
+        lines.extend(bar);
+        let (btn_line, confirm, cancel) = import_footer_buttons(dlg_w, &slots);
+        lines.push(btn_line);
+        let rect = popup_rect(
+            Rect::new(0, 0, cols as u16, rows as u16),
+            (dlg_w + 2) as u16,
+            (lines.len() + 2) as u16,
+        );
+        let inner_w = rect.width.saturating_sub(2) as usize;
+        lines.truncate(rect.height.saturating_sub(2) as usize);
+        while lines.len() < rect.height.saturating_sub(2) as usize {
+            lines.push(blank_line(inner_w, &slots));
+        }
+        let by = rect.y as usize + 1 + lines.len().saturating_sub(1);
+        let confirm_btn = Some(Rect::new(
+            (rect.x as usize + 1 + confirm.0) as u16,
+            by as u16,
+            confirm.1.saturating_sub(confirm.0) as u16,
+            1,
+        ));
+        let cancel_btn = Some(Rect::new(
+            (rect.x as usize + 1 + cancel.0) as u16,
+            by as u16,
+            cancel.1.saturating_sub(cancel.0) as u16,
+            1,
+        ));
+        self.popup_lines = pad_lines(lines, inner_w, &slots);
+        self.popup = Some(PopupLayout {
+            kind: PopupKind::Import,
+            ox: rect.x as usize,
+            oy: rect.y as usize,
+            w: inner_w,
+            h: self.popup_lines.len(),
+            hits: vec![],
+            import_ids: view.ids,
+            import_groups: view.groups,
+            confirm_btn,
+            cancel_btn,
+            bare: false,
         });
     }
 
@@ -1340,7 +1505,12 @@ impl Shell {
         let Some(layout) = self.popup.clone() else {
             return;
         };
-        frame.render_widget(dim_block(&slots), area);
+        dim_buffer(frame.buffer_mut(), area, &slots);
+        // The too-small fallback owns its rows alone: no border chrome.
+        if layout.bare {
+            frame.render_widget(Paragraph::new(self.popup_lines.clone()), area);
+            return;
+        }
         let rect = Rect::new(
             layout.ox as u16,
             layout.oy as u16,
@@ -1535,7 +1705,10 @@ fn button_row_in(
     let btn = button_line(label, btn_w, slots);
     let mut spans = vec![];
     for _ in 0..air {
-        spans.push(ratatui::text::Span::styled(" ", Style::new().bg(bg)));
+        spans.push(ratatui::text::Span::styled(
+            " ",
+            Style::new().fg(ratatui::style::Color::Reset).bg(bg),
+        ));
     }
     // `button_line` already wears the selection pair; keep its spans so
     // tests find the label whole.
@@ -1546,7 +1719,10 @@ fn button_row_in(
         .sum::<usize>()
         < width
     {
-        spans.push(ratatui::text::Span::styled(" ", Style::new().bg(bg)));
+        spans.push(ratatui::text::Span::styled(
+            " ",
+            Style::new().fg(ratatui::style::Color::Reset).bg(bg),
+        ));
     }
     let mut line = Line::from(spans);
     line.style = Style::new().bg(bg);
@@ -1566,7 +1742,10 @@ fn pad_lines(lines: Vec<Line<'static>>, cols: usize, slots: &Slots) -> Vec<Line<
             let mut width = line.width();
             let mut spans = line.spans;
             while width < cols {
-                spans.push(ratatui::text::Span::styled(" ", Style::new().bg(bg)));
+                spans.push(ratatui::text::Span::styled(
+                    " ",
+                    Style::new().fg(ratatui::style::Color::Reset).bg(bg),
+                ));
                 width += 1;
             }
             let mut padded = Line::from(spans);
@@ -1576,12 +1755,30 @@ fn pad_lines(lines: Vec<Line<'static>>, cols: usize, slots: &Slots) -> Vec<Line<
         .collect()
 }
 
+/// Below the floor: the centred hint, fully unstyled, over blank
+/// buffer-background fill — never the bar, never a dialog pad.
+fn small_lines(cols: usize, rows: usize, slots: &Slots) -> Vec<Line<'static>> {
+    use huebox_render::floor::too_small_frame;
+    let hint: String = too_small_frame(cols).iter().map(|cell| cell.ch).collect();
+    let mut lines = vec![Line::from(vec![ratatui::text::Span::styled(
+        hint,
+        Style::new()
+            .fg(ratatui::style::Color::Reset)
+            .bg(ratatui::style::Color::Reset),
+    )])];
+    while lines.len() < rows {
+        lines.push(blank_line(cols, slots));
+    }
+    lines.truncate(rows);
+    lines
+}
+
 /// One blank fill line for dialog padding.
 fn blank_line(cols: usize, slots: &Slots) -> Line<'static> {
     let bg = hex_color(huebox_render::slot_hex(slots, "background"));
     let mut line = Line::from(vec![ratatui::text::Span::styled(
         " ".repeat(cols.max(1)),
-        Style::new().bg(bg),
+        Style::new().fg(ratatui::style::Color::Reset).bg(bg),
     )]);
     line.style = Style::new().bg(bg);
     line

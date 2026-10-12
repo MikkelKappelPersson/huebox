@@ -61,6 +61,8 @@ pub fn settle(shell: &mut Shell) -> Outcome {
 fn open_popup(shell: &mut Shell) {
     open_import(&mut shell.import);
     shell.import_open = true;
+    // A fresh mount re-seeds the viewport past the title.
+    shell.import_scroll = None;
 }
 
 /// One translated key against whichever screen is top.
@@ -125,6 +127,7 @@ fn import_key(shell: &mut Shell, key: &str) -> Outcome {
             // is still empty — a library that landed themes stays in the
             // editor, where `t` opens them.
             shell.import_open = false;
+            shell.import_scroll = None;
             setup_after_import(&mut shell.state);
             Outcome::Continue
         }
@@ -167,6 +170,7 @@ fn confirm_popup(shell: &mut Shell) -> Outcome {
     }
     shell.import_notes.extend(outcome.notes);
     shell.import_open = false;
+    shell.import_scroll = None;
     setup_after_import(&mut shell.state);
     Outcome::Continue
 }

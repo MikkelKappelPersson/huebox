@@ -18,9 +18,9 @@
 //!   `apply_key` path ([`mouse`]) — it never touches a colour directly.
 //!   Chrome clicks select nothing. The wheel moves the picker and the
 //!   import list, never the editor frame.
-//! * Popups are centered areas over a dimmed base ([`dialog`]): clear plus
-//!   the buffer's own background, never an opaque foreign fill, never
-//!   stacked. The footer bar ([`footer`]) carries the same hint pairs plus
+//! * Popups are centered areas over a dimmed base ([`dialog`]): a real
+//!   blend toward the buffer's own background, never an opaque foreign
+//!   fill, never stacked. The footer bar ([`footer`]) carries the same hint pairs plus
 //!   the status last, folded to two lines in dialogs.
 //! * Cells map to Ratatui spans directly ([`cells`]) — there is no
 //!   `from_ansi` anywhere in this crate. Bold survives only where the

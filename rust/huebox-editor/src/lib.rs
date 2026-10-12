@@ -49,8 +49,9 @@ pub use huebox_render::frame::{editor_hints, slot_at, Hit};
 pub use import::{
     abandon, batch_unique, clear_selection, click_group, click_row, close_import, collapse_cursor,
     confirm_import, cursor_id, cursor_slots, expand_cursor, handle_key, import_may_open, move_down,
-    move_up, open_import, plan_confirm, preview_slots, select_all_visible, slugify, toggle,
-    toggle_group, unique_slug, visible_rows, wheel, ConfirmOutcome, ImportPlan, ImportState,
+    move_first, move_last, move_up, open_import, plan_confirm, preview_slots, select_all_visible,
+    slugify, toggle, toggle_group, unique_slug, visible_rows, wheel, ConfirmOutcome, ImportPlan,
+    ImportState,
 };
 pub use keys::{apply_key, apply_state, save_state, setup_after_import, NEW_THEME_LABEL};
 pub use seams::{

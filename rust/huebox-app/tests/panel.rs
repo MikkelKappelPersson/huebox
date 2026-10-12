@@ -145,8 +145,17 @@ fn stacked_panels_show_borders_and_titles() {
         .collect();
     let title_text: String = title_cells.iter().map(|c| c.symbol()).collect::<String>();
     assert_eq!(title_text, "─ THEME ");
-    assert_eq!(title_cells[0].fg, Color::Rgb(0xd0, 0xd0, 0xd8), "{:?}", title_cells[0]);
-    assert!(!title_cells[0].modifier.contains(Modifier::BOLD), "{:?}", title_cells[0]);
+    assert_eq!(
+        title_cells[0].fg,
+        Color::Rgb(0xd0, 0xd0, 0xd8),
+        "{:?}",
+        title_cells[0]
+    );
+    assert!(
+        !title_cells[0].modifier.contains(Modifier::BOLD),
+        "{:?}",
+        title_cells[0]
+    );
     for cell in &title_cells[1..] {
         assert_eq!(cell.fg, Color::Rgb(0xe6, 0xe6, 0xea), "{cell:?}");
         assert_eq!(cell.bg, Color::Rgb(0x10, 0x10, 0x14), "{cell:?}");

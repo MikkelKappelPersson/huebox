@@ -443,7 +443,13 @@ pub fn side_live_rows(
     // `code.pop()` never fires, so the trailing newline stays a row.
     let take = (rest - 1).max(1);
     rows.push(title("live code", slots, ""));
-    rows.extend(code.into_iter().take(take));
+    // Code rows pad in their own last ink (the frame parser's unclosed
+    // trailing style), so the later wall-to-wall backdrop leaves them.
+    rows.extend(
+        code.into_iter()
+            .take(take)
+            .map(|line| crate::sample::pad_code_row(line, slots, cols)),
+    );
     rows.extend(std::iter::repeat_with(Vec::new).take(height - rows.len()));
     assert_eq!(rows.len(), height, "({}, {})", rows.len(), height);
     if let Some(regions) = regions {
@@ -668,7 +674,9 @@ pub fn top_editor_meta(
     }
     let mut combined = swatch;
     combined.extend(plain("   "));
-    combined.extend(painted("AaBbCc 0123", "", value));
+    // Slot ink on the buffer background, like every other specimen —
+    // never inverse video, whatever the terminal default is.
+    combined.extend(painted("AaBbCc 0123", value, ""));
     (rows, vec![combined], meta_w)
 }
 

@@ -115,11 +115,12 @@ fn footer_bar_carries_hints_and_status() {
         .map(|x| &buffer[(x, 29)])
         .find(|cell| cell.symbol() == "a" && cell.fg == Color::Rgb(0xe0, 0xc0, 0x6c));
     assert!(key_cell.is_some(), "{last:?}");
-    // Where the status fits it rides the same row, bold foreground.
+    // Where the status fits it rides the same row, bold foreground —
+    // with its two air cells on the left, the widget's own left margin.
     let probe = EditorState::new(ramp(), write_ok());
     let line = huebox_app::bar_line_single(&[], "saved ember", 20, &probe.slots);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-    assert!(text.starts_with("saved ember"), "{text:?}");
+    assert!(text.starts_with("  saved ember"), "{text:?}");
 }
 
 /// The wordmark stands bold in the top rows, live from the buffer.

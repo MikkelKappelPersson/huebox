@@ -46,11 +46,17 @@ pub fn hex_color(hex: &str) -> Color {
 /// One cell as a span. `bg_fill` is the buffer background for `bg ""`.
 /// `bold` is positional emphasis (status/wordmark); the cell's own
 /// [`Cell::bold`][huebox_render::Cell] flag covers everything else.
+///
+/// An unpainted foreground paints `Reset` (the terminal default) — never
+/// an unset style, which Ratatui would skip and leave whatever stood on
+/// the cell before (stale frame, or the modal dim) showing through.
 pub fn span_for(cell: &Cell, bg_fill: &str, bold: bool) -> Span<'static> {
     let mut style = Style::new();
-    if !cell.fg.is_empty() {
-        style = style.fg(hex_color(&cell.fg));
-    }
+    style = style.fg(if cell.fg.is_empty() {
+        Color::Reset
+    } else {
+        hex_color(&cell.fg)
+    });
     style = style.bg(if cell.bg.is_empty() {
         hex_color(bg_fill)
     } else {
@@ -140,8 +146,8 @@ mod tests {
         for span in &line.spans {
             assert_eq!(span.style.bg, Some(Color::Rgb(0x10, 0x10, 0x14)));
         }
-        // Unset fg stays unset — the terminal default, as in Python.
-        assert_eq!(line.spans[0].style.fg, None);
+        // Unset fg paints Reset — the terminal default, as in Python.
+        assert_eq!(line.spans[0].style.fg, Some(Color::Reset));
     }
 
     #[test]

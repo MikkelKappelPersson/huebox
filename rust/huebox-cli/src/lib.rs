@@ -25,8 +25,8 @@ use clap::Parser;
 use huebox_app::Shell;
 use huebox_core::Slots;
 use huebox_editor::{
-    report_session, ApplyFn, BackupFn, DeleteFn, EditorState, ImportLibrary, ImportWriter, Library,
-    PromptFn, WriteFn, WriteOutcome,
+    enter_setup, report_session, ApplyFn, BackupFn, DeleteFn, EditorState, ImportLibrary,
+    ImportWriter, Library, PromptFn, WriteFn, WriteOutcome,
 };
 use huebox_lib::backend::RealBackend;
 use huebox_lib::format::{unknown_format, FormatStub};
@@ -825,6 +825,9 @@ pub fn run_editor(
     if target.theme.is_none() {
         state.backup_path = Some(target.path.to_string_lossy().into_owned());
     }
+    // An empty library opens on the first-run choice instead of an
+    // editor with nothing to save to — chosen before a colour key fires.
+    enter_setup(&mut state);
 
     let order: Vec<String> = providers::PROVIDER_NAMES
         .iter()

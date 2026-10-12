@@ -95,20 +95,22 @@ pub fn bar_line(fold: &FooterFold, cols: usize, slots: &Slots) -> Line<'static> 
     let mut first = true;
     for (key, what) in &fold.pairs {
         if !first {
-            spans.push(Span::styled("  ", Style::new().bg(bg)));
+            spans.push(Span::styled("  ", Style::new().fg(Color::Reset).bg(bg)));
         }
         first = false;
         spans.push(Span::styled(
             key.clone(),
             Style::new().fg(key_fg).bg(bg).add_modifier(Modifier::BOLD),
         ));
-        spans.push(Span::styled(" ", Style::new().bg(bg)));
+        // The key's own air wears the label ink, like the widget's
+        // description padding it mirrors.
+        spans.push(Span::styled(" ", Style::new().fg(label_fg).bg(bg)));
         spans.push(Span::styled(what.clone(), Style::new().fg(label_fg).bg(bg)));
     }
     if let Some(status) = &fold.status {
-        if !first {
-            spans.push(Span::styled("  ", Style::new().bg(bg)));
-        }
+        // The status always keeps its two air cells on the left — the
+        // widget's own left margin — whether pairs share the row or not.
+        spans.push(Span::styled("  ", Style::new().fg(Color::Reset).bg(bg)));
         spans.push(Span::styled(
             status.clone(),
             Style::new()
@@ -120,7 +122,7 @@ pub fn bar_line(fold: &FooterFold, cols: usize, slots: &Slots) -> Line<'static> 
     // The bar fills the width in the buffer background, like every frame row.
     let mut text_len: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     while text_len < cols {
-        spans.push(Span::styled(" ", Style::new().bg(bg)));
+        spans.push(Span::styled(" ", Style::new().fg(Color::Reset).bg(bg)));
         text_len += 1;
     }
     let mut line = Line::from(spans);
@@ -170,7 +172,7 @@ pub fn bar_line_single(
     }
     let bg = hex_color(slot_hex(slots, "background"));
     while taken < cols {
-        spans.push(Span::styled(" ", Style::new().bg(bg)));
+        spans.push(Span::styled(" ", Style::new().fg(Color::Reset).bg(bg)));
         taken += 1;
     }
     let mut line = Line::from(spans);

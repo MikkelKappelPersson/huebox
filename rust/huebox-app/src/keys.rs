@@ -8,12 +8,14 @@
 //!
 //! * `esc`, arrows, `Enter` (`\r`), backspace and space keep their editor
 //!   spellings (`space`, not `" "`: the setup naming field names it).
+//!   Home/End/page keys answer themselves too: the import list jumps
+//!   first/last on them, everywhere else they are inert.
 //! * Only the Ctrl-held `c`/`s`/`a`/`d` map to control codes (`\x03`,
 //!   `\x13`, `\x01`, `\x04`) — plain `c`/`s`/`a`/`d` are colour keys.
 //!   Any other Ctrl-held key answers `""`.
 //! * Anything with Alt/Super/Hyper/Meta held answers `""`.
 //! * Plain characters answer themselves (typable `?` still answers `"?"`);
-//!   anything else (function keys, Tab, Home/End, media keys, non-ASCII)
+//!   anything else (function keys, Tab, media keys, non-ASCII)
 //!   answers `""` — a no-op in `apply_key` that the setup-name field also
 //!   swallows (`""` is not one char), never a panic. `"?"` stays the
 //!   typable key's own name, never the unknown sentinel.
@@ -75,11 +77,15 @@ pub fn translate(key: &KeyEvent) -> &'static str {
         // Named, as Textual named it: the setup field matches `space`.
         Char(' ') => "space",
         Char(c) => ascii_name(c).unwrap_or(""),
-        // Deliberately unnamed: Tab, Insert/Delete, Home/End, page
-        // keys, function and media keys have no editor branch — and the
-        // import cursor has no headless first/last/page verbs, so naming
-        // them would invent behaviour the state machine does not own.
-        Delete | Insert | Home | End | PageUp | PageDown => "",
+        // Deliberately unnamed: Tab, Insert/Delete, function and media
+        // keys have no branch anywhere. Home/End/page keys are named:
+        // the import list jumps first/last on them, like the native
+        // list it mirrors; everywhere else they are inert.
+        Home => "home",
+        End => "end",
+        PageUp => "pageup",
+        PageDown => "pagedown",
+        Delete | Insert => "",
         _ => "",
     }
 }
@@ -122,6 +128,10 @@ mod tests {
             (KeyCode::Down, "down"),
             (KeyCode::Backspace, "backspace"),
             (KeyCode::Char(' '), "space"),
+            (KeyCode::Home, "home"),
+            (KeyCode::End, "end"),
+            (KeyCode::PageUp, "pageup"),
+            (KeyCode::PageDown, "pagedown"),
         ];
         for (code, want) in cases {
             assert_eq!(translate(&key(code)), want, "{code:?}");
@@ -210,10 +220,6 @@ mod tests {
             KeyCode::BackTab,
             KeyCode::Delete,
             KeyCode::Insert,
-            KeyCode::Home,
-            KeyCode::End,
-            KeyCode::PageUp,
-            KeyCode::PageDown,
             KeyCode::F(1),
             KeyCode::F(12),
             KeyCode::Null,

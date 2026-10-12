@@ -29,7 +29,7 @@
 
 use huebox_core::Slots;
 use huebox_render::{slot_hex, Cell, Row};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
 
@@ -195,61 +195,62 @@ pub fn import_button_line(width: usize, slots: &Slots) -> Line<'static> {
 /// The import dialog's footer button row: `Import` + `Cancel`.
 ///
 /// Click-only mirrors of the dialog's `Enter` / `Esc` bindings (never
-/// focusable, so tab-trapping is impossible). Returns the line plus the
-/// content-column ranges of each button for the click map.
+/// focusable, so tab-trapping is impossible). Flat 12-wide boxes in the
+/// selection pair — label (` Import `) centered with two air cells on
+/// each side, one margin cell of dialog background between and around
+/// them. Returns the line plus the content-column ranges of each button
+/// for the click map.
 pub fn import_footer_buttons(
     width: usize,
     slots: &Slots,
 ) -> (Line<'static>, (usize, usize), (usize, usize)) {
-    let style = button_style(slots);
-    let fill = hex_color(slot_hex(slots, "background"));
-    // `  [ Import ]    [ Cancel ]  ` centered in the dialog width.
-    let gap = "    ";
-    let left = "[ Import ]";
-    let right = "[ Cancel ]";
-    let total = left.chars().count() + gap.chars().count() + right.chars().count();
-    let pad = width.saturating_sub(total) / 2;
-    let mut text = String::new();
-    for _ in 0..pad {
-        text.push(' ');
-    }
-    let confirm_x0 = text.chars().count();
-    text.push_str(left);
-    let confirm_x1 = text.chars().count();
-    text.push_str(gap);
-    let cancel_x0 = text.chars().count();
-    text.push_str(right);
-    let cancel_x1 = text.chars().count();
-    while text.chars().count() < width {
-        text.push(' ');
-    }
-    // One line, three runs: air, buttons, air — so the spans carry the
-    // click ranges without a second layout pass.
-    let mut spans = vec![];
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let in_button =
-            (confirm_x0..confirm_x1).contains(&i) || (cancel_x0..cancel_x1).contains(&i);
-        let start = i;
-        while i < chars.len()
-            && ((confirm_x0..confirm_x1).contains(&i) || (cancel_x0..cancel_x1).contains(&i))
-                == in_button
-        {
-            i += 1;
+    let bg = hex_color(slot_hex(slots, "background"));
+    let sel_bg = hex_color(slot_hex(slots, "selection-background"));
+    let sel_fg = hex_color(slot_hex(slots, "selection-foreground"));
+    let label = |text: &str| {
+        Span::styled(
+            text.to_owned(),
+            Style::new()
+                .fg(sel_fg)
+                .bg(sel_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let air = || Span::styled(" ", Style::new().fg(Color::Reset).bg(sel_bg));
+    let margin = || Span::styled(" ", Style::new().fg(Color::Reset).bg(bg));
+    // One 12-wide box: two air cells, the blank-padded label, two air.
+    let button = |text: &str| -> (Vec<Span<'static>>, usize) {
+        let mut spans = vec![air(), air()];
+        let mut label_text = format!(" {text} ");
+        while label_text.chars().count() < 8 {
+            label_text.push(' ');
         }
-        let chunk: String = chars[start..i].iter().collect();
-        spans.push(Span::styled(
-            chunk,
-            if in_button {
-                style
-            } else {
-                Style::new().bg(fill)
-            },
-        ));
+        spans.push(label(&label_text));
+        spans.push(air());
+        spans.push(air());
+        (spans, 12)
+    };
+    let mut spans = vec![margin()];
+    let (mut first, _) = button("Import");
+    let confirm_x0 = 1;
+    spans.append(&mut first);
+    let confirm_x1 = confirm_x0 + 12;
+    spans.push(margin());
+    let (mut second, _) = button("Cancel");
+    let cancel_x0 = confirm_x1 + 1;
+    spans.append(&mut second);
+    let cancel_x1 = cancel_x0 + 12;
+    spans.push(margin());
+    while spans
+        .iter()
+        .map(|span: &Span| span.content.chars().count())
+        .sum::<usize>()
+        < width
+    {
+        spans.push(Span::styled(" ", Style::new().fg(Color::Reset).bg(bg)));
     }
     let mut line = Line::from(spans);
-    line.style = Style::new().bg(fill);
+    line.style = Style::new().bg(bg);
     (line, (confirm_x0, confirm_x1), (cancel_x0, cancel_x1))
 }
 
@@ -361,20 +362,21 @@ mod tests {
         let (line, confirm, cancel) = import_footer_buttons(40, &slots);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.chars().count(), 40);
-        assert!(text.contains("[ Import ]"), "{text:?}");
-        assert!(text.contains("[ Cancel ]"), "{text:?}");
+        // Flat 12-wide boxes in the selection pair, one margin apart.
+        assert_eq!((confirm.0, confirm.1), (1, 13));
+        assert_eq!((cancel.0, cancel.1), (14, 26));
         let slice: String = text
             .chars()
             .skip(confirm.0)
             .take(confirm.1 - confirm.0)
             .collect();
-        assert_eq!(slice, "[ Import ]");
+        assert_eq!(slice, "   Import   ", "{text:?}");
         let slice: String = text
             .chars()
             .skip(cancel.0)
             .take(cancel.1 - cancel.0)
             .collect();
-        assert_eq!(slice, "[ Cancel ]");
+        assert_eq!(slice, "   Cancel   ", "{text:?}");
         assert!(confirm.1 <= cancel.0);
     }
 }

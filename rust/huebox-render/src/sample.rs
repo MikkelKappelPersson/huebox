@@ -15,7 +15,8 @@
 
 use huebox_core::Slots;
 
-use crate::{painted, slot_hex, Row};
+use crate::layout::{clip_row, row_visible};
+use crate::{painted, slot_hex, Cell, Row};
 
 /// The fixed sample text: nine lines spending the whole zig vocabulary.
 pub const SAMPLE_LINES: [(&str, &str); 9] = [
@@ -338,6 +339,41 @@ pub fn sample_lines(slots: &Slots) -> Vec<Row> {
         }
     }
     lines
+}
+
+/// Pad a code-sample row to `cols`: trailing cells wear the row's own
+/// last ink on the buffer background.
+///
+/// The frame parser leaves a row's unclosed trailing style running into
+/// the fill, so the fill reads as part of the line — an empty row pads
+/// plain, like every other blank. Rows arriving already padded (the
+/// frame backdrops everything wall-to-wall) have that pad repainted
+/// rather than extended.
+pub fn pad_code_row(row: Row, slots: &Slots, cols: usize) -> Row {
+    let fill = slot_hex(slots, "background").to_owned();
+    let mut out = clip_row(&row, cols);
+    while out
+        .last()
+        .is_some_and(|cell| cell.ch == ' ' && cell.fg.is_empty())
+    {
+        out.pop();
+    }
+    let ink = out
+        .iter()
+        .rev()
+        .find(|cell| !cell.fg.is_empty())
+        .map(|cell| cell.fg.clone())
+        .unwrap_or_default();
+    for cell in &mut out {
+        if cell.bg.is_empty() {
+            cell.bg = fill.clone();
+        }
+    }
+    let seen = row_visible(&out);
+    for _ in seen..cols {
+        out.push(Cell::new(' ', &ink, &fill));
+    }
+    out
 }
 
 #[cfg(test)]

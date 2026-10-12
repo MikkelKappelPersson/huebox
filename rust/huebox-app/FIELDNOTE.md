@@ -37,26 +37,31 @@ real tty.
   breaks) inside `ratatui::run` (panic-safe restore); `MouseCapture` Drop
   guard disables capture on exit AND unwind (`run` doesn't do it).
   `snapshot(w, h)` renders into `TestBackend` for headless tests.
-- `src/cells.rs` — `Cell{ch,fg,bg}` → `Span::styled`/`Line`: `fg ""` stays
-  unset (terminal default, as in Python), `bg ""` resolves to the buffer
-  fill. Bold restored by position for the wordmark only (six consecutive
-  cells wearing `palette-9…14` in order); status bold lives in the bar.
-  NO DIM anywhere (test scans every span).
+- `src/cells.rs` — `Cell{ch,fg,bg}` → `Span::styled`/`Line`: `fg ""`
+  paints `Reset` (terminal default, as in Python — never an unset style,
+  which Ratatui would skip and leave stale cells showing through),
+  `bg ""` resolves to the buffer fill. Bold restored by position for the
+  wordmark only (six consecutive cells wearing `palette-9…14` in order);
+  status bold lives in the bar. NO DIM anywhere (test scans every span).
 - `src/footer.rs` — `_fold_footer` ported verbatim (`fold_footer`: one row
   if it fits, else two, status last never dropped) + `bar_lines` paint
   (keys `palette-11` bold, labels `palette-14`, status foreground bold,
   full-width bg fill). Editor bar pairs from `editor_hints`.
-- `src/dialog.rs` — centered `popup_rect`, `dim_block` (wall-to-wall buffer
-  bg — `Clear` deliberately NOT used, it would expose the terminal bg and
-  break §8.2), `dialog_block` (muted `palette-8` border, buffer bg — never
-  an opaque foreign fill). Width clamps mirror `DIALOG_W` (44/44/60/60,
-  min 24; lists window past 18/20). `import_body` builds the import list
-  here (behaviour stays in `import.rs`): group rows with selected counts,
-  `>`/`*` marks, `ids` click map, counter, read-once preview swatch strip
-  (`cursor_slots`), note.
+- `src/dialog.rs` — centered `popup_rect`, `dim_buffer` (every backdrop
+  cell three-fifths toward the buffer background — the measured modal
+  factor; `Clear` deliberately NOT used, it would expose the terminal bg
+  and break §8.2), `dialog_block` (round border, muted `palette-8`,
+  buffer bg — never an opaque foreign fill). Width clamps mirror
+  `DIALOG_W` (44/44/60/100, max 28 for import, min 24). The import list
+  lives here (behaviour stays in `import.rs`): `import_column` titles
+  plus `▐X▌` theme rows, `import_body` windows it, `import_preview`
+  paints the cursor theme (palette/interface/strip/code on its own bg),
+  `import_count_text` the live count, `import_scrollbar` the overlay bar.
+  `ids` + `groups` click maps announced per row.
 - `src/mouse.rs` — click → `slot_at(hits)` → `click_slot` (editor) or
   `click_theme/setup/overrides` (which confirm through `apply_key` —
-  never direct); import clicks toggle rows via `click_row`; chrome clicks
+  never direct); import clicks toggle rows via `click_row` and titles via
+  `toggle_group`, footer buttons mirror `Enter`/`Esc`; chrome clicks
   select nothing. Wheel → `up`/`down` in picker/import only; swallowed
   everywhere else.
 - `src/prompts.rs` — `read_prompt_line` pure over injected buffers (EOF/
@@ -76,17 +81,18 @@ real tty.
 
 - Collapse keys (`E`/`D`/`C`) are plain `apply_key` no-ops: the Rust
   `frame()` has no collapse parameter, so there is no honest row to hide.
-- Home/End/PageUp/PageDown answer `"?"`: the import cursor has no
-  headless first/last/page verbs, and naming them would invent behaviour
-  the state machine does not own.
+- Home/End/PageUp/PageDown are named (`home`/`end`/`pageup`/`pagedown`):
+  the import list jumps first/last on them, like the native list it
+  mirrors; everywhere else they are inert.
 - Non-ASCII chars answer `"?"`: theme names and hex are ASCII-only.
 - Bold restores for status + wordmark only (brief scope); headers, `>`
   marks and selected rows stay unbolded — cells carry no bold (P4 notes).
 - Ctrl+C inside a suspend-prompt terminates (cooked-mode SIGINT), as for
   any cooked tool; EOF cancels. Documented, not guarded.
-- Import preview is a one-row palette swatch strip, not the Python
-  side-by-side preview pane; text selection in sample/diff is P6 work
-  (immediate mode has no selection overlay yet).
+- The import preview is the cursor theme's own palette/interface/strip/
+  code on its background, like the Python side-by-side pane; text
+  selection in sample/diff is P6 work (immediate mode has no selection
+  overlay yet).
 
 ## Proof
 
