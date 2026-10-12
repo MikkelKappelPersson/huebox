@@ -1,7 +1,12 @@
 [package]
-name = "huebox-cli"
+name = "huebox"
 version = "0.5.0"
 edition = "2021"
+description = "Terminal theme editor with live preview"
+license = "MIT"
+repository = "https://github.com/MikkelKappelPersson/huebox"
+readme = "../../README.md"
+keywords = ["terminal", "theme", "tui", "ghostty", "kitty"]
 
 [[bin]]
 name = "huebox"
@@ -12,12 +17,12 @@ name = "huebox_cli"
 path = "src/lib.rs"
 
 [dependencies]
-huebox-core = { path = "../huebox-core" }
-huebox-format = { path = "../huebox-format" }
-huebox-lib = { path = "../huebox-lib" }
-huebox-editor = { path = "../huebox-editor" }
-huebox-render = { path = "../huebox-render" }
-huebox-app = { path = "../huebox-app" }
+huebox-core = { version = "0.5.0", path = "../huebox-core" }
+huebox-format = { version = "0.5.0", path = "../huebox-format" }
+huebox-lib = { version = "0.5.0", path = "../huebox-lib" }
+huebox-editor = { version = "0.5.0", path = "../huebox-editor" }
+huebox-render = { version = "0.5.0", path = "../huebox-render" }
+huebox-app = { version = "0.5.0", path = "../huebox-app" }
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 

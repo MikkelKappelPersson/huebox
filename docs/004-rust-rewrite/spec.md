@@ -149,3 +149,17 @@ binary owns every command and the pty harness agrees on all fixtures.
   identically — covered by themes parity tests, verified on all three
   terminals.
 - Scope creep into redesign — §3 binds; any visual change needs its own spec.
+
+## 10. Release distribution
+
+0.5.0 ships the Rust tree to five targets from one tag (`vX.Y.Z`), in
+this order: crates.io → GitHub Release binaries → PyPI wheels → AUR →
+Homebrew tap. crates.io is canonical (`cargo install huebox`); the
+GitHub Release carries a prebuilt Linux binary per tag; PyPI carries
+binary wheels (ruff precedent) so `uv tool install huebox` keeps
+upgrading; AUR and Homebrew build from the crates/GitHub source, never
+from PyPI again. PyPI 0.4.1 (Python) stays published and unyanked.
+
+Gates: every target installs and reports the tagged version; a TestPyPI
+dry run stays green before the tag. A target that cannot be verified
+does not ship.

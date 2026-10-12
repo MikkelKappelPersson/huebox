@@ -203,3 +203,11 @@ binary. Until then the Python suite stays the reference: 525 green.
   80-col squeezed label tails (`Them`/`Impo`; Python `Th`/`Im`),
   `[<u` absence (Python-only kitty-query leakage).
 - [x] Gate: `release: retire python, rust-only 0.5.0` lands the retirement (Python tree + packaging removed, harness on a frozen oracle, docs + guidelines rebound, versions 0.5.0); closes the rewrite.
+
+## Phase 8 — release distribution (0.5.0)
+
+- [x] Crate metadata: `description` + `license` (+ `repository`, `readme`, `keywords`) in all 7 `Cargo.toml`; path deps gain `version = "0.5.0"`; binary package renamed `huebox-cli` → `huebox` (both names free, `cargo install huebox` resolves); `cargo package --list` clean per crate, `cargo publish --dry-run` green for core — dependents resolve against the registry, so their dry-runs go green only after core lands (dep-order loop in the workflow covers it)
+- [x] `publish.yml` rework: tag-gated chain — Rust gates (test/clippy/fmt + tag == Cargo.tomls) → crates.io publish (Trusted Publishing, dep order with retry, re-runs safe) → GitHub Release (`huebox-0.5.0-x86_64-linux` tarball + sha256) → PyPI wheels (hand-rolled binary wheel via `.github/pack-wheel.py`, linux x86_64; proven end-to-end: fresh-venv `pip install` + `huebox --version`) → AUR (cargo-build PKGBUILD from the tag archive, no python deps) → Homebrew tap (tag archive). TestPyPI dispatch dry-run kept. AUR/formula jobs fail fast until the one-time cargo rewrite lands.
+- [ ] AUR PKGBUILD + Homebrew formula repointed off the dead PyPI sdist, `.SRCINFO` regenerated, 0.5.0
+- [ ] Human: crates.io Trusted Publisher configured on all 7 crates; `AUR_SSH_PRIVATE_KEY` + `TAP_TOKEN` secrets verified
+- [ ] Gate: dispatch dry-run (TestPyPI) green → tag `v0.5.0` → `cargo install huebox`, `uv tool install huebox`, `yay -S huebox`, `brew install` all report 0.5.0. Then done.

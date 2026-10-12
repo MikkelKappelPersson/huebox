@@ -2,6 +2,11 @@
 name = "huebox-core"
 version = "0.5.0"
 edition = "2021"
+description = "Colour-slot model and hex/rgb/hsv maths for the huebox terminal theme editor"
+license = "MIT"
+repository = "https://github.com/MikkelKappelPersson/huebox"
+readme = "../../README.md"
+keywords = ["terminal", "theme", "tui", "ghostty", "kitty"]
 
 [lib]
 name = "huebox_core"

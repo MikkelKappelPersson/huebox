@@ -2,11 +2,16 @@
 name = "huebox-render"
 version = "0.5.0"
 edition = "2021"
+description = "Headless frame renderer for the huebox terminal theme editor"
+license = "MIT"
+repository = "https://github.com/MikkelKappelPersson/huebox"
+readme = "../../README.md"
+keywords = ["terminal", "theme", "tui", "ghostty", "kitty"]
 
 [lib]
 name = "huebox_render"
 path = "src/lib.rs"
 
 [dependencies]
-huebox-core = { path = "../huebox-core" }
+huebox-core = { version = "0.5.0", path = "../huebox-core" }
 unicode-width = "0.2"

@@ -18,6 +18,7 @@ comes afterwards.
 | 4 | Editor state machine headless + transcript replay | §§2, 5, 7 | `rust/huebox-editor` |
 | 5 | Ratatui shell: frame, popups, prompts, mouse | §§2, 4, 5, 8 | `rust/huebox-app` |
 | 6 | CLI + pty parity harness + packaging + bench gate | §§2, 6, 8 | `rust/huebox-cli`, harness, docs |
+| 8 | crates.io + binaries + wheels + AUR + Homebrew from one tag | §10 | `rust/*/Cargo.toml`, `.github/workflows/publish.yml`, PKGBUILD/formula |
 
 ## Phase 0 — toolchain + spike (throwaway, decides everything)
 
@@ -115,3 +116,29 @@ max 1.88 / mean 1.70ms; 150x50 p50 1.63 / max 1.89 / mean 1.56ms —
 ~10x under the 16.6ms budget (pre-panels: 0.66/1.26ms). `cargo install --path rust/huebox-cli` proven
 (2.7MB `huebox 0.4.1`). Retirement left as a human morning decision
 (see tasks.md); Python suite (525) stays the reference until then.
+
+## Phase 8 — release distribution
+
+Goal: one tag ships all five targets through a reworked `publish.yml`.
+Prep first (crates.io refuses the workspace as-is): every `Cargo.toml`
+gains `description` + `license` (+ `repository`, `readme`, `keywords`),
+and every path dependency gains `version = "0.5.0"` beside its `path`
+— registry installs cannot see path deps, so versioned path deps are
+what makes `cargo install huebox` resolvable. Publish order inside the
+workflow is dependency order: core → format, render → lib → editor →
+app → huebox, via crates.io Trusted Publishing (OIDC, no tokens), each
+preceded by `cargo publish --dry-run` at implementation time.
+
+Chain on `v*` tags: Rust gates (`cargo test --workspace`, clippy
+`-D warnings`, `fmt --check`, tag == all 7 `Cargo.toml` versions) →
+crates.io publish → GitHub Release with a `huebox-0.5.0-x86_64-linux`
+tarball + sha256 (aarch64 stretch) → PyPI wheels (hand-rolled:
+prebuilt binary + console entry point, `py3-none-linux_x86_64`;
+aarch64 stretch) → AUR (PKGBUILD builds with cargo from the crates
+source, `python-*` deps gone, `.SRCINFO` regenerated) → Homebrew tap
+(formula off the GitHub tarball). The `workflow_dispatch` TestPyPI
+dry run stays: wheels prove themselves there before any tag.
+
+Gate: dry-run dispatch green, then tag `v0.5.0` and verify every
+target installs and reports 0.5.0 (`cargo install huebox`,
+`uv tool install huebox`, `yay -S huebox`, `brew install`).
