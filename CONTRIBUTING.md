@@ -4,7 +4,7 @@ Setup with a stable Rust toolchain (`yay -S rustup`, then `rustup toolchain inst
 
 ```sh
 cargo build --manifest-path rust/Cargo.toml   # single binary at rust/target/release/huebox
-cargo install --path rust/huebox-cli          # or install `huebox` from this checkout
+cargo install --path rust                     # or install `huebox` from this checkout
 ```
 
 The pty harness (`tests/test_pty_rust.py`, frozen oracle plus `pyte` screens over the release binary) runs under the dev `.venv`, which already carries `pyte`:
@@ -27,7 +27,7 @@ cd rust && cargo fmt --check                  # required, must be clean
 .venv/bin/python -m unittest discover -s tests   # pty replay + bench, needs the release binary
 ```
 
-Mirror the crate under test (`rust/<crate>/tests/<name>.rs`). New behaviour needs a case; a new format needs round-trip plus byte-identical no-op cases.
+Mirror the module under test (`rust/tests/<name>.rs`). New behaviour needs a case; a new format needs round-trip plus byte-identical no-op cases.
 
 ## Commits
 

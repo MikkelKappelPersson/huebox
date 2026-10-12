@@ -20,8 +20,8 @@ or modifying any code, or doing any architecture or design work on this project.
 Summary (details in the linked document):
 - **Modular Design** — one job per crate, minimal cross-crate deps, no cycles
 - **Facade Pattern** — `format::lookup`/`read`/`write`, `themes::{save, push}`, `detect::resolve()`; callers never reach into format internals
-- **Dependency Injection** — `huebox-editor` reaches the world only through injected seams (`WriteFn`/`ApplyFn`/`DeleteFn`, `Library`, `ImportLibrary`) `huebox-cli` builds; the import popup follows the same rule; `huebox-cli` is the composition root
-- **State/View Separation** — `EditorState` + `apply_key` own all behaviour, `huebox-app` is a thin shell over `huebox-render`'s rows, buffer renders every frame and disk writes on Ctrl+S only
+- **Dependency Injection** — `editor` reaches the world only through injected seams (`WriteFn`/`ApplyFn`/`DeleteFn`, `Library`, `ImportLibrary`) `cli` builds; the import popup follows the same rule; `cli` is the composition root
+- **State/View Separation** — `EditorState` + `apply_key` own all behaviour, `app` is a thin shell over `render`'s rows, buffer renders every frame and disk writes on Ctrl+S only
 - **Coding Notes** — line-level config writes, `huebox: ` errors to stderr with exit 1, tests mirror crates and stay clean under clippy `-D warnings` + `cargo fmt`
 
 # Response Style

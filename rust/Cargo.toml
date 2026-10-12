@@ -1,3 +1,24 @@
-[workspace]
-members = ["huebox-core", "huebox-format", "huebox-lib", "huebox-render", "huebox-editor", "huebox-app", "huebox-cli"]
-resolver = "2"
+[package]
+name = "huebox"
+version = "0.5.0"
+edition = "2021"
+description = "Terminal theme editor with live preview"
+license = "MIT"
+repository = "https://github.com/MikkelKappelPersson/huebox"
+readme = "../README.md"
+keywords = ["terminal", "theme", "tui", "ghostty", "kitty"]
+
+[[bin]]
+name = "huebox"
+path = "src/main.rs"
+
+[lib]
+name = "huebox"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+ratatui = { version = "0.30", features = ["crossterm"] }
+signal-hook = "0.3"
+unicode-width = "0.2"

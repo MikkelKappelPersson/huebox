@@ -6,7 +6,7 @@ name: Publish
 # rust/*/Cargo.toml versions.
 #
 # Source of truth per target:
-#   crates.io  — the 7 workspace crates, dep order (Trusted Publishing)
+#   crates.io  — the single `huebox` crate (Trusted Publishing)
 #   GitHub     — prebuilt x86_64-linux binary tarball + sha256
 #   PyPI       — binary wheel (prebuilt binary + launcher, ruff-style)
 #   AUR        — PKGBUILD builds from the Git tag archive with cargo
@@ -39,14 +39,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Tag matches all Cargo.toml versions
+      - name: Tag matches the Cargo.toml version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
-          for f in rust/*/Cargo.toml; do
-            grep -q "^version = \"$TAG\"$" "$f" || { echo "::error::$f version does not match tag v$TAG"; exit 1; }
-          done
-          echo "tag v$TAG matches all 7 manifests"
+          grep -q "^version = \"$TAG\"$" rust/Cargo.toml || { echo "::error::rust/Cargo.toml version does not match tag v$TAG"; exit 1; }
+          echo "tag v$TAG matches rust/Cargo.toml"
 
       - name: Run tests
         run: cargo test --workspace --manifest-path rust/Cargo.toml
@@ -68,10 +66,9 @@ jobs:
 
   crates:
     name: Publish to crates.io
-    # tags only: a manual run must never touch the real index. Dependents
-    # resolve path deps against the registry, so this goes in dependency
-    # order with a retry loop — the index lags each publish by ~a minute.
-    # Re-runs are safe: an already-uploaded crate counts as success.
+    # tags only: a manual run must never touch the real index. One crate,
+    # so no ordering or index-lag loop — but re-runs stay safe: an
+    # already-uploaded version counts as success.
     if: startsWith(github.ref, 'refs/tags/')
     needs: gates
     runs-on: ubuntu-latest
@@ -80,22 +77,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish in dependency order
+      - name: Publish the crate
         run: |
           set -e
-          for p in huebox-core huebox-format huebox-render huebox-lib huebox-editor huebox-app huebox; do
-            echo "publishing $p"
-            ok=0
-            for i in $(seq 1 10); do
-              if out=$(cd rust && cargo publish -p "$p" 2>&1); then echo "$out"; ok=1; break; fi
-              echo "$out"
-              case "$out" in
-                *"already uploaded"*|*"already exists"*) echo "$p already on crates.io - continuing"; ok=1; break;;
-              esac
-              echo "$p attempt $i failed, waiting 60s"; sleep 60
-            done
-            test "$ok" = 1 || { echo "::error::publishing $p failed"; exit 1; }
-          done
+          if out=$(cd rust && cargo publish 2>&1); then echo "$out"; exit 0; fi
+          echo "$out"
+          case "$out" in
+            *"already uploaded"*|*"already exists"*) echo "huebox already on crates.io - nothing to do";;
+            *) echo "::error::publishing huebox failed"; exit 1;;
+          esac
 
   binaries:
     name: Prebuilt Linux binary

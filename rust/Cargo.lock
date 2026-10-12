@@ -613,58 +613,8 @@ version = "0.5.0"
 dependencies = [
  "chrono",
  "clap",
- "huebox-app",
- "huebox-core",
- "huebox-editor",
- "huebox-format",
- "huebox-lib",
- "huebox-render",
-]
-
-[[package]]
-name = "huebox-app"
-version = "0.5.0"
-dependencies = [
- "huebox-core",
- "huebox-editor",
- "huebox-render",
  "ratatui",
  "signal-hook",
-]
-
-[[package]]
-name = "huebox-core"
-version = "0.5.0"
-
-[[package]]
-name = "huebox-editor"
-version = "0.5.0"
-dependencies = [
- "huebox-core",
- "huebox-render",
-]
-
-[[package]]
-name = "huebox-format"
-version = "0.5.0"
-dependencies = [
- "huebox-core",
-]
-
-[[package]]
-name = "huebox-lib"
-version = "0.5.0"
-dependencies = [
- "chrono",
- "huebox-core",
- "huebox-format",
-]
-
-[[package]]
-name = "huebox-render"
-version = "0.5.0"
-dependencies = [
- "huebox-core",
  "unicode-width",
 ]
 
