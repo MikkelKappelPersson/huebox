@@ -93,8 +93,9 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `s` / `d` | saturation −/+ |
 | `x` / `c` | lightness −/+ |
 | `f` | cycle step multiplier ×1 → ×5 → ×20 |
-| `h` | type a hex value directly |
+| `h` / `X` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
+| `Ctrl+A` | preview push of the dirty buffer — truth untouched, buffer stays dirty |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens **and pushes it**, `n` new from the buffer, `Esc` back (§13.7) |
 | `N` | save the buffer as a new theme, then save it like any other (§13.7) |
@@ -1165,7 +1166,7 @@ As built:
   loaded colours, `saved` is that same snapshot (so the new theme is clean),
   the undo log is empty, the selection starts at slot 0, and the pending-discard
   arm is dropped — a fresh theme must never inherit a half-armed Esc. Status
-  reads `opened <name>`.
+  carries the save's verdict (`saved <name> → <target>`), like any other save.
 - **`n` creates and adopts.** The prompt is one line (`new theme name:`); a
   name that is taken gets a second one (`<name> exists - y overwrites it, or
   type another name:`) and nothing is written without an answer (decision 21).
