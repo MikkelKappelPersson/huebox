@@ -13,8 +13,10 @@
 //! backend is built late, like the Python late `app` import). The tty
 //! check runs before any of it, so a piped session reports the real
 //! problem. User errors print `huebox: {msg}` on stderr and exit 1, never
-//! a traceback; `--format`/`--from` are clamped by clap before any lookup
-//! (which would panic on an unknown name).
+//! a traceback; usage errors exit 2 as `huebox: error: ...`, including
+//! clap's own (bad values, unknown flags) whose body is kept verbatim
+//! behind our prefix. `--format`/`--from` are clamped by clap before any
+//! lookup (which would panic on an unknown name).
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -144,7 +146,12 @@ pub fn run(
             let code = error.exit_code();
             // `--help`/`--version` read as stdout; usage errors as stderr.
             if error.use_stderr() {
-                let _ = write!(err, "{error}");
+                // Usage errors exit 2 as `huebox: error: ...` — clap's
+                // body (possible values, usage) is kept, only the
+                // prefix is ours.
+                let rendered = format!("{error}");
+                let body = rendered.strip_prefix("error: ").unwrap_or(&rendered);
+                let _ = write!(err, "huebox: error: {body}");
             } else {
                 let _ = write!(out, "{error}");
             }
@@ -217,7 +224,14 @@ pub fn run(
                 driver,
             )
         }
-        Some("list") => cmd_list(out),
+        Some("list") => {
+            // `list` takes no theme: a stray positional is a typo for
+            // `show`/`use`, not a filter, so it is a usage error.
+            if name.is_some() {
+                return fail2(err, "list takes no theme name".to_owned());
+            }
+            cmd_list(out)
+        }
         Some("new") => cmd_new(&cli, name.as_deref(), &spec, out, err, tty, driver),
         Some("import") => cmd_import(&cli, name.as_deref(), out, err),
         Some("use") => cmd_use(&cli, name.as_deref(), &spec, out, err),

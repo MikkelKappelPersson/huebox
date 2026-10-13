@@ -198,9 +198,18 @@ fn formats_lists_the_registry() {
 fn assert_user_error(code: i32, err: &str) {
     assert_eq!(code, 1, "stderr was:\n{err}");
     assert!(err.starts_with("huebox: "), "prefixed:\n{err}");
+    assert!(
+        !err.starts_with("huebox: error: "),
+        "exit 1 is not a usage error:\n{err}"
+    );
     for leaked in ["Traceback", "panicked", "thread '", "backtrace", "Error: "] {
         assert!(!err.contains(leaked), "no traceback ({leaked}):\n{err}");
     }
+}
+
+fn assert_usage_error(code: i32, err: &str) {
+    assert_eq!(code, 2, "stderr was:\n{err}");
+    assert!(err.starts_with("huebox: error: "), "prefixed:\n{err}");
 }
 
 #[test]
@@ -231,6 +240,48 @@ fn bad_theme_is_a_clean_exit_1() {
     let (code, _, err) = env.run(&["huebox", "frobnicate", "extra"], false, None);
     assert_eq!(code, 2, "unknown action is a usage error:\n{err}");
     assert!(err.contains("unknown action"), "{err}");
+}
+
+#[test]
+fn usage_errors_carry_the_huebox_prefix() {
+    let env = Env::setup();
+    // Clap's own rejections (bad value, unknown flag, repeated flag)
+    // keep their body behind the `huebox: error: ` usage prefix.
+    let (code, _, err) = env.run(&["huebox", "--format", "wezterm", "show"], false, None);
+    assert_usage_error(code, &err);
+    assert!(
+        err.contains("possible values: ghostty, kitty, alacritty"),
+        "{err}"
+    );
+
+    let (code, _, err) = env.run(&["huebox", "--bogus"], false, None);
+    assert_usage_error(code, &err);
+
+    let (code, _, err) = env.run(
+        &["huebox", "use", "ember", "--to", "ghostty", "--to", "kitty"],
+        false,
+        None,
+    );
+    assert_usage_error(code, &err);
+
+    // `list` takes no theme: a stray positional is a typo, not a filter.
+    let (code, _, err) = env.run(&["huebox", "list", "ember"], false, None);
+    assert_usage_error(code, &err);
+    assert!(err.contains("list takes no theme name"), "{err}");
+}
+
+#[test]
+fn help_and_version_stay_on_stdout() {
+    let env = Env::setup();
+    let (code, out, err) = env.run(&["huebox", "--help"], false, None);
+    assert_eq!(code, 0);
+    assert!(out.contains("huebox"), "{out}");
+    assert!(err.is_empty(), "{err}");
+
+    let (code, out, err) = env.run(&["huebox", "--version"], false, None);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("huebox "), "{out}");
+    assert!(err.is_empty(), "{err}");
 }
 
 // ---------------------------------------------------------------------------
