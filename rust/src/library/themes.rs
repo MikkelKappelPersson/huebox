@@ -2421,6 +2421,25 @@ mod tests {
         dir
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn proc_rows_skip_entries_without_comm() {
+        let proc = fake_proc_with(&[
+            ("9", "cmdline", b"ghostty\x00--gtk-single-instance\x00"),
+            ("4242", "comm", b"ghostty\n"),
+            ("4242", "cmdline", b"ghostty\x00--gtk-single-instance\x00"),
+        ]);
+        // Pid 9 has no comm file: skipped, never fatal (pinned).
+        assert_eq!(
+            ghostty_app_rows_proc(proc.path()),
+            vec![(
+                4242,
+                "ghostty\n".to_owned(),
+                "ghostty\x00--gtk-single-instance\x00".to_owned()
+            )]
+        );
+    }
+
     #[test]
     fn reload_signals_and_fallback() {
         let backend = FakeReload::new(true, true);

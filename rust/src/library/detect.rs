@@ -62,7 +62,12 @@ fn expand_config_dirs(entry: &str) -> Vec<String> {
         None => return vec![entry.to_owned()],
     };
     let dirs = std::env::var("XDG_CONFIG_DIRS").unwrap_or_default();
-    let parts: Vec<&str> = dirs.split(':').filter(|dir| !dir.is_empty()).collect();
+    // Absolute entries only: a relative dir would make probing depend on
+    // the process cwd, which a config search must never do.
+    let parts: Vec<&str> = dirs
+        .split(':')
+        .filter(|dir| !dir.is_empty() && Path::new(dir).is_absolute())
+        .collect();
     let fallback = ["/etc/xdg"];
     let dirs: &[&str] = if parts.is_empty() { &fallback } else { &parts };
     dirs.iter().map(|dir| format!("{dir}{rest}")).collect()
@@ -294,29 +299,33 @@ fn holding_dir(config_path: &Path) -> PathBuf {
 /// Follow `direct` includes transitively, deepest first per branch, with a
 /// visited set: a revisited file stops its chain silently, never an error
 /// (decision 56). `start` itself seeds the set, so a self-include ends.
-/// Comparison is path-lexical (`absolute`, no symlink resolution).
+/// Comparison is canonicalized (symlinks included), and depth is capped,
+/// so neither a symlink cycle nor a pathological chain can loop or
+/// overflow the stack.
 fn follow_chain(start: &Path, direct: fn(&Path) -> Vec<PathBuf>) -> Vec<PathBuf> {
-    fn absolute(path: &Path) -> PathBuf {
-        std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
-    }
+    const MAX_DEPTH: usize = 64;
     fn walk(
         path: &Path,
         direct: fn(&Path) -> Vec<PathBuf>,
         visited: &mut std::collections::HashSet<PathBuf>,
         out: &mut Vec<PathBuf>,
+        depth: usize,
     ) {
+        if depth > MAX_DEPTH {
+            return;
+        }
         for next in direct(path) {
-            if !visited.insert(absolute(&next)) {
+            if !visited.insert(canonicalized(&next)) {
                 continue;
             }
             out.push(next.clone());
-            walk(&next, direct, visited, out);
+            walk(&next, direct, visited, out, depth + 1);
         }
     }
     let mut visited = std::collections::HashSet::new();
-    visited.insert(absolute(start));
+    visited.insert(canonicalized(start));
     let mut out = Vec::new();
-    walk(start, direct, &mut visited, &mut out);
+    walk(start, direct, &mut visited, &mut out, 0);
     out
 }
 
@@ -413,6 +422,20 @@ fn kitty_direct_includes(config_path: &Path) -> Vec<PathBuf> {
             value.remove(0);
         }
         let value = value.trim();
+        // A trailing ` # comment` is a comment; a `#` glued to text is
+        // literal (an include path never contains ` #`, while kitty only
+        // starts a comment at whitespace).
+        let mut end = value.len();
+        let raw = value.as_bytes();
+        let mut i = 0;
+        while i < raw.len() {
+            if raw[i] == b'#' && i > 0 && raw[i - 1].is_ascii_whitespace() {
+                end = i;
+                break;
+            }
+            i += 1;
+        }
+        let value = value[..end].trim();
         if value.is_empty() {
             continue;
         }
@@ -878,6 +901,13 @@ pub fn ghostty_theme_file(config_path: &Path) -> Option<PathBuf> {
             }
             continue;
         }
+        // A bare name is a file name, never a path: anything carrying a
+        // separator (or `..`) cannot name a theme and is skipped, so a
+        // hostile `theme = ../../x` can neither escape the themes dir nor
+        // redirect a push.
+        if name.contains('/') || name == ".." {
+            continue;
+        }
         let user = ghostty_themes_dir().join(&name);
         if user.is_file() {
             return Some(user);
@@ -937,6 +967,15 @@ impl PointerAction {
 /// A name that would break the file into two lines or two keys is
 /// refused; a missing config raises instead of inventing one.
 pub fn ensure_theme_pointer(config_path: &Path, name: &str) -> std::io::Result<PointerAction> {
+    // The pointer write is a push write: a system path is refused, never
+    // edited (decision 54). Reading such a file stays fine — only the
+    // write is guarded.
+    if is_system_path(config_path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("refusing to write system path: {}", config_path.display()),
+        ));
+    }
     if name.is_empty()
         || name
             .bytes()
@@ -1085,8 +1124,38 @@ pub fn infer_format<F: FormatStub>(path: &Path) -> Option<String> {
 /// A path huebox must never push to: anything under `/etc` (decisions
 /// 48/49/54). Component-wise, so `/etcfoo` is not system but `/etc`
 /// itself is.
+/// Under `/etc` after resolving `..`, `.` and symlinks: canonicalize when
+/// the file exists, else absolutize-then-normalize lexically, so neither
+/// `..` segments, symlinks nor relative spellings can dodge the comparison
+/// (decision 54 — the comparison, never the path, is derived).
 fn is_system_path(path: &Path) -> bool {
-    path.starts_with("/etc")
+    canonicalized(path).starts_with("/etc")
+}
+
+fn canonicalized(path: &Path) -> PathBuf {
+    if let Ok(hit) = std::fs::canonicalize(path) {
+        return hit;
+    }
+    lexical_normalize(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            c => out.push(c.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
 }
 
 /// First config for `fmt` that actually defines colours. In push mode
@@ -1154,12 +1223,18 @@ pub fn resolve_for_push<F: FormatStub>(
     path: Option<&Path>,
 ) -> (Option<String>, Option<PathBuf>, Option<String>) {
     if let Some(explicit) = path {
-        let expanded = expanduser(&explicit.to_string_lossy());
-        if is_system_path(Path::new(&expanded)) {
+        // No `to_string_lossy` on this path: the check runs on the raw
+        // path (canonicalized inside `is_system_path`), so non-UTF8 bytes
+        // can neither dodge nor trigger the refusal — `display()` below is
+        // message text only.
+        if is_system_path(explicit) {
             return (
                 fmt.map(str::to_owned),
                 None,
-                Some(format!("refusing to push to system path: {expanded}")),
+                Some(format!(
+                    "refusing to push to system path: {}",
+                    explicit.display()
+                )),
             );
         }
     }
@@ -2292,5 +2367,96 @@ mod tests {
         let (_, target, error) = resolve_for_push::<AnyFile>(Some("kitty"), Some(&user));
         assert_eq!(target, Some(user));
         assert_eq!(error, None);
+    }
+
+    #[test]
+    fn system_path_sees_through_dotdot() {
+        let _guard = lock_env(&[]);
+        assert!(is_system_path(Path::new("/etc/../etc/kitty.conf")));
+        assert!(is_system_path(Path::new("/tmp/../etc/x")));
+        assert!(!is_system_path(Path::new("/tmp/../home/you/x")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_path_follows_symlinks() {
+        let home = temp_dir("detect-etc-symlink");
+        let link = home.path().join("link");
+        std::os::unix::fs::symlink("/etc", &link).unwrap();
+        // Lexically `/tmp/...`, canonically `/etc`: the check sees `/etc`.
+        assert!(is_system_path(&link.join(".")));
+    }
+
+    #[test]
+    fn push_refuses_dotdot_spelled_etc() {
+        let _guard = lock_env(&[]);
+        let dodge = PathBuf::from("/tmp/../etc/kitty-huebox-no-such.conf");
+        let (fmt, target, error) = resolve_for_push::<AnyFile>(Some("kitty"), Some(&dodge));
+        assert_eq!(fmt.as_deref(), Some("kitty"));
+        assert_eq!(target, None);
+        assert!(error.unwrap().contains("refusing to push to system path"));
+    }
+
+    #[test]
+    fn theme_pointer_refuses_system_path() {
+        let _guard = lock_env(&[]);
+        let err = ensure_theme_pointer(Path::new("/etc/ghostty/huebox-no-such.conf"), "ember")
+            .unwrap_err();
+        assert!(err.to_string().contains("refusing to write system path"));
+    }
+
+    #[test]
+    fn traversal_theme_name_never_resolves() {
+        let home = PointerHome::setup();
+        // Colours where `../evil` escapes to: the join lands here without
+        // the guard, so None proves the guard holds.
+        home.write("evil", "background = #101014\n");
+        let path = home.write("config", "theme = ../evil\n");
+        assert_eq!(ghostty_theme_file(&path), None);
+        let path = home.write("config2", "theme = sub/../../evil\n");
+        assert_eq!(ghostty_theme_file(&path), None);
+        let path = home.write("config3", "theme = ..\n");
+        assert_eq!(ghostty_theme_file(&path), None);
+    }
+
+    #[test]
+    fn kitty_include_trailing_comment_is_followed() {
+        let home = temp_dir("detect-kitty-comment");
+        let colours = home.write("colours.conf", "background #101014\n");
+        let main = home.write("kitty.conf", "include colours.conf # local overrides\n");
+        assert!(kitty_includes(&main).contains(&colours));
+        // A `#` glued to text stays literal — and misses (no such file).
+        let main = home.write("kitty2.conf", "include colours.conf#x\n");
+        assert!(kitty_includes(&main).is_empty());
+    }
+
+    #[test]
+    fn config_dirs_skips_relative_entries() {
+        let _guard = lock_env(&[("XDG_CONFIG_DIRS", "rel/path:also-rel")]);
+        // Relatives are skipped (never cwd-dependent); with no usable
+        // entry left, the /etc/xdg fallback answers alone.
+        assert_eq!(
+            expand_config_dirs("$XDG_CONFIG_DIRS/kitty/kitty.conf"),
+            vec!["/etc/xdg/kitty/kitty.conf".to_owned()]
+        );
+        drop(_guard);
+        // Unset or empty still means /etc/xdg (basedir spec).
+        let _guard = lock_env(&[("XDG_CONFIG_DIRS", "")]);
+        assert_eq!(
+            expand_config_dirs("$XDG_CONFIG_DIRS/kitty/kitty.conf"),
+            vec!["/etc/xdg/kitty/kitty.conf".to_owned()]
+        );
+    }
+
+    #[test]
+    fn dotdot_spelled_cycle_terminates() {
+        let home = temp_dir("detect-cycle");
+        // c reaches back with a `..`-spelled path: lexically distinct from
+        // the start, canonically identical — the walk must stop, not loop.
+        home.write("a.conf", "include b.conf\n");
+        home.write("b.conf", "include c.conf\n");
+        home.write("c.conf", "include sub/../a.conf\n");
+        let includes = kitty_includes(&home.path().join("a.conf"));
+        assert_eq!(includes.len(), 2);
     }
 }

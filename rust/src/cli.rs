@@ -308,7 +308,9 @@ pub fn push_spec(cli: &Cli) -> Result<PushSpec, String> {
 /// A push report plus the one line of advice a written config needs.
 fn push_lines(result: &themes::PushResult) -> Vec<String> {
     let mut lines = result.lines.clone();
-    if !result.pushed.is_empty() && result.reloaded.is_empty() {
+    // `needs_reload_advice` knows which terminals live-reload (decision 53:
+    // an alacritty-only push owes no hint) — the callers never re-decide it.
+    if result.needs_reload_advice() {
         lines.push(RELOAD_HINT.to_owned());
     }
     lines
@@ -1368,6 +1370,21 @@ pub fn format_names() -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_lines_owes_no_hint_to_live_reloaders() {
+        let bare = |fmt: &str| themes::PushResult {
+            lines: Vec::new(),
+            pushed: vec![(fmt.to_owned(), PathBuf::from("/tmp/x"))],
+            failed: false,
+            reloaded: Vec::new(),
+            overrides: None,
+        };
+        // Decision 53: an alacritty-only push is already live — no hint.
+        assert!(push_lines(&bare("alacritty")).is_empty());
+        // Anything else unreloaded still owes it.
+        assert_eq!(push_lines(&bare("ghostty")), vec![RELOAD_HINT.to_owned()]);
+    }
 
     fn cli(argv: &[&str]) -> Cli {
         let owned: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
