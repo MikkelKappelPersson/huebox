@@ -304,10 +304,17 @@ class PtyEditor:
                  for y in range(self.rows)]
         return "\n".join(lines), lines
 
-    def quit(self):
-        """One `esc`: True when the session was clean enough to leave."""
+    def quit(self, timeout=5.0):
+        """One `esc`: True when the session was clean enough to leave.
+
+        A clean buffer exits on its own; the deadline only gives a
+        loaded machine time to reap it. A dirty buffer never exits,
+        so waiting longer cannot mask a missed save."""
         os.write(self.master, b"\x1b")
         self.drain(1.5)
+        deadline = time.time() + timeout
+        while self.process.poll() is None and time.time() < deadline:
+            time.sleep(0.1)
         return self.process.poll() == 0
 
     def close(self):
