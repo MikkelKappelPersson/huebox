@@ -28,7 +28,9 @@ pub const ENTER_KEYS: [&str; 3] = ["\r", "\n", "enter"];
 /// Arrow spellings.
 pub const ARROWS: [&str; 4] = ["up", "down", "left", "right"];
 /// Quit spellings: a clean Esc quits at once, a dirty one arms.
-pub const QUIT_KEYS: [&str; 3] = ["esc", "Q", "\x03"];
+/// `escape` is the headless spelling (`enter` in [`ENTER_KEYS`] is the
+/// same arrangement); the compositor speaks `esc`.
+pub const QUIT_KEYS: [&str; 4] = ["esc", "escape", "Q", "\x03"];
 /// The spec's own dirty mark, not an ASCII stand-in.
 pub const DIRTY_MARK: &str = "●";
 /// A state starts at this width; the draw loop replaces it with the real
