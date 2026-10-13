@@ -10,7 +10,9 @@
 use std::collections::BTreeMap;
 
 use huebox::core::Slots;
-use huebox::format::{apply_write, ghostty_remove_color_lines, read, write, FORMATS, FORMAT_NAMES};
+use huebox::format::{
+    apply_write, ghostty_remove_color_lines, insert_missing, read, write, FORMATS, FORMAT_NAMES,
+};
 
 const GHOSTTY: &str = "# a comment that must survive\n\
                        font-family = \"Some Font\"\n\
@@ -109,6 +111,91 @@ fn fixture(format: &str) -> &'static str {
     }
 }
 
+/// One distinct hex per slot index: a wrong mapping cannot hide behind a
+/// shared value.
+fn distinct_hex(i: usize) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        i * 11 % 256,
+        i * 37 % 256,
+        i * 53 % 256
+    )
+}
+
+const ALL_NAMED: [(&str, &str); 6] = [
+    ("background", "background"),
+    ("foreground", "foreground"),
+    ("cursor-color", "cursor-color"),
+    ("cursor-text", "cursor-text"),
+    ("selection-background", "selection-background"),
+    ("selection-foreground", "selection-foreground"),
+];
+
+/// A config holding every slot the format carries, in canonical order.
+fn full_text(format: &str) -> (String, Vec<(String, String)>) {
+    let mut want: Vec<(String, String)> = (0..16)
+        .map(|i| (format!("palette-{i}"), distinct_hex(i)))
+        .collect();
+    for (slot, _) in ALL_NAMED {
+        if format == "kitty" && slot == "cursor-text" {
+            continue; // kitty's `cursor` is cursor-color only
+        }
+        want.push((slot.to_owned(), distinct_hex(want.len())));
+    }
+    let mut text = String::from("# full-slot fixture\n");
+    match format {
+        "ghostty" => {
+            for (slot, hex) in &want {
+                if let Some(index) = slot.strip_prefix("palette-") {
+                    text.push_str(&format!("palette = {index}={hex}\n"));
+                } else {
+                    text.push_str(&format!("{slot} = {hex}\n"));
+                }
+            }
+        }
+        "kitty" => {
+            for (slot, hex) in &want {
+                if let Some(index) = slot.strip_prefix("palette-") {
+                    text.push_str(&format!("color{index} {hex}\n"));
+                } else {
+                    let key = match slot.as_str() {
+                        "cursor-color" => "cursor",
+                        "selection-background" => "selection_background",
+                        "selection-foreground" => "selection_foreground",
+                        key => key,
+                    };
+                    text.push_str(&format!("{key} {hex}\n"));
+                }
+            }
+        }
+        "alacritty" => {
+            text.push_str("[colors.primary]\n");
+            for slot in ["background", "foreground"] {
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{slot} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.cursor]\n");
+            for (key, slot) in [("text", "cursor-text"), ("cursor", "cursor-color")] {
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{key} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.selection]\n");
+            for slot in ["selection-background", "selection-foreground"] {
+                let key = slot.strip_prefix("selection-").unwrap();
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{key} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.normal]\n");
+            for i in 0..16 {
+                let hex = &want[i].1;
+                text.push_str(&format!("\"{i}\" = \"{hex}\"\n"));
+            }
+        }
+        _ => panic!("unknown fixture format {format:?}"),
+    }
+    (text, want)
+}
+
 /// `Slots` holding exactly the pairs `read` found (blank themes start
 /// grey; tests set what the config carried).
 fn slots_of(pairs: &BTreeMap<String, String>) -> Slots {
@@ -156,7 +243,35 @@ fn registry_shape() {
             .defaults,
         [
             "~/.config/ghostty/config.ghostty",
-            "~/.config/ghostty/config"
+            "~/.config/ghostty/config",
+            "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+            "~/Library/Application Support/com.mitchellh.ghostty/config"
+        ]
+    );
+    assert_eq!(
+        FORMATS
+            .iter()
+            .find(|def| def.name == "kitty")
+            .unwrap()
+            .defaults,
+        [
+            "~/.config/kitty/kitty.conf",
+            "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+            "~/.kitty.conf",
+        ]
+    );
+    assert_eq!(
+        FORMATS
+            .iter()
+            .find(|def| def.name == "alacritty")
+            .unwrap()
+            .defaults,
+        [
+            "~/.config/alacritty/alacritty.toml",
+            "~/.config/alacritty.toml",
+            "~/.config/alacritty/alacritty.yml",
+            "~/.alacritty.toml",
+            "/etc/alacritty/alacritty.toml",
         ]
     );
 }
@@ -171,6 +286,33 @@ fn reads_every_expected_slot() {
             .filter(|name| !slots.contains_key(**name))
             .collect();
         assert!(missing.is_empty(), "{format} did not read {missing:?}");
+    }
+}
+
+#[test]
+fn reads_every_slot_the_format_carries() {
+    // §10: reading every slot, per format — all 16 palette slots plus
+    // every named slot the dialect maps (kitty has no cursor-text).
+    for format in FORMAT_NAMES {
+        let (text, want) = full_text(format);
+        let found = read(format, &text);
+        assert_eq!(found.len(), want.len(), "{format} slot count");
+        for (slot, hex) in &want {
+            assert_eq!(found.get(slot), Some(hex), "{format} {slot}");
+        }
+        // …and the full read writes back byte-identical.
+        let out = write(format, &text, &slots_of(&found));
+        assert_eq!(out, text, "{format} full no-op changed the bytes");
+        assert_eq!(apply_write(&text, &out), None, "{format} full no-op");
+        // …and a full round-trip survives a second read.
+        let mut moved = slots_of(&found);
+        moved.set(&want[0].0, "#010203");
+        let out = write(format, &text, &moved);
+        assert_eq!(
+            read(format, &out).get(&want[0].0),
+            Some(&"#010203".to_string()),
+            "{format} round-trip"
+        );
     }
 }
 
@@ -459,4 +601,161 @@ fn changed_write_appends_exactly_one_trailing_newline() {
         write("ghostty", "background = #0f0f1a", &slots),
         "background = #010203\n"
     );
+}
+
+/// Every slot set to its own hex, so a misplaced insert cannot hide.
+fn all_distinct() -> Slots {
+    let mut slots = Slots::default();
+    for (i, slot) in huebox::library::SLOTS.iter().enumerate() {
+        slots.set(slot, &distinct_hex(i));
+    }
+    slots
+}
+
+#[test]
+fn insert_missing_appends_flat_keys_after_last_colour_line() {
+    // Ghostty and kitty share the placement — after the last colour line,
+    // in canonical order — each in its own spelling.
+    let slots = all_distinct();
+    let ghostty_in = "# fixture\nfont-size = 12\npalette = 0=#0a0a13\n\
+                        background = #0f0f1a\ntrailing = true\n";
+    let mut ghostty_want = vec![
+        "# fixture".to_owned(),
+        "font-size = 12".to_owned(),
+        "palette = 0=#0a0a13".to_owned(),
+        "background = #0f0f1a".to_owned(),
+    ];
+    for i in 1..16 {
+        ghostty_want.push(format!("palette = {i}={}", distinct_hex(i)));
+    }
+    for (slot, i) in [
+        ("foreground", 17),
+        ("cursor-color", 18),
+        ("cursor-text", 19),
+        ("selection-background", 20),
+        ("selection-foreground", 21),
+    ] {
+        ghostty_want.push(format!("{slot} = {}", distinct_hex(i)));
+    }
+    ghostty_want.push("trailing = true".to_owned());
+    assert_eq!(
+        insert_missing("ghostty", ghostty_in, &slots),
+        ghostty_want.join("\n") + "\n"
+    );
+
+    let kitty_in = "# kitty theme\nbackground #0f0f1a\ncolor0 #0a0a13\ntrailing x\n";
+    let mut kitty_want = vec![
+        "# kitty theme".to_owned(),
+        "background #0f0f1a".to_owned(),
+        "color0 #0a0a13".to_owned(),
+    ];
+    for i in 1..16 {
+        kitty_want.push(format!("color{i} {}", distinct_hex(i)));
+    }
+    for (key, i) in [
+        ("foreground", 17),
+        ("cursor", 18),
+        ("selection_background", 20),
+        ("selection_foreground", 21),
+    ] {
+        kitty_want.push(format!("{key} {}", distinct_hex(i)));
+    }
+    kitty_want.push("trailing x".to_owned());
+    let out = insert_missing("kitty", kitty_in, &slots);
+    assert_eq!(out, kitty_want.join("\n") + "\n");
+    // kitty carries no cursor text colour: still absent, never invented.
+    assert!(!out.contains("cursor-text"));
+    assert!(!out.contains("cursor_text"));
+}
+
+#[test]
+fn insert_missing_grows_toml_tables_and_creates_absent_ones() {
+    let slots = all_distinct();
+    let text = "# alacritty config\n[general]\nlive_config_reload = true\n\
+                \n[colors.primary]\nbackground = \"#0f0f1a\"\n\
+                \n[colors.normal]\n\"0\" = \"#0a0a13\"\n";
+    let mut want = vec![
+        "# alacritty config".to_owned(),
+        "[general]".to_owned(),
+        "live_config_reload = true".to_owned(),
+        String::new(),
+        "[colors.primary]".to_owned(),
+        "background = \"#0f0f1a\"".to_owned(),
+        String::new(),
+        format!("foreground = \"{}\"", distinct_hex(17)),
+        "[colors.normal]".to_owned(),
+        "\"0\" = \"#0a0a13\"".to_owned(),
+    ];
+    for i in 1..16 {
+        want.push(format!("\"{i}\" = \"{}\"", distinct_hex(i)));
+    }
+    // Absent tables are created at end of file in first-appearance
+    // (slot) order, each behind one blank line.
+    want.push(String::new());
+    want.push("[colors.cursor]".to_owned());
+    want.push(format!("cursor = \"{}\"", distinct_hex(18)));
+    want.push(format!("text = \"{}\"", distinct_hex(19)));
+    want.push(String::new());
+    want.push("[colors.selection]".to_owned());
+    want.push(format!("background = \"{}\"", distinct_hex(20)));
+    want.push(format!("foreground = \"{}\"", distinct_hex(21)));
+    assert_eq!(
+        insert_missing("alacritty", text, &slots),
+        want.join("\n") + "\n"
+    );
+}
+
+#[test]
+fn insert_missing_creates_every_table_when_none_exists() {
+    let slots = all_distinct();
+    let text = "[general]\nlive_config_reload = true\n";
+    let mut want = vec![
+        "[general]".to_owned(),
+        "live_config_reload = true".to_owned(),
+        String::new(),
+    ];
+    // Slot order decides the table order: normal, primary, cursor,
+    // selection.
+    want.push("[colors.normal]".to_owned());
+    for i in 0..16 {
+        want.push(format!("\"{i}\" = \"{}\"", distinct_hex(i)));
+    }
+    want.push(String::new());
+    want.push("[colors.primary]".to_owned());
+    want.push(format!("background = \"{}\"", distinct_hex(16)));
+    want.push(format!("foreground = \"{}\"", distinct_hex(17)));
+    want.push(String::new());
+    want.push("[colors.cursor]".to_owned());
+    want.push(format!("cursor = \"{}\"", distinct_hex(18)));
+    want.push(format!("text = \"{}\"", distinct_hex(19)));
+    want.push(String::new());
+    want.push("[colors.selection]".to_owned());
+    want.push(format!("background = \"{}\"", distinct_hex(20)));
+    want.push(format!("foreground = \"{}\"", distinct_hex(21)));
+    assert_eq!(
+        insert_missing("alacritty", text, &slots),
+        want.join("\n") + "\n"
+    );
+}
+
+#[test]
+fn insert_missing_is_byte_identical_when_nothing_is_missing() {
+    // The no-op gate, per format: a full config comes back verbatim, so
+    // `apply_write` reports None and the caller never opens the file.
+    // (kitty's full fixture skips cursor-text, which no line can carry —
+    // still byte-identical, still no offer.)
+    for format in FORMAT_NAMES {
+        let (text, want) = full_text(format);
+        let mut map = BTreeMap::new();
+        for (slot, hex) in want {
+            map.insert(slot, hex);
+        }
+        let out = insert_missing(format, &text, &slots_of(&map));
+        assert_eq!(out, text, "{format} insert no-op");
+        assert_eq!(
+            apply_write(&text, &out),
+            None,
+            "{format} no-op was not None"
+        );
+    }
 }

@@ -20,7 +20,7 @@ Shields callers from subsystem complexity; lets internals evolve without breakin
 - `format::lookup` / `read` / `write` is the facade for terminal formats — the push reuses it, never invents a key
 - The provider seam in `library` is the facade for provider themes — the import popup lists and reads through it, never a directory walk of its own
 - `library::themes::{save, push}` is the facade for writing theme files and pushing to terminals; `create` is the facade for new library files — the import confirm writes through it, never a file of its own. `ghostty_overrides` / `clear_ghostty_overrides` is the facade for Ghostty's inline shadows — callers never match colour lines themselves, and `push` reports them as `PushResult.overrides
-- `library::detect::resolve()` is the facade for finding the push target — the push resolves its target through the same `resolve()` the CLI does
+- `library::detect::resolve()` is the facade for finding the push target — the CLI and preview resolve through `resolve()`, the push through `resolve_for_push()` (same triple, `/etc` excluded)
 - `app` / `cli` never reach into format internals or config parsing directly — use the facades
 
 ### 3. Dependency Injection
@@ -72,7 +72,7 @@ No cycles.
 
 ## Coding Notes
 
-- **Line-level writes only.** Never re-serialise a terminal config; only colour tokens are replaced — the one exception is the overrides delete, which removes whole colour lines and leaves every other byte identical. Compare first, write second: a no-op write is byte-identical and never opens the file.
+- **Line-level writes only.** Never re-serialise a terminal config; only colour tokens are replaced — the two exceptions are the overrides delete, which removes whole colour lines and leaves every other byte identical, and the missing-key insert (decision 57), which appends one line per added key after the last colour line (flat) or under its `[colors.*]` table (TOML) and leaves every other byte identical. Compare first, write second: a no-op write is byte-identical and never opens the file.
 - **Theme files are ours; configs are theirs.** `themes/` may be rewritten freely (canonical layout, via `.tmp` + rename, never partially written); terminal configs follow line-level discipline. A theme's colours never land in a file that belongs to another theme.
 - **Truth first, never rollback.** A save writes the theme file and only then pushes; a failed push is a report plus exit 1, and the theme file stays as written. Ctrl+A is the one sanctioned bypass: an explicit preview push of a dirty buffer, truth untouched by construction. In direct mode the config is the truth, so Ctrl+A saves there — there is nothing to preview past the file.
 - **Errors as values on user paths.** Fallible file and parse work returns `Result`, never panics — `cli` carries zero bare `unwrap`, and every failure surfaces as `huebox: ` plus an exit code.

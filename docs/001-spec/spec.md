@@ -1,6 +1,6 @@
 # huebox — specification
 
-Status: **living draft** · Format version: **1** · Last updated: 2026-10-05
+Status: **living draft** · Format version: **1** · Last updated: 2026-10-13
 
 This is the working spec for huebox. It is a single living document: edit it in
 place as the tool changes, and move it to `docs/002-spec/spec.md` only when the
@@ -93,8 +93,9 @@ unresolvable format, missing config). Errors go to stderr and are prefixed
 | `s` / `d` | saturation −/+ |
 | `x` / `c` | lightness −/+ |
 | `f` | cycle step multiplier ×1 → ×5 → ×20 |
-| `h` | type a hex value directly |
+| `h` / `X` | type a hex value directly |
 | `Ctrl+S` | save — the session's only write (§14.2) |
+| `Ctrl+A` | preview push of the dirty buffer — truth untouched, buffer stays dirty |
 | `u` / `r` | undo / revert to the last save |
 | `t` | theme picker — arrows, `Enter` opens **and pushes it**, `n` new from the buffer, `Esc` back (§13.7) |
 | `N` | save the buffer as a new theme, then save it like any other (§13.7) |
@@ -265,26 +266,56 @@ paths, in priority order) and `env` (env vars that redirect those paths).
 
 | Format | Dialect | Candidate paths |
 | --- | --- | --- |
-| `ghostty` | flat `key = value` | `$XDG_CONFIG_HOME/ghostty/config.ghostty`, `~/.config/ghostty/config.ghostty`, `~/.config/ghostty/config` |
-| `kitty` | flat `key value` | `$XDG_CONFIG_HOME/kitty/kitty.conf`, `~/.config/kitty/kitty.conf`, `~/.kitty.conf` |
-| `alacritty` | TOML | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `~/.config/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.config/alacritty.toml`, `~/.config/alacritty/alacritty.yml`, `~/.alacritty.toml` |
+| `ghostty` | flat `key = value` | `$XDG_CONFIG_HOME/ghostty/config.ghostty`, `$XDG_CONFIG_HOME/ghostty/config`, `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`, `~/Library/Application Support/com.mitchellh.ghostty/config` (macOS only, after the XDG pair) |
+| `kitty` | flat `key value` | `$XDG_CONFIG_HOME/kitty/kitty.conf`, `~/.config/kitty/kitty.conf`, `$XDG_CONFIG_DIRS/kitty/kitty.conf`, `~/.kitty.conf` |
+| `alacritty` | TOML | `$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `~/.config/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.config/alacritty.toml`, `~/.config/alacritty/alacritty.yml`, `~/.alacritty.toml`, `/etc/alacritty/alacritty.toml` |
 
 The candidate list is upstream's own search order (plan appendix A), in each
-terminal's terms, with two huebox extras kept for files that are still out
-there: alacritty's pre-TOML `alacritty.yml`, and Ghostty's extensionless
-`config`. `~/.config/...` entries are rewritten to `$XDG_CONFIG_HOME` at load
-time, which is why both spellings appear above.
+terminal's terms. Two behaviours differ from upstream by design. First,
+upstream Ghostty *merges* every config file it finds (macOS files override
+XDG ones); huebox reads the first candidate that holds colours and never
+merges — the subject is one file, not a merged view. Second, three huebox
+extras are kept for files still out there: alacritty's pre-TOML
+`alacritty.yml`, Ghostty's extensionless `config` (its pre-1.2.3 name), and
+kitty's `~/.kitty.conf` (in no man page, kept so an existing file keeps
+resolving). `~/.config/...` entries are rewritten to `$XDG_CONFIG_HOME` at
+load time, which is why both spellings appear above
+(`~/.config/alacritty.toml` is the same file as
+`$XDG_CONFIG_HOME/alacritty.toml` when XDG is unset, not a separate stop).
+The `/etc/...` and `$XDG_CONFIG_DIRS` stops are upstream's system defaults:
+probed last for reading, never a push target — huebox does not write
+root-owned files, and the filter lives in `resolve()` so every push caller
+is covered (decision 54). An unset or empty `$XDG_CONFIG_DIRS` falls back to
+`/etc/xdg` per the basedir spec, so `/etc/xdg/kitty/kitty.conf` probes at that
+slot — still read-only under the same filter. Ghostty's `~/Library/Application Support/...` stops are
+macOS-only and probed after the XDG pair, which is upstream's order; those
+files cannot exist on Linux, so one table serves both platforms.
 
 **Env overrides.** Only what upstream documents is honoured (§7.2, decision
 23): `KITTY_CONFIG_DIRECTORY` for kitty. Alacritty documents no env var for
 its config path, so there is none to honour and `--config` is the only
-override.
+override. `KITTY_CONFIG_DIRECTORY` names a directory (always used, no search
+runs); `$XDG_CONFIG_DIRS` is a colon-separated list, each entry taking a
+`kitty/kitty.conf` suffix in turn. On macOS a Finder-launched app never sees
+a shell-exported `XDG_CONFIG_HOME` (ghostty-org/ghostty#12408), so the
+`~/Library/...` and `~/.config/...` spellings are probed regardless of the
+environment — the environment never narrows the table, it only reorders it.
 
 ### 6.1 Parsing rules
 
 - Ghostty and kitty are **flat**: a regex rule per slot pair, resolving
   `slot` → config key(s). Ghostty supports `config-file` includes and
-  `theme = Name` indirection into a separate theme file.
+  `theme =` indirection into a separate theme file. The `theme` value takes
+  upstream's forms: a bare name (looked up in
+  `$XDG_CONFIG_HOME/ghostty/themes`, then the resources `themes/` dir), an
+  absolute path (used as-is), or `light:Name,dark:Name` (both names resolve;
+  the pair is never a file name (decision 55). A leading `?` on a `config-file` value
+  marks an optional include; any other `?` is literal. A relative include
+  resolves against the file holding the line, not the top config.
+- kitty `include` (plus `globinclude`) and Alacritty `general.import` are
+  followed for *detection* only (decision 51): a config whose colours live in
+  an included file still resolves. The push target stays the resolved file —
+  huebox never writes through an include directive.
 - Alacritty is **structured**: dotted keys (`colors.primary.background`),
   `[section]` tables and inline tables (`colors.primary = { background = "…" }`)
   all resolve to the same path. Reads normalise every path form; writes go back
@@ -327,7 +358,9 @@ refreshed, and whether it is ever overwritten.
    reader finds colours in the file. A path that says neither is not
    guessable and is an error, not a coin toss.
 2. Otherwise probe: environment variables, then candidate paths, in the order
-   above, XDG-aware (`XDG_CONFIG_HOME` wins over `~/.config`). The env vars
+   above, XDG-aware (`XDG_CONFIG_HOME` wins over `~/.config`;
+   `$XDG_CONFIG_DIRS` splits on `:` with each entry taking a
+   `kitty/kitty.conf` suffix in turn). The env vars
    are the ones upstream documents (plan appendix A): kitty's
    `KITTY_CONFIG_DIRECTORY`, and nothing at all for alacritty. `KITTY_CONFIG_DIR`
    was a huebox invention and is probed second as a **deprecated** spelling for
@@ -338,12 +371,21 @@ refreshed, and whether it is ever overwritten.
    not on disk: that chain is broken rather than colourless, Ghostty reports
    it as a configuration error on reload, and a save may repair it by
    exporting the theme it points at (§13.6).
-4. Ghostty `config-file` includes and `theme = Name` are followed to the file
+4. Ghostty `config-file` includes and `theme =` are followed to the file
    that actually holds the colours; that file is what gets written. Both are
    read the way Ghostty reads them: the value may be quoted or bare, a bare
-   one stops at the first `#`, and `?path` resolves against the config's own
-   directory. A trailing comment on either line is a comment, not part of the
-   path.
+   one stops at the first `#`, a leading `?` marks an optional include
+   (missing is skipped, never an error), and a relative path resolves against
+   the file holding the line. A trailing comment on either line is a comment,
+   not part of the path. Includes nest: a pulled-in file is read for its own
+   `config-file` lines, with a visited-set so a cycle stops instead of looping
+   (decision 56). `theme =` takes a name, an absolute path, or a
+   `light:`/`dark:` pair (§6.1); a name resolves under
+   `$XDG_CONFIG_HOME/ghostty/themes` first, then the resources `themes/` dir
+   (macOS: inside `Ghostty.app/Contents/Resources`; Linux: `share/ghostty`
+   or `$GHOSTTY_RESOURCES_DIR`). Upstream does not search
+   `~/Library/Application Support/.../themes` for named themes, so neither
+   does huebox.
 
 **The other direction.** Reading a config follows `theme =`; an export
 *writes* it. `ghostty_main_config()` is the file that holds the pointer line
@@ -386,7 +428,8 @@ config path is ambiguous between formats?
   (§10, I2). The code sample and the live diff are the two blocks whose
   text can be selected (§4.3.2), and a selection is painted in the theme's own
   `selection-background` / `selection-foreground` — the same pair the picker
-  marks a theme with.
+  marks a theme with. Drag-select waits for a selection model (decision 59);
+  mouse capture stays on.
 
 **How much of the palette the sample shows.** The sample is a sample, not a
 swatch grid: it paints what a zig lexer can actually tell apart, and the
@@ -822,6 +865,20 @@ Append-only. Newest last. One line per decision, with the reason.
 | 44 | The controls panel is titled `THEME`, not `palette / interface` | The box holds the theme's slots in every geometry — full, squeezed and thin — and `palette / interface` named its two grids, not the box. One title in `PANEL_TITLES`, so the stacked panels read the same |
 | 45 | Every bordered panel pads its content one cell left and right | The panel's padding is the only edge air — see decision 46. The air is horizontal only — vertical air would come 1:1 out of the widgets, so the row budget never moves for padding. Padding is the first thing spent when the window shrinks: panels pad iff the padded lay shows everything the unpadded one does (the same top, the same blocks, no block fewer rows), else they mount unpadded, else the bare stack stands. The `editor` box decides its own air independently: it pads iff the padded box mounts, else it keeps today's unpadded box rather than collapsing into a bare readout — and a tight readout never vetoes air in the panels below it. `HUEBOX_PANEL_PAD=0` opts out to touching borders |
 | 46 | Panel content carries no baked indent; the `editor` box no inner air; the `themes` button pads like a panel | Decision 45's air doubled the bare frame's two-column indent inside bordered panels (three columns left, one right) and the editor box's own inner cell (two right). The content rows now start at the content edge in every bordered panel — palette, interface, examples, diff, sample, the editor readout and its bars — and the one cell of panel padding is the only air on either side. The bare frame is untouched: it keeps its two-column indent (four for diff/sample), and the rungs that assume it take it as a parameter. The `editor` box's own inner air is 0 and its bars spend the old trailing space, so the gauges end one cell from the border one column wider; the `themes` button narrows by the same cell on each side so it reads as part of the same language. The box's air is reserved out of the info column's share by the allocator, so a padded box mounts wherever the unpadded one does and only the theme path truncates two columns sooner. The price is stated plainly: the panels stand two columns narrower than the indent era at every size, and the info column's path truncates two columns sooner wherever the `editor` box pads |
+| 57 | A push that would report missing keys offers once to insert them (TUI y/n prompt; CLI only on a tty, else report-only); a yes appends one line per missing key in slot order | Report-only left real gaps users fixed by hand; the offer is once per save and a no keeps today's behaviour exactly |
+| 58 | `list --porcelain` now: `name \t path \t mtime-epoch` per theme, same order as `list` | Small, stable, and script formats ossify fast — ship while the list shape is fresh |
+| 59 | Drag-select in sample/diff deferred; mouse capture stays on | No selection/clipboard model in the Ratatui shell; building one for readout widgets is cost without a workflow |
+| 60 | Unbound keys clear the status line in every overlay, overrides included | One rule everywhere (`apply_key` already promises it); the popup explains its own context |
+| 47 | Ghostty probes `~/Library/Application Support/com.mitchellh.ghostty/` after XDG, one table on both platforms | Upstream's macOS pair loads after XDG with override; without it a default mac install is invisible. Those files cannot exist on Linux, so one table serves both |
+| 48 | kitty gains `$XDG_CONFIG_DIRS/kitty/kitty.conf`; `~/.kitty.conf` stays as a huebox extra; `/etc` stops are read-only | Upstream order includes `XDG_CONFIG_DIRS` and a merged `/etc` default; huebox reads the system default last and never writes root-owned files. `~/.kitty.conf` is in no man page but an existing file must keep resolving |
+| 49 | Alacritty gains `/etc/alacritty/alacritty.toml` read-only; `~/.config/alacritty.toml` is the XDG spelling, not a stop | Upstream's fifth stop is the system default — read last, never pushed. The duplicate spelling exists because the loader keeps both; the spec now says so instead of listing it bare |
+| 50 | `theme =` resolves names, absolute paths, and `light:`/`dark:` pairs | Upstream's three forms; treating the raw value as a file name breaks pairs and absolute paths. User dir first, resources second, matching `ghostty +list-themes` |
+| 51 | kitty `include` / Alacritty `import` followed for detection, never for push | A split config that reads as colourless is a false "no terminal"; writing through a directive would break the line-level contract, so the resolved file stays the target. Closes §13.8 Q6 |
+| 52 | Reload finds the Ghostty app without `/proc` on macOS; kitty tries `SIGUSR1` to `$KITTY_PID` before `kitty @` | `/proc` walking fails silently on mac, so Ghostty reload never fired there. Signals beat subprocesses wherever a terminal has one, and kitty documents the signal |
+| 53 | Alacritty targets get no reload advice line; `ALACRITTY_SOCKET` stays a defensive-only probe | `live_config_reload` is on by default, so the advice is noise. No upstream doc confirms Alacritty sets `ALACRITTY_SOCKET` — probing it costs nothing if it never fires |
+| 54 | `/etc` stops are filtered out of push candidates inside `resolve()`; detection keeps them | Push already routes through `resolve()`, so one filter covers every caller. Flagging entries through `FormatStub` would touch the trait and every fake for no extra correctness. Paths are compared after canonicalization (`..`/symlinks resolved, lexical fallback); the Ghostty pointer write refuses system paths too |
+| 55 | `ghostty_theme_names()` returns every name a `theme =` line carries; `ghostty_theme_name()` delegates to its first | Additive: no existing caller changes. A `light:`/`dark:` pair resolves both names, first hit wins |
+| 56 | Includes follow recursively with a visited-set; a cycle stops, never an error | Upstream warns on cycles; huebox's subject is one file, so silently stopping at a revisit is the matching behaviour |
 
 ---
 
@@ -940,8 +997,14 @@ plus exit 1, never a rolled-back truth.
 - A terminal whose config holds no colours is never a push target (same rule
   as detection), reported on stderr.
 - Keys absent from the target config are updated-if-present; missing keys are
-  reported as "not carried by this config". Push never inserts keys — that
-  would break the line-level contract (open question 1).
+  reported as "not carried by this config", and the saver offers once to
+  insert them (decision 57): TUI y/n prompt, CLI only on a tty, else
+  report-only. A yes appends one line per missing key in slot order — flat
+  formats after the last colour line, TOML under the existing `[colors.*]`
+  table (created at end of file if absent) — and the report names the added
+  lines; a no keeps report-only. The Ghostty native-export path never asks
+  (a file of ours, all 22 keys by construction), and system paths never
+  reach an insert (decision 54 refuses them first).
 - The **in-place write** pushes through the resolved path — inline config,
   include, or a Ghostty `theme =` file — splicing the 22 slots with that
   format's own line-level writer.
@@ -980,19 +1043,23 @@ never fail a save: the bytes are on disk before it is attempted.
   terminal that cannot be told. Ghostty has no CLI reload action in 1.3
   (`+reload_config` is a *keybind* action and the desktop file offers only
   `new-window`), so it is asked with the signal its own application
-  handles: `ghostty_app_pid()` walks `/proc` for a process named `ghostty`
-  whose command line carries `--gtk-single-instance` — the application,
-  which owns the handler and tells its surfaces — and that process gets
+  handles: `ghostty_app_pid()` finds the process named `ghostty` whose
+  command line carries `--gtk-single-instance` — the application,
+  which owns the handler and tells its surfaces — via `/proc` on Linux and
+  a `pgrep` fallback on macOS (which has no `/proc`), and that process gets
   `SIGUSR2`, the same re-read `ctrl+shift+,` performs. A build with
-  per-window surfaces is safe: they are not signalled. kitty is asked
-  through its own remote control, `kitty @ load-config`, with all three
-  streams on `DEVNULL` (a reload that stole a keystroke or printed into
-  the editor's frame would be worse than no reload) and a five second
-  timeout.
+  per-window surfaces is safe: they are not signalled. kitty is signalled
+  first — `SIGUSR1` to `$KITTY_PID`, the reload its man page documents —
+  and only then asked through its own remote control, `kitty @ load-config`,
+  with all three streams on `DEVNULL` (a reload that stole a keystroke or
+  printed into the editor's frame would be worse than no reload) and a five
+  second timeout. Alacritty is never signalled: `live_config_reload` is on
+  by default, so a written config is already live and no advice line is owed.
 - **A terminal that cannot be told** — a format with no interface, a
   process that is not running, a signal that lands nowhere, a command that
   is not installed or exits non-zero — returns `""` and the report keeps
-  the advice line (`reload your terminal to see it`). The formats that
+  the advice line (`reload your terminal to see it`), except on alacritty
+  targets, which live-reload and never want it. The formats that
   *were* reloaded come back in `PushResult.reloaded`, which is how the
   caller knows whether to add that advice at all; a target that failed is
   not in `pushed` and so is never reloaded.
@@ -1110,7 +1177,7 @@ As built:
   loaded colours, `saved` is that same snapshot (so the new theme is clean),
   the undo log is empty, the selection starts at slot 0, and the pending-discard
   arm is dropped — a fresh theme must never inherit a half-armed Esc. Status
-  reads `opened <name>`.
+  carries the save's verdict (`saved <name> → <target>`), like any other save.
 - **`n` creates and adopts.** The prompt is one line (`new theme name:`); a
   name that is taken gets a second one (`<name> exists - y overwrites it, or
   type another name:`) and nothing is written without an answer (decision 21).
@@ -1144,9 +1211,14 @@ As built:
 ### 13.8 Open questions (§13)
 
 1. Should push insert keys the target config lacks, or stay report-only?
-   — **report-only so far** (decision 18): the config tells huebox which
-   keys it has, and huebox never invents a line. Still open whether a
-   future phase should offer to add them.
+   — **decided: offer once to insert, else report-only** (decision 57,
+   superseding the open half of decision 18). When a push would report
+   missing keys, the saver offers once to insert them — TUI: a y/n prompt
+   through the prompt seam; CLI: asked only when stdin is a tty, otherwise
+   report-only stands. A yes appends one line per missing key in slot
+   order (flat formats: after the last colour line; TOML: under the
+   existing `[colors.*]` table, created at end of file if absent), and the
+   report names the added lines. A no keeps today's behaviour exactly.
 2. Ghostty native theme-file export: default or opt-in? — **decided: the
    default wherever the config is organised by theme** (decision 26,
    superseding decision 22). The in-place path is not name-blind but it is
@@ -1163,11 +1235,17 @@ As built:
    0-7 `#101014 #a83232 #3f7a3f #a88a3f #3f6a8a #8a3f6a #3f8a8a #b0b0b8`,
    8-15 `#d0d0d8 #e06c6c #6cc06c #e0c06c #6c9ce0 #e06c9c #6cc0c0 #f0f0f8`.
 4. Machine-readable `list --porcelain` for scripting — now or later?
+   — **decided: now** (decision 58): one line per theme,
+   `name \t path \t mtime-epoch`, in the same order as `list`.
 5. Delete / rename commands, or is `rm` / `mv` enough for v1 of the library?
    — **decided: `rm` / `mv` for v1** (decision 17). The state file is only a
    pointer: a deleted or renamed theme warns once and drops `edit` back to
    direct mode (§13.4), which is exactly the degradation `rm` should have.
 6. kitty `include` / Alacritty `import` indirection as push alternatives?
+   — **decided: followed for detection, never for push** (decision 51). A
+   config whose colours live behind an `include` / `import` still resolves;
+   the push target stays the resolved file, and huebox never writes through
+   the directive.
 
 ## 14. Staged editing + live examples — the plan
 

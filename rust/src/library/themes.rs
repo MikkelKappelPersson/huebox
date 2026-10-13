@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::library::detect::{
     config_holds_colours, ensure_theme_pointer, ghostty_main_config, ghostty_theme_name,
-    ghostty_themes_dir, resolve,
+    ghostty_themes_dir, resolve_for_push,
 };
 use crate::library::format::{unknown_format, FormatStub};
 use crate::library::{is_hex, normalize_hex, SlotMap, ThemeError, MISSING, SLOTS};
@@ -578,11 +578,29 @@ impl PushResult {
             overrides: None,
         }
     }
+
+    /// Whether the caller owes the reload advice line: something was
+    /// pushed, nothing was reloaded, and at least one pushed target does
+    /// not live-reload on its own (alacritty never wants the line).
+    pub fn needs_reload_advice(&self) -> bool {
+        !self.pushed.is_empty()
+            && self.reloaded.is_empty()
+            && self.pushed.iter().any(|(fmt, _)| !live_reloads(fmt))
+    }
+}
+
+/// Formats that re-read their config without being asked: never
+/// signalled, never owed the advice line. Alacritty's
+/// `live_config_reload` is on by default, so a written config is already
+/// live.
+fn live_reloads(fmt: &str) -> bool {
+    fmt == "alacritty"
 }
 
 /// How a terminal is told to re-read its config. Only terminals with a
 /// real interface: kitty answers its own remote control, ghostty is asked
-/// with a signal, and a format that cannot be told keeps the advice line.
+/// with a signal. Alacritty is absent on purpose: it live-reloads, so it
+/// is never signalled and never owed the advice line.
 pub static RELOAD_COMMANDS: &[(&str, &[&str])] = &[("kitty", &["kitty", "@", "load-config"])];
 
 /// Where the reload looks for a running terminal (a parameter, so tests
@@ -657,32 +675,115 @@ impl ReloadBackend for SystemReloader {
     }
 }
 
+/// The owning Ghostty application, not a surface: the process named
+/// `ghostty` whose command line carries `--gtk-single-instance`.
+fn is_ghostty_app(comm: &str, cmdline: &str) -> bool {
+    comm.trim() == "ghostty" && cmdline.contains("ghostty") && cmdline.contains("single-instance")
+}
+
+/// The application pid from `(pid, comm, cmdline)` rows, lowest first —
+/// one chooser for the `/proc` walk and the macOS `pgrep`/`ps` fallback,
+/// so per-window surfaces (no `--gtk-single-instance`) never win on
+/// either platform.
+fn pick_ghostty_app(mut rows: Vec<(u32, String, String)>) -> Option<u32> {
+    rows.sort();
+    rows.into_iter()
+        .find(|(_, comm, cmdline)| is_ghostty_app(comm, cmdline))
+        .map(|(pid, _, _)| pid)
+}
+
+/// `(pid, comm, cmdline)` rows from a `/proc`-shaped tree.
+#[cfg(not(target_os = "macos"))]
+fn ghostty_app_rows_proc(proc_root: &Path) -> Vec<(u32, String, String)> {
+    let mut entries: Vec<String> = std::fs::read_dir(proc_root)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()))
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
+    let mut rows = Vec::new();
+    for entry in entries {
+        let pid: u32 = match entry.parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        let comm = match std::fs::read(proc_root.join(&entry).join("comm")) {
+            Ok(comm) => String::from_utf8_lossy(&comm).into_owned(),
+            Err(_) => continue,
+        };
+        let cmdline = match std::fs::read(proc_root.join(&entry).join("cmdline")) {
+            Ok(cmdline) => String::from_utf8_lossy(&cmdline).into_owned(),
+            Err(_) => continue,
+        };
+        rows.push((pid, comm, cmdline));
+    }
+    rows
+}
+
+/// One command's stdout, or `None`; stdio never touches the tty.
+#[cfg(target_os = "macos")]
+fn capture_stdout(argv: &[&str]) -> Option<String> {
+    let (head, args) = argv.split_first()?;
+    let output = Command::new(head)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+/// `(pid, comm, cmdline)` rows without `/proc`: candidates from
+/// `pgrep -x ghostty`, each confirmed through `ps`. `pgrep -x` already
+/// matches the name exactly; the `ps` args carry the `--gtk-single-instance`
+/// check, so per-window surfaces are listed but never picked.
+#[cfg(any(target_os = "macos", test))]
+fn ghostty_app_rows_macos(run: &dyn Fn(&[&str]) -> Option<String>) -> Vec<(u32, String, String)> {
+    let listing = match run(&["pgrep", "-x", "ghostty"]) {
+        Some(listing) => listing,
+        None => return Vec::new(),
+    };
+    let mut rows = Vec::new();
+    for line in listing.split_whitespace() {
+        let pid: u32 = match line.parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        let args = match run(&["ps", "-p", line, "-o", "args="]) {
+            Some(args) => args,
+            None => continue,
+        };
+        rows.push((pid, "ghostty".to_owned(), args));
+    }
+    rows
+}
+
 /// The running Ghostty application process, or `None`.
 ///
 /// Ghostty 1.3 has no CLI reload action, but its application handles
-/// `SIGUSR2` as "reload the configuration". Found by walking `proc_root`
-/// for a `ghostty` process whose command line carries
-/// `--gtk-single-instance` (the owning application, not a surface).
+/// `SIGUSR2` as "reload the configuration". Found by process name
+/// `ghostty` plus `--gtk-single-instance` on the command line (the owning
+/// application, not a surface): a `/proc` walk on Linux, a
+/// `pgrep`/`ps` fallback on macOS, which has no `/proc`.
 pub fn ghostty_app_pid(proc_root: &Path) -> Option<u32> {
-    let mut entries: Vec<String> = std::fs::read_dir(proc_root)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()))
-        .collect();
-    entries.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
-    for entry in entries {
-        let comm = std::fs::read(proc_root.join(&entry).join("comm")).ok()?;
-        if String::from_utf8_lossy(&comm).trim() != "ghostty" {
-            continue;
-        }
-        let cmdline = std::fs::read(proc_root.join(&entry).join("cmdline")).ok()?;
-        let cmdline = String::from_utf8_lossy(&cmdline);
-        if cmdline.contains("ghostty") && cmdline.contains("single-instance") {
-            return entry.parse().ok();
-        }
+    // macOS has no /proc: pgrep/ps instead. `proc_root` is the Linux seam
+    // (tests hand it a directory of fake processes); macOS ignores it.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = proc_root;
+        return pick_ghostty_app(ghostty_app_rows_macos(&capture_stdout));
     }
-    None
+    #[cfg(not(target_os = "macos"))]
+    pick_ghostty_app(ghostty_app_rows_proc(proc_root))
 }
 
 /// Whether this process runs inside a kitty window.
@@ -745,7 +846,8 @@ pub fn env_pid(name: &str) -> Option<u32> {
 /// event — the colours are on disk either way. Signals beat subprocesses
 /// wherever a terminal has one: `kitty @` without a socket talks to the
 /// controlling tty through escape codes, and under the editor that channel
-/// is the app's own input.
+/// is the app's own input. Alacritty always returns `""`: it live-reloads,
+/// so it is never signalled.
 pub fn reload_terminal(fmt: &str) -> String {
     reload_terminal_with(fmt, &SystemReloader, Path::new(PROC_DEFAULT))
 }
@@ -1010,8 +1112,9 @@ pub struct PushOptions {
 /// Either way a theme's colours never land in another theme's file.
 ///
 /// Three rules the terminal side does not negotiate: a config with no
-/// colours is never a target; keys the target does not carry are reported,
-/// never inserted; every target is tried even when an earlier one failed.
+/// colours is never a target; keys the target does not carry are reported
+/// (and, through [`push_confirm`], offered once for insert); every target
+/// is tried even when an earlier one failed.
 ///
 /// Truth-then-push lives here as a shape, not a sequence: this function
 /// takes *slots only* — it never reads or writes a theme file, so the
@@ -1029,6 +1132,54 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
     opts: &PushOptions,
     backend: &R,
     proc_root: &Path,
+) -> Result<PushResult, ThemeError> {
+    push_confirm::<F, R>(slots, opts, backend, proc_root, None)
+}
+
+/// The one y/n the saver offers when an in-place target reports missing
+/// keys: which target, how many keys, and where they would land.
+fn insert_prompt(found: &str, target: &Path, missing: &[&str]) -> String {
+    format!(
+        "  {found}: insert {} missing key(s) ({}) into {}? [y/N] ",
+        missing.len(),
+        missing.join(", "),
+        target.display()
+    )
+}
+
+/// The report line for the lines an insert added: which target, how many
+/// keys, and the keys themselves.
+fn inserted_line(found: &str, target: &Path, added: &[String]) -> String {
+    format!(
+        "{found}: inserted {} missing key(s) into {}: {}",
+        added.len(),
+        target.display(),
+        added.join(", ")
+    )
+}
+
+/// [`push_with`] with an offer to insert missing keys (decision 57).
+///
+/// When an in-place push would report keys as missing, `confirm` is
+/// asked once per call — the first target with missing keys names the
+/// prompt, and the answer stands for every later target too. A yes
+/// appends one line per missing key the format can spell (flat formats
+/// after the last colour line, TOML under its `[colors.*]` table) and the
+/// report names the added lines; a no keeps the report-only behaviour
+/// exactly. `None` never asks: that is [`push`]/[`push_with`].
+///
+/// Four things never change: the offer fires only when keys are actually
+/// missing (a no-op push asks nothing and writes nothing); the Ghostty
+/// native-export path is untouched (a file of ours, all 22 keys by
+/// construction); system paths never reach an insert (`resolve_for_push`
+/// refuses them first); a failed insert reports like a failed write,
+/// truth already saved and never rolled back.
+pub fn push_confirm<F: FormatStub, R: ReloadBackend>(
+    slots: &SlotMap,
+    opts: &PushOptions,
+    backend: &R,
+    proc_root: &Path,
+    mut confirm: Option<&mut dyn FnMut(&str) -> bool>,
 ) -> Result<PushResult, ThemeError> {
     if opts.no_push {
         return Ok(PushResult::empty());
@@ -1058,9 +1209,13 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
     let mut pushed: Vec<(String, PathBuf)> = Vec::new();
     let mut failed = false;
     let mut overrides = None;
+    let mut asked = false;
+    let mut agreed = false;
 
     for wanted in &names {
-        let (found, target, error) = resolve::<F>(wanted.as_deref(), explicit.as_deref());
+        // Push-mode resolution (decision 54): /etc candidates are skipped and
+        // an explicit --config under /etc is refused by resolve_for_push itself.
+        let (found, target, error) = resolve_for_push::<F>(wanted.as_deref(), explicit.as_deref());
         let label = wanted.clone().unwrap_or_else(|| "terminal".to_owned());
         // The config holding the `theme =` line, asked before the colours:
         // a dangling pointer is a target even though nothing resolves.
@@ -1182,10 +1337,40 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
             .copied()
             .collect();
         if !missing.is_empty() {
-            lines.push(format!(
-                "{found}: not carried by this config: {}",
-                missing.join(", ")
-            ));
+            // Decision 57: one offer per call to insert what the target
+            // lacks — the first missing target names the prompt, and the
+            // answer stands for every later one. A yes appends the lines
+            // and names them; anything else keeps the report-only line.
+            let mut added: Vec<String> = Vec::new();
+            if let Some(ask) = confirm.as_deref_mut() {
+                if !asked {
+                    asked = true;
+                    agreed = ask(&insert_prompt(&found, &target, &missing));
+                }
+                if agreed {
+                    match F::insert_missing(&found, &target, slots) {
+                        Ok(inserted) => added = inserted,
+                        Err(problem) => {
+                            lines.push(format!("{found}: {}: {problem}", target.display()));
+                            failed = true;
+                        }
+                    }
+                }
+            }
+            if !added.is_empty() {
+                lines.push(inserted_line(&found, &target, &added));
+            }
+            let still: Vec<&str> = missing
+                .iter()
+                .filter(|slot| !added.iter().any(|key| key == *slot))
+                .copied()
+                .collect();
+            if !still.is_empty() {
+                lines.push(format!(
+                    "{found}: not carried by this config: {}",
+                    still.join(", ")
+                ));
+            }
         }
     }
 
@@ -1793,6 +1978,16 @@ mod tests {
                 "Denied",
             ))
         }
+        fn insert_missing(
+            _fmt: &str,
+            _path: &Path,
+            _slots: &SlotMap,
+        ) -> std::io::Result<Vec<String>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Denied",
+            ))
+        }
         fn color_line(fmt: &str, line: &str) -> bool {
             Mem::color_line(fmt, line)
         }
@@ -1818,6 +2013,69 @@ mod tests {
         assert_eq!(load("ember").unwrap().0, edited);
     }
 
+    /// Splice works, insert denied: the insert-failure shape.
+    #[derive(Clone, Copy)]
+    struct FailInsert;
+
+    impl FormatStub for FailInsert {
+        fn format_names() -> &'static [&'static str] {
+            Mem::format_names()
+        }
+        fn default_paths(fmt: &str) -> Vec<String> {
+            Mem::default_paths(fmt)
+        }
+        fn env_table(fmt: &str) -> &'static [(&'static str, &'static str)] {
+            Mem::env_table(fmt)
+        }
+        fn read(fmt: &str, path: &Path) -> SlotMap {
+            Mem::read(fmt, path)
+        }
+        fn write(fmt: &str, path: &Path, slots: &SlotMap) -> std::io::Result<()> {
+            Mem::write(fmt, path, slots)
+        }
+        fn insert_missing(
+            _fmt: &str,
+            _path: &Path,
+            _slots: &SlotMap,
+        ) -> std::io::Result<Vec<String>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Denied",
+            ))
+        }
+        fn color_line(fmt: &str, line: &str) -> bool {
+            Mem::color_line(fmt, line)
+        }
+    }
+
+    #[test]
+    fn insert_failure_reports_like_write_failure() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<FailInsert, SystemReloader>(
+            &full_slots(),
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        // Present keys still land; the denied insert is a report plus
+        // `failed`, and the missing keys stay reported as missing.
+        assert!(result.failed);
+        assert!(result.lines.iter().any(|line| line.contains("Denied")));
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|line| line.contains("not carried by this config")),
+            "{:?}",
+            result.lines
+        );
+        assert!(!std::fs::read_to_string(&kitty).unwrap().contains("color2"));
+    }
+
     #[test]
     fn missing_keys_reported_never_inserted() {
         let home = Home::setup();
@@ -1834,6 +2092,206 @@ mod tests {
         assert_eq!(after.lines().count(), kitty_text().lines().count());
         assert!(!after.contains("color2")); // no key invented
         assert!(after.contains("background            #010203"));
+    }
+
+    fn confirm_yes(calls: &std::cell::RefCell<Vec<String>>) -> impl FnMut(&str) -> bool + '_ {
+        move |label: &str| {
+            calls.borrow_mut().push(label.to_owned());
+            true
+        }
+    }
+
+    fn confirm_no(calls: &std::cell::RefCell<Vec<String>>) -> impl FnMut(&str) -> bool + '_ {
+        move |label: &str| {
+            calls.borrow_mut().push(label.to_owned());
+            false
+        }
+    }
+
+    #[test]
+    fn insert_offer_yes_appends_in_slot_order_and_reports() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let before = std::fs::read_to_string(&kitty).unwrap();
+        // Present keys keep the file's values (a no-op splice); gaps take
+        // known fills, so the added lines are pinned exactly.
+        let mut slots = read_terminal::<Mem>("kitty", &kitty);
+        for (slot, value) in full_slots() {
+            slots.entry(slot).or_insert(value);
+        }
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &slots,
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "asked once");
+        assert!(calls.borrow()[0].contains("[y/N]"), "{:?}", calls.borrow());
+        let report = result.lines.join("\n");
+        assert!(report.contains("inserted 13 missing key(s)"), "{report}");
+        assert!(report.contains("palette-2"), "{report}");
+        // kitty carries no cursor text colour: still reported, never invented.
+        assert!(
+            report.contains("not carried by this config: cursor-text"),
+            "{report}"
+        );
+        let after = std::fs::read_to_string(&kitty).unwrap();
+        assert!(after.starts_with(&before), "other bytes untouched");
+        let added: Vec<String> = after
+            .lines()
+            .skip(before.lines().count())
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            added,
+            (2..15)
+                .map(|i| format!("color{i} #{i:02x}{i:02x}{i:02x}"))
+                .collect::<Vec<_>>()
+        );
+        // The added lines read back: a yes heals the gap it names.
+        let reread = read_terminal::<Mem>("kitty", &kitty);
+        assert_eq!(reread["palette-2"], "#020202");
+        assert!(!reread.contains_key("cursor-text"));
+    }
+
+    #[test]
+    fn insert_offer_no_keeps_report_only() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let before = std::fs::read_to_string(&kitty).unwrap();
+        let mut slots = read_terminal::<Mem>("kitty", &kitty);
+        for (slot, value) in full_slots() {
+            slots.entry(slot).or_insert(value);
+        }
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &slots,
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_no(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "asked once");
+        let report = result.lines.join("\n");
+        assert!(!report.contains("inserted"), "{report}");
+        assert!(report.contains("not carried by this config:"), "{report}");
+        assert!(report.contains("palette-2"), "{report}");
+        assert_eq!(std::fs::read_to_string(&kitty).unwrap(), before);
+    }
+
+    #[test]
+    fn insert_offer_fires_only_when_keys_are_missing() {
+        let home = Home::setup();
+        // The fixture carries all 22: nothing missing, nothing asked.
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &push_opts("ghostty", &home.config),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert!(calls.borrow().is_empty());
+        assert!(
+            result.lines.iter().all(|line| !line.contains("carried")),
+            "{:?}",
+            result.lines
+        );
+    }
+
+    #[test]
+    fn insert_offer_asks_once_across_targets() {
+        let dir = temp_dir("themes-insert-once");
+        let root = dir.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        let full = full_slots();
+        let ghostty = dir.write(
+            "ghostty/config.ghostty",
+            "font-size = 12\npalette = 0=#0a0a13\nbackground = #0f0f1a\n",
+        );
+        let kitty = dir.write("kitty/kitty.conf", &kitty_text());
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full,
+            &PushOptions::default(),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "one offer per save");
+        let report = result.lines.join("\n");
+        assert!(
+            report.contains("ghostty: inserted 20 missing key(s)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("kitty: inserted 13 missing key(s)"),
+            "{report}"
+        );
+        assert!(std::fs::read_to_string(&ghostty)
+            .unwrap()
+            .contains("palette = 1=#010101"));
+        assert!(std::fs::read_to_string(&kitty)
+            .unwrap()
+            .contains("color2 #020202"));
+    }
+
+    #[test]
+    fn insert_offer_native_export_never_asks() {
+        let home = Home::setup();
+        // The export is a file of ours, all 22 keys by construction.
+        let (opts, _) = native_opts(&home, &home.config, "ember");
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &opts,
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn insert_offer_system_path_refuses_without_asking() {
+        let home = Home::setup();
+        let opts = PushOptions {
+            to: vec!["kitty".to_owned()],
+            path: Some(PathBuf::from("/etc/kitty/kitty.conf")),
+            ..PushOptions::default()
+        };
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &opts,
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(result.failed);
+        assert!(calls.borrow().is_empty(), "never insert into a system path");
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|line| line.contains("refusing to push to system path")),
+            "{:?}",
+            result.lines
+        );
+        let _ = home;
     }
 
     #[test]
@@ -2317,6 +2775,25 @@ mod tests {
         dir
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn proc_rows_skip_entries_without_comm() {
+        let proc = fake_proc_with(&[
+            ("9", "cmdline", b"ghostty\x00--gtk-single-instance\x00"),
+            ("4242", "comm", b"ghostty\n"),
+            ("4242", "cmdline", b"ghostty\x00--gtk-single-instance\x00"),
+        ]);
+        // Pid 9 has no comm file: skipped, never fatal (pinned).
+        assert_eq!(
+            ghostty_app_rows_proc(proc.path()),
+            vec![(
+                4242,
+                "ghostty\n".to_owned(),
+                "ghostty\x00--gtk-single-instance\x00".to_owned()
+            )]
+        );
+    }
+
     #[test]
     fn reload_signals_and_fallback() {
         let backend = FakeReload::new(true, true);
@@ -2354,6 +2831,142 @@ mod tests {
         let _guard = lock_env(&[("KITTY_PID", "4242")]);
         assert_eq!(env_pid("KITTY_PID"), Some(4242));
         drop(_guard);
+        // Signal-first ordering: with $KITTY_PID set the remote control is
+        // never attempted — no subprocess, no tty escape codes.
+        let backend = FakeReload::new(true, true);
+        let _guard = lock_env(&[("KITTY_PID", "4242")]);
+        assert_eq!(
+            reload_terminal_with("kitty", &backend, empty.path()),
+            "kitty: reloaded (config re-read, pid 4242)"
+        );
+        assert_eq!(*backend.signals.borrow(), vec![(4242, SIGUSR1)]);
+        assert!(backend.commands.borrow().is_empty());
+        drop(_guard);
+        // …and a failed signal is the same best-effort miss, still with no
+        // subprocess attempted.
+        let backend = FakeReload::new(false, true);
+        let _guard = lock_env(&[("KITTY_PID", "4242")]);
+        assert_eq!(reload_terminal_with("kitty", &backend, empty.path()), "");
+        assert_eq!(*backend.signals.borrow(), vec![(4242, SIGUSR1)]);
+        assert!(backend.commands.borrow().is_empty());
+        drop(_guard);
+    }
+
+    #[test]
+    fn ghostty_app_pick_shared_by_both_platforms() {
+        // Surfaces carry no --gtk-single-instance and never win, whatever
+        // listed them (/proc walk or pgrep/ps).
+        let rows = vec![
+            (7u32, "ghostty".to_owned(), "ghostty surface".to_owned()),
+            (
+                4242u32,
+                "ghostty".to_owned(),
+                "ghostty --gtk-single-instance".to_owned(),
+            ),
+            (
+                99u32,
+                "other".to_owned(),
+                "ghostty --gtk-single-instance".to_owned(),
+            ),
+        ];
+        assert_eq!(pick_ghostty_app(rows), Some(4242));
+        assert_eq!(
+            pick_ghostty_app(vec![(
+                7u32,
+                "ghostty".to_owned(),
+                "ghostty surface".to_owned()
+            )]),
+            None
+        );
+        assert_eq!(pick_ghostty_app(Vec::new()), None);
+        // Lowest pid wins when two applications somehow run.
+        let rows = vec![
+            (
+                9000u32,
+                "ghostty".to_owned(),
+                "ghostty --gtk-single-instance".to_owned(),
+            ),
+            (
+                100u32,
+                "ghostty".to_owned(),
+                "ghostty --gtk-single-instance".to_owned(),
+            ),
+        ];
+        assert_eq!(pick_ghostty_app(rows), Some(100));
+    }
+
+    #[test]
+    fn ghostty_app_macos_rows_from_pgrep_ps() {
+        use std::collections::HashMap;
+        // Fake macOS: pgrep lists candidates, ps confirms each one.
+        let table: HashMap<String, String> = [
+            ("pgrep -x ghostty", "4242\n7\n"),
+            ("ps -p 4242 -o args=", "ghostty --gtk-single-instance\n"),
+            ("ps -p 7 -o args=", "/Applications/Ghostty.app/surface\n"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+        let run = |argv: &[&str]| table.get(&argv.join(" ")).cloned();
+        let rows = ghostty_app_rows_macos(&run);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(pick_ghostty_app(rows), Some(4242));
+        // pgrep missing (or no match): no rows, no pid — never an error.
+        let run = |_: &[&str]| None;
+        assert!(ghostty_app_rows_macos(&run).is_empty());
+        assert_eq!(pick_ghostty_app(ghostty_app_rows_macos(&run)), None);
+        // Junk pids in the listing are skipped, not fatal.
+        let table: HashMap<String, String> = [
+            ("pgrep -x ghostty", "junk\n4242\n"),
+            ("ps -p 4242 -o args=", "ghostty --gtk-single-instance\n"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+        let run = |argv: &[&str]| table.get(&argv.join(" ")).cloned();
+        assert_eq!(pick_ghostty_app(ghostty_app_rows_macos(&run)), Some(4242));
+    }
+
+    #[test]
+    fn alacritty_never_signalled_nor_advised() {
+        // No signal, no subprocess: live_config_reload is on by default.
+        let backend = FakeReload::new(true, true);
+        let proc = temp_dir("themes-proc-alacritty");
+        assert_eq!(reload_terminal_with("alacritty", &backend, proc.path()), "");
+        assert!(backend.signals.borrow().is_empty());
+        assert!(backend.commands.borrow().is_empty());
+        assert!(!RELOAD_COMMANDS.iter().any(|(name, _)| *name == "alacritty"));
+        // …and no advice line for alacritty-only pushes.
+        let alone = PushResult {
+            lines: Vec::new(),
+            pushed: vec![("alacritty".to_owned(), PathBuf::from("/tmp/alacritty.toml"))],
+            failed: false,
+            reloaded: Vec::new(),
+            overrides: None,
+        };
+        assert!(!alone.needs_reload_advice());
+        // A pushed-but-unreloaded ghostty still owes the line…
+        let ghostty = PushResult {
+            pushed: vec![("ghostty".to_owned(), PathBuf::from("/tmp/config"))],
+            ..alone.clone()
+        };
+        assert!(ghostty.needs_reload_advice());
+        // …unless it reloaded, and nothing pushed owes nothing.
+        let reloaded = PushResult {
+            reloaded: vec!["ghostty".to_owned()],
+            ..ghostty.clone()
+        };
+        assert!(!reloaded.needs_reload_advice());
+        assert!(!PushResult::empty().needs_reload_advice());
+        // Mixed targets: one live-reloading terminal does not excuse the other.
+        let mixed = PushResult {
+            pushed: vec![
+                ("alacritty".to_owned(), PathBuf::from("/tmp/alacritty.toml")),
+                ("ghostty".to_owned(), PathBuf::from("/tmp/config")),
+            ],
+            ..alone.clone()
+        };
+        assert!(mixed.needs_reload_advice());
     }
 
     #[test]
@@ -2391,7 +3004,8 @@ mod tests {
         assert_eq!(reload_terminal_with("kitty", &backend, proc.path()), "");
         assert_eq!(backend.commands.borrow().len(), before);
         drop(_guard);
-        // A format with no interface keeps the advice line (empty here).
+        // Alacritty has no reload interface (it live-reloads): empty here,
+        // and no advice line either (see needs_reload_advice).
         assert_eq!(reload_terminal_with("alacritty", &backend, proc.path()), "");
     }
 

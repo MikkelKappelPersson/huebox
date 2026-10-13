@@ -13,11 +13,13 @@
 //! backend is built late, like the Python late `app` import). The tty
 //! check runs before any of it, so a piped session reports the real
 //! problem. User errors print `huebox: {msg}` on stderr and exit 1, never
-//! a traceback; `--format`/`--from` are clamped by clap before any lookup
-//! (which would panic on an unknown name).
+//! a traceback; usage errors exit 2 as `huebox: error: ...`, including
+//! clap's own (bad values, unknown flags) whose body is kept verbatim
+//! behind our prefix. `--format`/`--from` are clamped by clap before any
+//! lookup (which would panic on an unknown name).
 
 use std::cell::RefCell;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -122,6 +124,9 @@ pub struct Cli {
     /// List supported formats and exit
     #[arg(long = "formats")]
     pub formats: bool,
+    /// Machine-readable theme list (`list` only): `name \t path \t mtime-epoch`
+    #[arg(long = "porcelain")]
+    pub porcelain: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +149,12 @@ pub fn run(
             let code = error.exit_code();
             // `--help`/`--version` read as stdout; usage errors as stderr.
             if error.use_stderr() {
-                let _ = write!(err, "{error}");
+                // Usage errors exit 2 as `huebox: error: ...` — clap's
+                // body (possible values, usage) is kept, only the
+                // prefix is ours.
+                let rendered = format!("{error}");
+                let body = rendered.strip_prefix("error: ").unwrap_or(&rendered);
+                let _ = write!(err, "huebox: error: {body}");
             } else {
                 let _ = write!(out, "{error}");
             }
@@ -185,6 +195,16 @@ pub fn run(
             ),
         );
     }
+    // `--porcelain` is a `list` output shape, not a global flag.
+    if cli.porcelain && action.as_deref() != Some("list") {
+        return fail2(err, "--porcelain needs list".to_owned());
+    }
+    if cli.porcelain && cli.formats {
+        return fail2(
+            err,
+            "--porcelain cannot be combined with --formats".to_owned(),
+        );
+    }
 
     if cli.formats {
         for format in RealBackend::format_names() {
@@ -217,10 +237,17 @@ pub fn run(
                 driver,
             )
         }
-        Some("list") => cmd_list(out),
+        Some("list") => {
+            // `list` takes no theme: a stray positional is a typo for
+            // `show`/`use`, not a filter, so it is a usage error.
+            if name.is_some() {
+                return fail2(err, "list takes no theme name".to_owned());
+            }
+            cmd_list(out, cli.porcelain)
+        }
         Some("new") => cmd_new(&cli, name.as_deref(), &spec, out, err, tty, driver),
         Some("import") => cmd_import(&cli, name.as_deref(), out, err),
-        Some("use") => cmd_use(&cli, name.as_deref(), &spec, out, err),
+        Some("use") => cmd_use(&cli, name.as_deref(), &spec, out, err, tty),
         Some(_) => cmd_view(
             &cli,
             name.as_deref(),
@@ -308,10 +335,18 @@ pub fn push_spec(cli: &Cli) -> Result<PushSpec, String> {
 /// A push report plus the one line of advice a written config needs.
 fn push_lines(result: &themes::PushResult) -> Vec<String> {
     let mut lines = result.lines.clone();
-    if !result.pushed.is_empty() && result.reloaded.is_empty() {
+    // `needs_reload_advice` knows which terminals live-reload (decision 53:
+    // an alacritty-only push owes no hint) — the callers never re-decide it.
+    if result.needs_reload_advice() {
         lines.push(RELOAD_HINT.to_owned());
     }
     lines
+}
+
+/// A y/n answer: `y`/`yes`, case-insensitive — the same word the theme
+/// overwrite prompt takes, so one yes means yes everywhere.
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// `ghostty, kitty` — the format names a status line names.
@@ -717,8 +752,27 @@ pub fn run_editor(
                 report.borrow_mut().push(NO_PUSH_LINE.to_owned());
                 return Ok(WriteOutcome::status(&format!("saved {theme} (truth only)")));
             }
-            let result = themes::push::<RealBackend>(&slots, &push_options(&spec, Some(theme)))
-                .map_err(|error| error.0)?;
+            let result = {
+                // The TUI asks through its own suspending prompter — the
+                // prompt seam, same as hex and name entry — and only when
+                // stdin is a real tty, so a headless driver never blocks.
+                // Ctrl+A previews report-only: the saver alone offers.
+                let mut ask_insert = crate::app::suspending_prompter();
+                let mut offer = |label: &str| -> bool {
+                    if !std::io::stdin().is_terminal() {
+                        return false;
+                    }
+                    is_yes(ask_insert(label).as_deref().unwrap_or(""))
+                };
+                themes::push_confirm::<RealBackend, themes::SystemReloader>(
+                    &slots,
+                    &push_options(&spec, Some(theme)),
+                    &themes::SystemReloader,
+                    Path::new(themes::PROC_DEFAULT),
+                    Some(&mut offer),
+                )
+                .map_err(|error| error.0)?
+            };
             report.borrow_mut().extend(push_lines(&result));
             if result.failed {
                 *failed.borrow_mut() = true;
@@ -1022,12 +1076,19 @@ fn cmd_import(cli: &Cli, name: Option<&str>, out: &mut dyn Write, err: &mut dyn 
 }
 
 /// `use <name>`: make it current, then push it live.
+///
+/// `tty` gates the insert offer (decision 57): on a terminal a push that
+/// would report missing keys asks once whether to insert them, off one
+/// the report-only behaviour stands — and a non-tty stdin never asks even
+/// when the session is otherwise interactive, so a piped answer can never
+/// hang the command.
 fn cmd_use(
     _cli: &Cli,
     name: Option<&str>,
     spec: &PushSpec,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    tty: bool,
 ) -> i32 {
     if let Some(problem) = name_problem(name, "use") {
         return fail(err, problem);
@@ -1057,9 +1118,31 @@ fn cmd_use(
     for warning in &warnings {
         warn(err, warning);
     }
-    let result = match themes::push::<RealBackend>(&slots, &push_options(spec, Some(name))) {
-        Ok(result) => result,
-        Err(error) => return fail(err, error.0),
+    let result = {
+        // The prompt goes to stderr, where the push report already lives;
+        // stdout stays script-clean. Borrowed by the closure for the call
+        // only, so the report loop below reuses `err` afterwards.
+        let mut ask_insert = |label: &str| -> bool {
+            if !std::io::stdin().is_terminal() {
+                return false;
+            }
+            match crate::app::read_prompt_line(label, &mut std::io::stdin().lock(), &mut *err) {
+                Some(answer) => is_yes(&answer),
+                None => false,
+            }
+        };
+        let confirm: Option<&mut dyn FnMut(&str) -> bool> =
+            if tty { Some(&mut ask_insert) } else { None };
+        match themes::push_confirm::<RealBackend, themes::SystemReloader>(
+            &slots,
+            &push_options(spec, Some(name)),
+            &themes::SystemReloader,
+            Path::new(themes::PROC_DEFAULT),
+            confirm,
+        ) {
+            Ok(result) => result,
+            Err(error) => return fail(err, error.0),
+        }
     };
     for line in push_lines(&result) {
         warn(err, &line);
@@ -1072,10 +1155,21 @@ fn cmd_use(
 }
 
 /// `list`: one line per theme, current marked, source and age shown.
-fn cmd_list(out: &mut dyn Write) -> i32 {
+fn cmd_list(out: &mut dyn Write, porcelain: bool) -> i32 {
     let rows = themes::list_themes();
     if rows.is_empty() {
-        let _ = writeln!(out, "  no themes yet - create one with: huebox new <name>");
+        // Porcelain prints data lines only: no hint, no header.
+        if !porcelain {
+            let _ = writeln!(out, "  no themes yet - create one with: huebox new <name>");
+        }
+        return 0;
+    }
+    // Machine shape (decision 58): `name \t path \t mtime-epoch`, same
+    // order as the human list (`list_themes` sorts by name).
+    if porcelain {
+        for (name, path, mtime) in &rows {
+            let _ = writeln!(out, "{}\t{}\t{}", name, path.display(), *mtime as i64);
+        }
         return 0;
     }
     let current = themes::current();
@@ -1368,6 +1462,130 @@ pub fn format_names() -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_lines_owes_no_hint_to_live_reloaders() {
+        let bare = |fmt: &str| themes::PushResult {
+            lines: Vec::new(),
+            pushed: vec![(fmt.to_owned(), PathBuf::from("/tmp/x"))],
+            failed: false,
+            reloaded: Vec::new(),
+            overrides: None,
+        };
+        // Decision 53: an alacritty-only push is already live — no hint.
+        assert!(push_lines(&bare("alacritty")).is_empty());
+        // Anything else unreloaded still owes it.
+        assert_eq!(push_lines(&bare("ghostty")), vec![RELOAD_HINT.to_owned()]);
+    }
+
+    #[test]
+    fn list_porcelain_prints_name_path_epoch() {
+        use crate::library::testutil::{lock_env, temp_dir};
+        let home = temp_dir("cli-porcelain");
+        let root = home.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        home.write("huebox/themes/ember.toml", "background = \"#101014\"\n");
+        home.write("huebox/themes/dusk.toml", "background = \"#0a0a13\"\n");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec!["huebox".into(), "list".into(), "--porcelain".into()],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+        assert!(err.is_empty());
+        let text = String::from_utf8(out).unwrap();
+        let mut rows = text.lines();
+        // Sorted by name, `name \t path \t mtime-epoch`, no hint line.
+        let first = rows.next().unwrap();
+        let parts: Vec<&str> = first.split('\t').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "dusk");
+        assert!(parts[1].ends_with("huebox/themes/dusk.toml"));
+        assert!(parts[2].parse::<i64>().is_ok());
+        let second = rows.next().unwrap();
+        assert!(second.starts_with("ember\t"));
+        assert!(rows.next().is_none());
+        // Epoch correctness, not just shape: the third field is the
+        // file's own mtime (tolerance covers a second boundary).
+        let ember = home.path().join("huebox/themes/ember.toml");
+        let actual = std::fs::metadata(&ember)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let printed: i64 = second.split('\t').nth(2).unwrap().parse().unwrap();
+        assert!((printed - actual).abs() <= 2);
+    }
+
+    #[test]
+    fn porcelain_outside_list_is_a_usage_error() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec![
+                "huebox".into(),
+                "use".into(),
+                "ember".into(),
+                "--porcelain".into(),
+            ],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 2);
+        assert!(String::from_utf8(err)
+            .unwrap()
+            .contains("--porcelain needs list"));
+    }
+
+    #[test]
+    fn list_porcelain_empty_library_prints_nothing() {
+        use crate::library::testutil::{lock_env, temp_dir};
+        let home = temp_dir("cli-porcelain-empty");
+        let root = home.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec!["huebox".into(), "list".into(), "--porcelain".into()],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+        assert!(out.is_empty());
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn porcelain_with_formats_is_rejected() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec![
+                "huebox".into(),
+                "list".into(),
+                "--formats".into(),
+                "--porcelain".into(),
+            ],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 2);
+        assert!(String::from_utf8(err)
+            .unwrap()
+            .contains("--porcelain cannot be combined with --formats"));
+    }
 
     fn cli(argv: &[&str]) -> Cli {
         let owned: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();

@@ -15,6 +15,9 @@
 //! and `base` modules are private. [`FORMAT_NAMES`] lists the registry in
 //! probe order; [`lookup`] exposes each format's static data (`defaults`
 //! candidate paths, `env` overrides) for huebox-lib's detection pass.
+//! [`insert_missing`] appends one line per absent slot through the same
+//! facade: flat formats grow after the last colour line, TOML under its
+//! `[colors.*]` table.
 //!
 //! # Write contract (001 spec §6.2)
 //!
@@ -69,6 +72,8 @@ pub static FORMATS: &[FormatDef] = &[
         defaults: &[
             "~/.config/ghostty/config.ghostty",
             "~/.config/ghostty/config",
+            "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+            "~/Library/Application Support/com.mitchellh.ghostty/config",
         ],
         env: &[],
         read: ghostty::read_text,
@@ -79,7 +84,11 @@ pub static FORMATS: &[FormatDef] = &[
         // `KITTY_CONFIG_DIRECTORY` is the spelling upstream documents;
         // `KITTY_CONFIG_DIR` is huebox's own, kept as a secondary probe.
         // Order matters — detection probes the slice in order.
-        defaults: &["~/.config/kitty/kitty.conf", "~/.kitty.conf"],
+        defaults: &[
+            "~/.config/kitty/kitty.conf",
+            "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+            "~/.kitty.conf",
+        ],
         env: &[
             ("KITTY_CONFIG_DIRECTORY", "kitty.conf"),
             ("KITTY_CONFIG_DIR", "kitty.conf"),
@@ -97,6 +106,7 @@ pub static FORMATS: &[FormatDef] = &[
             "~/.config/alacritty.toml",
             "~/.config/alacritty/alacritty.yml",
             "~/.alacritty.toml",
+            "/etc/alacritty/alacritty.toml",
         ],
         env: &[],
         read: alacritty::read_text,
@@ -134,6 +144,30 @@ pub fn write(format: &str, text: &str, slots: &Slots) -> String {
     (lookup(format).write)(text, slots)
 }
 
+/// Append one line per slot `text` lacks, in canonical order, and return
+/// the new text — byte-identical when nothing is missing.
+///
+/// Flat formats grow after the last colour line; TOML rows join the end
+/// of the section their `[colors.*]` table opens, or a table created at
+/// end of file when no header names it. Slots the format cannot spell
+/// (kitty carries no cursor text colour) are left out: the push keeps
+/// reporting those, never inventing a key.
+///
+/// Panics on an unknown name, like [`read`] / [`write`].
+pub fn insert_missing(format: &str, text: &str, slots: &Slots) -> String {
+    let present = read(format, text);
+    let missing: Vec<(&str, &str)> = slots
+        .iter()
+        .filter(|(name, _)| !present.contains_key(*name))
+        .collect();
+    match format {
+        "ghostty" => ghostty::insert_text(text, &missing),
+        "kitty" => kitty::insert_text(text, &missing),
+        "alacritty" => alacritty::insert_text(text, &missing),
+        unknown => panic!("huebox-format: unknown format {unknown:?}"),
+    }
+}
+
 /// Compare first, write second (§6.2 rule 4): [`None`] when `new` is
 /// byte-identical to `old` — the caller must not open the file, so a
 /// no-op save leaves the config's mtime alone — otherwise the new text.
@@ -163,4 +197,46 @@ pub fn ghostty_remove_color_lines(text: &str) -> (String, usize) {
 /// never re-implements the rule table.
 pub fn ghostty_is_color_line(line: &str) -> bool {
     ghostty::match_line(line).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lookup, FORMATS, FORMAT_NAMES};
+
+    #[test]
+    fn candidate_tables_match_spec_decisions_47_to_49() {
+        assert_eq!(FORMAT_NAMES, ["ghostty", "kitty", "alacritty"]);
+        assert_eq!(FORMATS.len(), 3);
+        // Decision 47: macOS pair after the XDG pair, one table both platforms.
+        assert_eq!(
+            lookup("ghostty").defaults,
+            [
+                "~/.config/ghostty/config.ghostty",
+                "~/.config/ghostty/config",
+                "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+                "~/Library/Application Support/com.mitchellh.ghostty/config",
+            ]
+        );
+        // Decision 48: literal `$XDG_CONFIG_DIRS` stop (expanded by
+        // detection at runtime, never split here); `~/.kitty.conf` last.
+        assert_eq!(
+            lookup("kitty").defaults,
+            [
+                "~/.config/kitty/kitty.conf",
+                "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+                "~/.kitty.conf",
+            ]
+        );
+        // Decision 49: system default last, read-only via `resolve()`.
+        assert_eq!(
+            lookup("alacritty").defaults,
+            [
+                "~/.config/alacritty/alacritty.toml",
+                "~/.config/alacritty.toml",
+                "~/.config/alacritty/alacritty.yml",
+                "~/.alacritty.toml",
+                "/etc/alacritty/alacritty.toml",
+            ]
+        );
+    }
 }

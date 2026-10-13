@@ -198,9 +198,18 @@ fn formats_lists_the_registry() {
 fn assert_user_error(code: i32, err: &str) {
     assert_eq!(code, 1, "stderr was:\n{err}");
     assert!(err.starts_with("huebox: "), "prefixed:\n{err}");
+    assert!(
+        !err.starts_with("huebox: error: "),
+        "exit 1 is not a usage error:\n{err}"
+    );
     for leaked in ["Traceback", "panicked", "thread '", "backtrace", "Error: "] {
         assert!(!err.contains(leaked), "no traceback ({leaked}):\n{err}");
     }
+}
+
+fn assert_usage_error(code: i32, err: &str) {
+    assert_eq!(code, 2, "stderr was:\n{err}");
+    assert!(err.starts_with("huebox: error: "), "prefixed:\n{err}");
 }
 
 #[test]
@@ -231,6 +240,48 @@ fn bad_theme_is_a_clean_exit_1() {
     let (code, _, err) = env.run(&["huebox", "frobnicate", "extra"], false, None);
     assert_eq!(code, 2, "unknown action is a usage error:\n{err}");
     assert!(err.contains("unknown action"), "{err}");
+}
+
+#[test]
+fn usage_errors_carry_the_huebox_prefix() {
+    let env = Env::setup();
+    // Clap's own rejections (bad value, unknown flag, repeated flag)
+    // keep their body behind the `huebox: error: ` usage prefix.
+    let (code, _, err) = env.run(&["huebox", "--format", "wezterm", "show"], false, None);
+    assert_usage_error(code, &err);
+    assert!(
+        err.contains("possible values: ghostty, kitty, alacritty"),
+        "{err}"
+    );
+
+    let (code, _, err) = env.run(&["huebox", "--bogus"], false, None);
+    assert_usage_error(code, &err);
+
+    let (code, _, err) = env.run(
+        &["huebox", "use", "ember", "--to", "ghostty", "--to", "kitty"],
+        false,
+        None,
+    );
+    assert_usage_error(code, &err);
+
+    // `list` takes no theme: a stray positional is a typo, not a filter.
+    let (code, _, err) = env.run(&["huebox", "list", "ember"], false, None);
+    assert_usage_error(code, &err);
+    assert!(err.contains("list takes no theme name"), "{err}");
+}
+
+#[test]
+fn help_and_version_stay_on_stdout() {
+    let env = Env::setup();
+    let (code, out, err) = env.run(&["huebox", "--help"], false, None);
+    assert_eq!(code, 0);
+    assert!(out.contains("huebox"), "{out}");
+    assert!(err.is_empty(), "{err}");
+
+    let (code, out, err) = env.run(&["huebox", "--version"], false, None);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("huebox "), "{out}");
+    assert!(err.is_empty(), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +352,93 @@ fn piped_editor_reports_the_real_problem() {
     assert_eq!(code, 0);
     assert!(err.contains("not a terminal"), "{err}");
     assert!(err.starts_with("huebox: "), "{err}");
+}
+
+#[test]
+fn use_without_tty_reports_missing_keys_without_inserting() {
+    let env = Env::setup();
+    let (code, _, _) = env.save_and_quit(&["huebox", "new", "ember", "--no-push"]);
+    assert_eq!(code, 0);
+    // A kitty config missing most of the palette: off a tty the push
+    // reports them and writes nothing new.
+    let config = env.root.join("kitty.conf");
+    std::fs::write(
+        &config,
+        "background #101014\nforeground #e6e6ea\ncursor #e6e6ea\n\
+         selection_background #202036\nselection_foreground #ededff\n\
+         color0 #0a0a13\ncolor1 #ff0067\ncolor15 #f8f8ff\n",
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(&config).unwrap();
+    let (code, _, err) = env.run(
+        &[
+            "huebox",
+            "use",
+            "ember",
+            "--format",
+            "kitty",
+            "--config",
+            &config.to_string_lossy(),
+        ],
+        false,
+        None,
+    );
+    assert_eq!(code, 0, "a report is not a failure:\n{err}");
+    assert!(err.contains("not carried by this config"), "{err}");
+    assert!(err.contains("palette-2"), "{err}");
+    assert!(!err.contains("inserted"), "{err}");
+    let after = std::fs::read_to_string(&config).unwrap();
+    assert!(!after.contains("color2"), "no key invented:\n{after}");
+    assert_eq!(
+        after.lines().count(),
+        before.lines().count(),
+        "no line added"
+    );
+}
+
+#[test]
+fn editor_save_pushes_full_config_without_offering() {
+    let env = Env::setup();
+    let (code, _, _) = env.save_and_quit(&["huebox", "new", "ember", "--no-push"]);
+    assert_eq!(code, 0);
+    // A ghostty config carrying all 22 keys: the save pushes, and with
+    // nothing missing no prompt is possible — deterministic headless.
+    let mut conf = String::from("# full\n");
+    for i in 0..16 {
+        conf.push_str(&format!("palette = {i}=#0a0a{i:02x}\n"));
+    }
+    for key in [
+        "background",
+        "foreground",
+        "cursor-color",
+        "cursor-text",
+        "selection-background",
+        "selection-foreground",
+    ] {
+        conf.push_str(&format!("{key} = #0b0b0b\n"));
+    }
+    let config = env.root.join("ghostty");
+    std::fs::write(&config, &conf).unwrap();
+    let (code, out, err) = env.save_and_quit(&[
+        "huebox",
+        "edit",
+        "--format",
+        "ghostty",
+        "--config",
+        &config.to_string_lossy(),
+    ]);
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(out.contains("saved theme ember"), "{out}");
+    assert!(err.contains("pushed to"), "{err}");
+    assert!(!err.contains("not carried"), "{err}");
+    assert!(!err.contains("inserted"), "{err}");
+    // The splice landed (ramp background replaced the fixture's).
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("background = #101014"),
+        "push spliced present keys"
+    );
 }
 
 #[test]

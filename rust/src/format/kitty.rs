@@ -92,6 +92,37 @@ pub(crate) fn read_text(text: &str) -> BTreeMap<String, String> {
     read_flat(text, match_line)
 }
 
+/// The file keyword an inserted slot is spelled with, or `None` when the
+/// format carries no such key: kitty has no cursor text colour (its
+/// reader rejects `cursor_text_color` by word boundary), so that slot
+/// stays reported, never invented — a line here would sit unread and the
+/// next push would offer it again.
+fn insert_key(slot: &str) -> Option<String> {
+    if let Some(index) = slot.strip_prefix("palette-") {
+        return Some(format!("color{index}"));
+    }
+    match slot {
+        "background" | "foreground" => Some(slot.to_owned()),
+        "cursor-color" => Some("cursor".to_owned()),
+        "selection-background" => Some("selection_background".to_owned()),
+        "selection-foreground" => Some("selection_foreground".to_owned()),
+        _ => None,
+    }
+}
+
+/// Append one line per missing slot after the last colour line.
+///
+/// `missing` arrives in canonical order and stays that way, as
+/// `key hex` in kitty's space-separated spelling.
+pub(crate) fn insert_text(text: &str, missing: &[(&str, &str)]) -> String {
+    use crate::format::base::insert_after_last;
+    let new_lines: Vec<String> = missing
+        .iter()
+        .filter_map(|(slot, hex)| insert_key(slot).map(|key| format!("{key} {hex}")))
+        .collect();
+    insert_after_last(text, match_line, &new_lines)
+}
+
 /// Splice `slots` into `text` line by line, or return it untouched.
 /// See [`crate::format::base::write_flat`] for the no-op contract.
 pub(crate) fn write_text(text: &str, slots: &Slots) -> String {

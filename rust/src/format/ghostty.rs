@@ -85,6 +85,22 @@ pub(crate) fn write_text(text: &str, slots: &Slots) -> String {
     write_flat(text, slots, match_line)
 }
 
+/// Append one line per missing slot after the last colour line.
+///
+/// `missing` arrives in canonical order and stays that way: `palette-N`
+/// as `palette = N=hex`, every named slot as `slot = hex`.
+pub(crate) fn insert_text(text: &str, missing: &[(&str, &str)]) -> String {
+    use crate::format::base::insert_after_last;
+    let new_lines: Vec<String> = missing
+        .iter()
+        .map(|(slot, hex)| match slot.strip_prefix("palette-") {
+            Some(index) => format!("palette = {index}={hex}"),
+            None => format!("{slot} = {hex}"),
+        })
+        .collect();
+    insert_after_last(text, match_line, &new_lines)
+}
+
 /// Drop every line [`match_line`] matches; returns the kept text and how
 /// many lines went.
 ///

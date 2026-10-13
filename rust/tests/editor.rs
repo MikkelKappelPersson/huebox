@@ -155,12 +155,14 @@ fn another_key_disarms() {
 
 #[test]
 fn a_clean_esc_quits_at_once() {
-    let writes: Writes = Rc::new(RefCell::new(Vec::new()));
-    let mut st = recording_state(full_slots(), &writes);
-    apply_key("esc", &mut st);
-    assert!(st.quit);
-    assert!(!st.armed);
-    assert_eq!(st.status, "");
+    for closer in ["esc", "escape"] {
+        let writes: Writes = Rc::new(RefCell::new(Vec::new()));
+        let mut st = recording_state(full_slots(), &writes);
+        apply_key(closer, &mut st);
+        assert!(st.quit, "closer {closer}");
+        assert!(!st.armed, "closer {closer}");
+        assert_eq!(st.status, "");
+    }
 }
 
 #[test]
@@ -535,6 +537,20 @@ fn keep_leaves_the_file_and_says_shadowed() {
     assert!(st.overrides.is_none());
     assert!(st.status.contains("kept 1"));
     assert!(st.status.contains("shadowed"));
+}
+
+#[test]
+fn unbound_key_clears_status_but_keeps_the_warning() {
+    let (mut st, _) = overrides_state();
+    dirty_and_adjust(&mut st);
+    apply_key(SAVE, &mut st);
+    assert!(st.overrides.is_some());
+    st.status = "stale line".to_owned();
+    let index = st.overrides_index;
+    apply_key("z", &mut st); // unbound behind the warning
+    assert!(st.status.is_empty());
+    assert!(st.overrides.is_some());
+    assert_eq!(st.overrides_index, index);
 }
 
 #[test]
@@ -984,7 +1000,9 @@ fn the_picker_swallows_the_rest_of_the_key_surface() {
     );
     let before = fx.st.slots.clone();
     apply_key("t", &mut fx.st);
-    for key in ["e", "d", "c", "u", "r", "f", SAVE, "h", "N"] {
+    // `n` / `N` are the picker's own creation keys, tested below; the
+    // rest of the surface never reaches the buffer behind the list.
+    for key in ["e", "d", "c", "u", "r", "f", SAVE, "h"] {
         apply_key(key, &mut fx.st);
     }
     assert_eq!(fx.st.slots, before);
@@ -993,6 +1011,116 @@ fn the_picker_swallows_the_rest_of_the_key_surface() {
     assert_eq!(fx.st.status, "");
     assert!(!fx.st.quit);
     assert_eq!(fx.st.overlay_index, 1); // only arrows moved it
+}
+
+#[test]
+fn capital_n_in_the_picker_creates_saves_and_stays_open() {
+    let mut fx = picker_state(
+        vec!["ash", "ember", "frost"],
+        Some("ember"),
+        vec![Some("dusk")],
+        "",
+        vec![],
+    );
+    apply_key("w", &mut fx.st); // dirty: creation is fine
+    let buffer = fx.st.slots.clone();
+    apply_key("t", &mut fx.st);
+    apply_key("N", &mut fx.st);
+    let calls = fx.library.calls.borrow();
+    assert!(calls[0].starts_with("create dusk force=false"), "{calls:?}");
+    // ... and then through the ordinary save pipeline, push included,
+    // with the picker still up on the new row.
+    assert_eq!(written_slots(&fx).len(), 1);
+    assert_eq!(written_slots(&fx)[0], buffer);
+    assert_eq!(written_slots(&fx)[0], fx.st.slots);
+    assert_eq!(fx.st.status, "saved dusk → ghostty");
+    assert!(fx.st.written);
+    assert!(!fx.st.dirty());
+    assert_eq!(fx.st.theme, Some("dusk".to_owned()));
+    assert_eq!(fx.st.path, "/themes/dusk.toml");
+    assert_eq!(fx.st.created, Some("dusk".to_owned()));
+    assert_eq!(fx.st.overlay.as_ref().unwrap().last().unwrap(), "dusk");
+    assert_eq!(
+        fx.st.overlay_index,
+        fx.st.overlay.as_ref().unwrap().len() - 1
+    );
+    assert_eq!(*fx.labels.borrow(), vec!["  new theme name: ".to_owned()]);
+}
+
+#[test]
+fn capital_n_in_the_picker_cancelled_writes_nothing() {
+    let mut fx = picker_state(
+        vec!["ash", "ember", "frost"],
+        Some("ember"),
+        vec![None],
+        "",
+        vec![],
+    );
+    apply_key("w", &mut fx.st);
+    apply_key("t", &mut fx.st);
+    apply_key("N", &mut fx.st);
+    assert!(fx.library.calls.borrow().is_empty());
+    assert!(fx.writes.borrow().is_empty());
+    assert!(fx.st.dirty()); // the buffer is untouched
+    assert_eq!(fx.st.status, "cancelled - no theme created");
+    assert_eq!(fx.st.theme, Some("ember".to_owned()));
+    assert!(fx.st.overlay.is_some()); // the picker stays up
+}
+
+#[test]
+fn capital_n_in_the_picker_confirms_a_taken_name_in_words() {
+    let mut fx = picker_state(
+        vec!["ash", "ember", "frost"],
+        Some("ember"),
+        vec![Some("frost"), Some("y")],
+        "",
+        vec![],
+    );
+    apply_key("t", &mut fx.st);
+    apply_key("N", &mut fx.st);
+    assert!(
+        fx.library.calls.borrow()[0].contains("force=true"),
+        "{:?}",
+        fx.library.calls.borrow()
+    );
+    assert!(fx.labels.borrow()[1].contains("frost exists"));
+    assert_eq!(fx.st.status, "saved frost → ghostty");
+    assert!(fx.st.overlay.is_some());
+}
+
+#[test]
+fn enter_on_an_empty_picker_writes_nothing_and_never_panics() {
+    let mut fx = picker_state(vec!["ash"], Some("ember"), vec![], "", vec![]);
+    fx.st.overlay = Some(vec![]); // nothing listed: no row to open
+    for key in ["\r", "\n", "enter"] {
+        apply_key(key, &mut fx.st);
+        assert!(fx.writes.borrow().is_empty(), "key {key:?}");
+        assert!(fx.library.calls.borrow().is_empty(), "key {key:?}");
+        assert_eq!(
+            fx.st.status, "no themes yet - N makes one from this buffer",
+            "key {key:?}"
+        );
+        assert!(fx.st.overlay.is_some(), "key {key:?}");
+    }
+}
+
+#[test]
+fn the_headless_escape_closes_the_picker_like_esc() {
+    for closer in ["esc", "escape"] {
+        let mut fx = picker_state(
+            vec!["ash", "ember", "frost"],
+            Some("ember"),
+            vec![],
+            "",
+            vec![],
+        );
+        apply_key("w", &mut fx.st); // dirty: closing must not quit
+        apply_key("t", &mut fx.st);
+        apply_key(closer, &mut fx.st);
+        assert!(fx.st.overlay.is_none(), "closer {closer}");
+        assert!(!fx.st.quit, "closer {closer}");
+        assert_eq!(fx.st.theme, Some("ember".to_owned()));
+    }
 }
 
 #[test]
@@ -1310,11 +1438,13 @@ fn enter_on_import_asks_the_shell_for_the_popup() {
 
 #[test]
 fn i_imports_from_either_row() {
-    let mut fx = setup_state(vec![], "");
-    apply_key("down", &mut fx.st);
-    apply_key("i", &mut fx.st);
-    assert!(fx.st.setup.is_none());
-    assert!(fx.st.import_pending);
+    for key in ["i", "I"] {
+        let mut fx = setup_state(vec![], "");
+        apply_key("down", &mut fx.st);
+        apply_key(key, &mut fx.st);
+        assert!(fx.st.setup.is_none(), "key {key:?}");
+        assert!(fx.st.import_pending, "key {key:?}");
+    }
 }
 
 #[test]
@@ -1422,7 +1552,7 @@ fn a_setup_refusal_comes_back_as_a_status_not_an_exception() {
 
 #[test]
 fn esc_quits_instead_of_revealing_an_empty_editor() {
-    for closer in ["esc", "Q", "\x03"] {
+    for closer in ["esc", "escape", "Q", "\x03"] {
         let mut fx = setup_state(vec![], "");
         apply_key(closer, &mut fx.st);
         assert!(fx.st.quit, "closer {closer}");

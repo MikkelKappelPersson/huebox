@@ -245,6 +245,10 @@ fn open_selected(st: &mut EditorState) {
     let Some(overlay) = &st.overlay else {
         return;
     };
+    if overlay.is_empty() {
+        st.status = "no themes yet - N makes one from this buffer".to_owned();
+        return;
+    }
     let name = overlay[st.overlay_index.min(overlay.len().saturating_sub(1))].clone();
     let loaded = st.library.as_ref().and_then(|library| library.load(&name));
     let Some((slots, path)) = loaded else {
@@ -273,6 +277,29 @@ fn picker_new(st: &mut EditorState) {
     st.status = format!("created {name} - current now");
 }
 
+/// `N` in the picker: the buffer becomes a new theme, and then it is saved.
+///
+/// The picker's half of [`save_as_new`]: one prompt, `create` + adopt,
+/// then the ordinary save pipeline, so a theme made here is pushed
+/// exactly like one saved all session. The picker stays open on the new
+/// row, like [`picker_new`] — choosing among themes is still the list's
+/// job, and a dirty buffer is fine, because the buffer is what gets
+/// written. A save behind the open picker cannot arm the overrides
+/// warning (popups never stack), so the save's own status line is all
+/// the warning there is.
+fn picker_save_new(st: &mut EditorState) {
+    let Some((name, path)) = create_theme(st, NEW_THEME_LABEL) else {
+        return;
+    };
+    let slots = st.slots.clone();
+    adopt(st, &name, &slots, &path);
+    st.created = Some(name.clone());
+    save_state(st);
+    let status = st.status.clone();
+    open_overlay(st); // re-read the library, land on the new row
+    st.status = status;
+}
+
 /// Keys while the picker is up: it owns the surface.
 ///
 /// Nothing else can fire — no colour changes, no save, no quit — so a key
@@ -290,6 +317,8 @@ fn overlay_key(key: &str, st: &mut EditorState) {
         open_selected(st);
     } else if key == "n" {
         picker_new(st);
+    } else if key == "N" {
+        picker_save_new(st);
     } else if key == "t" || QUIT_KEYS.contains(&key) {
         st.overlay = None;
     }
@@ -508,6 +537,10 @@ fn overrides_key(key: &str, st: &mut EditorState) {
         overrides_delete(st);
     } else if ["n", "N", "esc", "escape", "Q", "\x03", "t"].contains(&key) {
         overrides_keep(st);
+    } else {
+        // Anything unbound clears the status like every other overlay
+        // (decision 60) — the warning stays open, the line resets.
+        st.status.clear();
     }
 }
 
@@ -638,7 +671,7 @@ fn setup_key(key: &str, st: &mut EditorState) {
         st.setup = Some((st.setup.unwrap_or(0) + 1).min(SETUP_CHOICES.len() - 1));
     } else if ENTER_KEYS.contains(&key) {
         setup_confirm(st);
-    } else if key == "i" {
+    } else if key == "i" || key == "I" {
         st.setup = Some(0);
         setup_confirm(st);
     } else if key == "n" || key == "N" {
