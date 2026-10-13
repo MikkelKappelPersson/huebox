@@ -1128,14 +1128,21 @@ pub fn infer_format<F: FormatStub>(path: &Path) -> Option<String> {
 /// the file exists, else absolutize-then-normalize lexically, so neither
 /// `..` segments, symlinks nor relative spellings can dodge the comparison
 /// (decision 54 — the comparison, never the path, is derived).
+/// Both spellings count: a path reached through `/etc` is system even
+/// when its target lives elsewhere (`/etc/resolv.conf` → `/run/...`), so
+/// the filter is closed under symlinks in either direction.
 fn is_system_path(path: &Path) -> bool {
-    canonicalized(path).starts_with("/etc")
+    canonicalized(path).starts_with("/etc") || absolute_lexical(path).starts_with("/etc")
 }
 
 fn canonicalized(path: &Path) -> PathBuf {
     if let Ok(hit) = std::fs::canonicalize(path) {
         return hit;
     }
+    absolute_lexical(path)
+}
+
+fn absolute_lexical(path: &Path) -> PathBuf {
     lexical_normalize(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
@@ -2385,6 +2392,28 @@ mod tests {
         std::os::unix::fs::symlink("/etc", &link).unwrap();
         // Lexically `/tmp/...`, canonically `/etc`: the check sees `/etc`.
         assert!(is_system_path(&link.join(".")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_path_counts_lexical_etc() {
+        let _guard = lock_env(&[]);
+        // A path reached through `/etc` is system even when its target
+        // lives elsewhere (`/etc/resolv.conf` → `/run/...` on systemd
+        // machines): push refuses the spelling, not just the target.
+        let escaped = ["/etc/resolv.conf", "/etc/mtab"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|path| {
+                path.is_symlink()
+                    && std::fs::canonicalize(path)
+                        .map(|target| !target.starts_with("/etc"))
+                        .unwrap_or(false)
+            });
+        let Some(escaped) = escaped else {
+            return;
+        };
+        assert!(is_system_path(&escaped));
     }
 
     #[test]
