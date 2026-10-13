@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+# vendor/ and .cargo/config.toml come from the cargo_vendor OBS service
+# (build workers have no network); see ../_service.
+export CARGO_NET_OFFLINE = true
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --offline --manifest-path rust/Cargo.toml
+
+override_dh_auto_install:
+	install -Dm755 rust/target/release/huebox debian/huebox/usr/bin/huebox
+
+override_dh_auto_test:
+	:

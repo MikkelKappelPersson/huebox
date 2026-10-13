@@ -1,0 +1,15 @@
+Source: huebox
+Section: utils
+Priority: optional
+Maintainer: Mikkel Kappel Persson <mikkel@kappelpersson.dk>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: huebox
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Terminal theme editor with live preview
+ huebox shows the colours your terminal is actually using and lets you
+ change them from a keyboard-driven interface — no hex codes,
+ no hand-editing, no restarting.

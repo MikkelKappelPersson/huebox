@@ -8,8 +8,8 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-666666?labelColor=333333" alt="MIT license" /></a>
-  <a href="https://github.com/MikkelKappelPersson/huebox/releases/latest"><img src="https://img.shields.io/github/v/release/MikkelKappelPersson/huebox?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
   <a href="https://github.com/MikkelKappelPersson/huebox/stargazers"><img src="https://img.shields.io/github/stars/MikkelKappelPersson/huebox?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
+  <a href="https://github.com/MikkelKappelPersson/huebox/releases/latest"><img src="https://img.shields.io/github/v/release/MikkelKappelPersson/huebox?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
   <a href="https://crates.io/crates/huebox"><img src="https://img.shields.io/crates/v/huebox?label=crates&labelColor=333333&color=666666" alt="crates.io version" /></a>
   <a href="https://pypi.org/p/huebox"><img src="https://img.shields.io/pypi/v/huebox?label=pypi&labelColor=333333&color=666666" alt="PyPI version" /></a>
   <a href="https://aur.archlinux.org/packages/huebox"><img src="https://img.shields.io/aur/version/huebox?label=aur&labelColor=333333&color=666666" alt="AUR version" /></a>
@@ -25,7 +25,7 @@
 curl -fsSL https://mikkelkappelpersson.github.io/huebox/install.sh | sh
 ```
 
-or `yay -S huebox` · `brew install mikkelkappelpersson/huebox/huebox` · `uv tool install huebox` · `cargo binstall huebox` · [binaries](https://github.com/MikkelKappelPersson/huebox/releases)
+or `yay -S huebox` · `brew install mikkelkappelpersson/huebox/huebox` · `uv tool install huebox` · `cargo binstall huebox` · `mise use -g cargo:huebox` · `nix run github:MikkelKappelPersson/huebox` · [binaries](https://github.com/MikkelKappelPersson/huebox/releases)
 
 then edit what you are working on:
 

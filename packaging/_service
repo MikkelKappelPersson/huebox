@@ -1,0 +1,21 @@
+<services>
+  <!-- Checkout the release tag, vendor cargo deps (build workers have no
+       network), then pack. Service-generated tarball names must match
+       Source0/Source1 in huebox.spec - verify on the first OBS build. -->
+  <service name="obs_scm">
+    <param name="url">https://github.com/MikkelKappelPersson/huebox.git</param>
+    <param name="scm">git</param>
+    <param name="revision">v0.5.1</param>
+    <param name="versionformat">@PARENT_TAG@</param>
+    <param name="changesgenerate">enable</param>
+  </service>
+  <service name="cargo_vendor">
+    <param name="srcdir">huebox</param>
+  </service>
+  <service name="tar" />
+  <service name="recompress">
+    <param name="file">*.tar</param>
+    <param name="compression">gz</param>
+  </service>
+  <service name="set_version" />
+</services>
