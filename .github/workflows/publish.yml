@@ -46,7 +46,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
           grep -q "^version = \"$TAG\"$" rust/Cargo.toml || { echo "::error::rust/Cargo.toml version does not match tag v$TAG"; exit 1; }
-          echo "tag v$TAG matches rust/Cargo.toml"
+          grep -q "version = \"$TAG\";" flake.nix || { echo "::error::flake.nix version does not match tag v$TAG"; exit 1; }
+          echo "tag v$TAG matches rust/Cargo.toml and flake.nix"
 
       - name: Run tests
         run: cargo test --workspace --manifest-path rust/Cargo.toml
