@@ -156,7 +156,35 @@ fn registry_shape() {
             .defaults,
         [
             "~/.config/ghostty/config.ghostty",
-            "~/.config/ghostty/config"
+            "~/.config/ghostty/config",
+            "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+            "~/Library/Application Support/com.mitchellh.ghostty/config"
+        ]
+    );
+    assert_eq!(
+        FORMATS
+            .iter()
+            .find(|def| def.name == "kitty")
+            .unwrap()
+            .defaults,
+        [
+            "~/.config/kitty/kitty.conf",
+            "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+            "~/.kitty.conf",
+        ]
+    );
+    assert_eq!(
+        FORMATS
+            .iter()
+            .find(|def| def.name == "alacritty")
+            .unwrap()
+            .defaults,
+        [
+            "~/.config/alacritty/alacritty.toml",
+            "~/.config/alacritty.toml",
+            "~/.config/alacritty/alacritty.yml",
+            "~/.alacritty.toml",
+            "/etc/alacritty/alacritty.toml",
         ]
     );
 }

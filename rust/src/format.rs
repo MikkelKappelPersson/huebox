@@ -69,6 +69,8 @@ pub static FORMATS: &[FormatDef] = &[
         defaults: &[
             "~/.config/ghostty/config.ghostty",
             "~/.config/ghostty/config",
+            "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+            "~/Library/Application Support/com.mitchellh.ghostty/config",
         ],
         env: &[],
         read: ghostty::read_text,
@@ -79,7 +81,11 @@ pub static FORMATS: &[FormatDef] = &[
         // `KITTY_CONFIG_DIRECTORY` is the spelling upstream documents;
         // `KITTY_CONFIG_DIR` is huebox's own, kept as a secondary probe.
         // Order matters — detection probes the slice in order.
-        defaults: &["~/.config/kitty/kitty.conf", "~/.kitty.conf"],
+        defaults: &[
+            "~/.config/kitty/kitty.conf",
+            "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+            "~/.kitty.conf",
+        ],
         env: &[
             ("KITTY_CONFIG_DIRECTORY", "kitty.conf"),
             ("KITTY_CONFIG_DIR", "kitty.conf"),
@@ -97,6 +103,7 @@ pub static FORMATS: &[FormatDef] = &[
             "~/.config/alacritty.toml",
             "~/.config/alacritty/alacritty.yml",
             "~/.alacritty.toml",
+            "/etc/alacritty/alacritty.toml",
         ],
         env: &[],
         read: alacritty::read_text,
@@ -163,4 +170,46 @@ pub fn ghostty_remove_color_lines(text: &str) -> (String, usize) {
 /// never re-implements the rule table.
 pub fn ghostty_is_color_line(line: &str) -> bool {
     ghostty::match_line(line).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lookup, FORMATS, FORMAT_NAMES};
+
+    #[test]
+    fn candidate_tables_match_spec_decisions_47_to_49() {
+        assert_eq!(FORMAT_NAMES, ["ghostty", "kitty", "alacritty"]);
+        assert_eq!(FORMATS.len(), 3);
+        // Decision 47: macOS pair after the XDG pair, one table both platforms.
+        assert_eq!(
+            lookup("ghostty").defaults,
+            [
+                "~/.config/ghostty/config.ghostty",
+                "~/.config/ghostty/config",
+                "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+                "~/Library/Application Support/com.mitchellh.ghostty/config",
+            ]
+        );
+        // Decision 48: literal `$XDG_CONFIG_DIRS` stop (expanded by
+        // detection at runtime, never split here); `~/.kitty.conf` last.
+        assert_eq!(
+            lookup("kitty").defaults,
+            [
+                "~/.config/kitty/kitty.conf",
+                "$XDG_CONFIG_DIRS/kitty/kitty.conf",
+                "~/.kitty.conf",
+            ]
+        );
+        // Decision 49: system default last, read-only via `resolve()`.
+        assert_eq!(
+            lookup("alacritty").defaults,
+            [
+                "~/.config/alacritty/alacritty.toml",
+                "~/.config/alacritty.toml",
+                "~/.config/alacritty/alacritty.yml",
+                "~/.alacritty.toml",
+                "/etc/alacritty/alacritty.toml",
+            ]
+        );
+    }
 }
