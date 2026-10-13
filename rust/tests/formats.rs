@@ -109,6 +109,91 @@ fn fixture(format: &str) -> &'static str {
     }
 }
 
+/// One distinct hex per slot index: a wrong mapping cannot hide behind a
+/// shared value.
+fn distinct_hex(i: usize) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        i * 11 % 256,
+        i * 37 % 256,
+        i * 53 % 256
+    )
+}
+
+const ALL_NAMED: [(&str, &str); 6] = [
+    ("background", "background"),
+    ("foreground", "foreground"),
+    ("cursor-color", "cursor-color"),
+    ("cursor-text", "cursor-text"),
+    ("selection-background", "selection-background"),
+    ("selection-foreground", "selection-foreground"),
+];
+
+/// A config holding every slot the format carries, in canonical order.
+fn full_text(format: &str) -> (String, Vec<(String, String)>) {
+    let mut want: Vec<(String, String)> = (0..16)
+        .map(|i| (format!("palette-{i}"), distinct_hex(i)))
+        .collect();
+    for (slot, _) in ALL_NAMED {
+        if format == "kitty" && slot == "cursor-text" {
+            continue; // kitty's `cursor` is cursor-color only
+        }
+        want.push((slot.to_owned(), distinct_hex(want.len())));
+    }
+    let mut text = String::from("# full-slot fixture\n");
+    match format {
+        "ghostty" => {
+            for (slot, hex) in &want {
+                if let Some(index) = slot.strip_prefix("palette-") {
+                    text.push_str(&format!("palette = {index}={hex}\n"));
+                } else {
+                    text.push_str(&format!("{slot} = {hex}\n"));
+                }
+            }
+        }
+        "kitty" => {
+            for (slot, hex) in &want {
+                if let Some(index) = slot.strip_prefix("palette-") {
+                    text.push_str(&format!("color{index} {hex}\n"));
+                } else {
+                    let key = match slot.as_str() {
+                        "cursor-color" => "cursor",
+                        "selection-background" => "selection_background",
+                        "selection-foreground" => "selection_foreground",
+                        key => key,
+                    };
+                    text.push_str(&format!("{key} {hex}\n"));
+                }
+            }
+        }
+        "alacritty" => {
+            text.push_str("[colors.primary]\n");
+            for slot in ["background", "foreground"] {
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{slot} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.cursor]\n");
+            for (key, slot) in [("text", "cursor-text"), ("cursor", "cursor-color")] {
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{key} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.selection]\n");
+            for slot in ["selection-background", "selection-foreground"] {
+                let key = slot.strip_prefix("selection-").unwrap();
+                let hex = &want.iter().find(|(s, _)| s == slot).unwrap().1;
+                text.push_str(&format!("{key} = \"{hex}\"\n"));
+            }
+            text.push_str("[colors.normal]\n");
+            for i in 0..16 {
+                let hex = &want[i].1;
+                text.push_str(&format!("\"{i}\" = \"{hex}\"\n"));
+            }
+        }
+        _ => panic!("unknown fixture format {format:?}"),
+    }
+    (text, want)
+}
+
 /// `Slots` holding exactly the pairs `read` found (blank themes start
 /// grey; tests set what the config carried).
 fn slots_of(pairs: &BTreeMap<String, String>) -> Slots {
@@ -199,6 +284,33 @@ fn reads_every_expected_slot() {
             .filter(|name| !slots.contains_key(**name))
             .collect();
         assert!(missing.is_empty(), "{format} did not read {missing:?}");
+    }
+}
+
+#[test]
+fn reads_every_slot_the_format_carries() {
+    // §10: reading every slot, per format — all 16 palette slots plus
+    // every named slot the dialect maps (kitty has no cursor-text).
+    for format in FORMAT_NAMES {
+        let (text, want) = full_text(format);
+        let found = read(format, &text);
+        assert_eq!(found.len(), want.len(), "{format} slot count");
+        for (slot, hex) in &want {
+            assert_eq!(found.get(slot), Some(hex), "{format} {slot}");
+        }
+        // …and the full read writes back byte-identical.
+        let out = write(format, &text, &slots_of(&found));
+        assert_eq!(out, text, "{format} full no-op changed the bytes");
+        assert_eq!(apply_write(&text, &out), None, "{format} full no-op");
+        // …and a full round-trip survives a second read.
+        let mut moved = slots_of(&found);
+        moved.set(&want[0].0, "#010203");
+        let out = write(format, &text, &moved);
+        assert_eq!(
+            read(format, &out).get(&want[0].0),
+            Some(&"#010203".to_string()),
+            "{format} round-trip"
+        );
     }
 }
 
