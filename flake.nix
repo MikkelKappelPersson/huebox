@@ -13,7 +13,7 @@
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "huebox";
           # keep in step with rust/Cargo.toml (release tags enforce tag == version)
-          version = "0.5.1";
+          version = "0.5.2";
           src = ./rust;
           cargoLock.lockFile = ./rust/Cargo.lock;
 

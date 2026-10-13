@@ -1,6 +1,6 @@
 [package]
 name = "huebox"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Terminal theme editor with live preview"
 license = "MIT"
