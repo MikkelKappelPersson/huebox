@@ -20,7 +20,7 @@ Shields callers from subsystem complexity; lets internals evolve without breakin
 - `format::lookup` / `read` / `write` is the facade for terminal formats — the push reuses it, never invents a key
 - The provider seam in `library` is the facade for provider themes — the import popup lists and reads through it, never a directory walk of its own
 - `library::themes::{save, push}` is the facade for writing theme files and pushing to terminals; `create` is the facade for new library files — the import confirm writes through it, never a file of its own. `ghostty_overrides` / `clear_ghostty_overrides` is the facade for Ghostty's inline shadows — callers never match colour lines themselves, and `push` reports them as `PushResult.overrides
-- `library::detect::resolve()` is the facade for finding the push target — the push resolves its target through the same `resolve()` the CLI does
+- `library::detect::resolve()` is the facade for finding the push target — the CLI and preview resolve through `resolve()`, the push through `resolve_for_push()` (same triple, `/etc` excluded)
 - `app` / `cli` never reach into format internals or config parsing directly — use the facades
 
 ### 3. Dependency Injection

@@ -284,7 +284,9 @@ load time, which is why both spellings appear above
 The `/etc/...` and `$XDG_CONFIG_DIRS` stops are upstream's system defaults:
 probed last for reading, never a push target — huebox does not write
 root-owned files, and the filter lives in `resolve()` so every push caller
-is covered (decision 54). Ghostty's `~/Library/Application Support/...` stops are
+is covered (decision 54). An unset or empty `$XDG_CONFIG_DIRS` falls back to
+`/etc/xdg` per the basedir spec, so `/etc/xdg/kitty/kitty.conf` probes at that
+slot — still read-only under the same filter. Ghostty's `~/Library/Application Support/...` stops are
 macOS-only and probed after the XDG pair, which is upstream's order; those
 files cannot exist on Linux, so one table serves both platforms.
 
