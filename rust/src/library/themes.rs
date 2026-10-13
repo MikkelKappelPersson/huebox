@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::library::detect::{
     config_holds_colours, ensure_theme_pointer, ghostty_main_config, ghostty_theme_name,
-    ghostty_themes_dir, resolve,
+    ghostty_themes_dir, resolve_for_push,
 };
 use crate::library::format::{unknown_format, FormatStub};
 use crate::library::{is_hex, normalize_hex, SlotMap, ThemeError, MISSING, SLOTS};
@@ -1162,10 +1162,9 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
     let mut overrides = None;
 
     for wanted in &names {
-        // TODO(decision-54): switch to detect::resolve_for_push (same triple,
-        // /etc candidates skipped, explicit --config under /etc refused) once
-        // the detect worker lands it; do not add a second filter here.
-        let (found, target, error) = resolve::<F>(wanted.as_deref(), explicit.as_deref());
+        // Push-mode resolution (decision 54): /etc candidates are skipped and
+        // an explicit --config under /etc is refused by resolve_for_push itself.
+        let (found, target, error) = resolve_for_push::<F>(wanted.as_deref(), explicit.as_deref());
         let label = wanted.clone().unwrap_or_else(|| "terminal".to_owned());
         // The config holding the `theme =` line, asked before the colours:
         // a dangling pointer is a target even though nothing resolves.
