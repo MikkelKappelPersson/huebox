@@ -1,0 +1,11 @@
+{
+  "agentScope": "both",
+  "includeBundledAgents": false,
+  "keepOpen": true,
+  "stayOpen": true,
+  "fieldnotes": true,
+  "emojiSheep": true,
+  "timeout": 60,
+  "staleWaitThreshold": 30,
+  "projectScope": true
+}
