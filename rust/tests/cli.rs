@@ -355,6 +355,93 @@ fn piped_editor_reports_the_real_problem() {
 }
 
 #[test]
+fn use_without_tty_reports_missing_keys_without_inserting() {
+    let env = Env::setup();
+    let (code, _, _) = env.save_and_quit(&["huebox", "new", "ember", "--no-push"]);
+    assert_eq!(code, 0);
+    // A kitty config missing most of the palette: off a tty the push
+    // reports them and writes nothing new.
+    let config = env.root.join("kitty.conf");
+    std::fs::write(
+        &config,
+        "background #101014\nforeground #e6e6ea\ncursor #e6e6ea\n\
+         selection_background #202036\nselection_foreground #ededff\n\
+         color0 #0a0a13\ncolor1 #ff0067\ncolor15 #f8f8ff\n",
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(&config).unwrap();
+    let (code, _, err) = env.run(
+        &[
+            "huebox",
+            "use",
+            "ember",
+            "--format",
+            "kitty",
+            "--config",
+            &config.to_string_lossy(),
+        ],
+        false,
+        None,
+    );
+    assert_eq!(code, 0, "a report is not a failure:\n{err}");
+    assert!(err.contains("not carried by this config"), "{err}");
+    assert!(err.contains("palette-2"), "{err}");
+    assert!(!err.contains("inserted"), "{err}");
+    let after = std::fs::read_to_string(&config).unwrap();
+    assert!(!after.contains("color2"), "no key invented:\n{after}");
+    assert_eq!(
+        after.lines().count(),
+        before.lines().count(),
+        "no line added"
+    );
+}
+
+#[test]
+fn editor_save_pushes_full_config_without_offering() {
+    let env = Env::setup();
+    let (code, _, _) = env.save_and_quit(&["huebox", "new", "ember", "--no-push"]);
+    assert_eq!(code, 0);
+    // A ghostty config carrying all 22 keys: the save pushes, and with
+    // nothing missing no prompt is possible — deterministic headless.
+    let mut conf = String::from("# full\n");
+    for i in 0..16 {
+        conf.push_str(&format!("palette = {i}=#0a0a{i:02x}\n"));
+    }
+    for key in [
+        "background",
+        "foreground",
+        "cursor-color",
+        "cursor-text",
+        "selection-background",
+        "selection-foreground",
+    ] {
+        conf.push_str(&format!("{key} = #0b0b0b\n"));
+    }
+    let config = env.root.join("ghostty");
+    std::fs::write(&config, &conf).unwrap();
+    let (code, out, err) = env.save_and_quit(&[
+        "huebox",
+        "edit",
+        "--format",
+        "ghostty",
+        "--config",
+        &config.to_string_lossy(),
+    ]);
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(out.contains("saved theme ember"), "{out}");
+    assert!(err.contains("pushed to"), "{err}");
+    assert!(!err.contains("not carried"), "{err}");
+    assert!(!err.contains("inserted"), "{err}");
+    // The splice landed (ramp background replaced the fixture's).
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("background = #101014"),
+        "push spliced present keys"
+    );
+}
+
+#[test]
 fn import_writer_lands_truth_only() {
     let _env = Env::setup();
     let mut writer = huebox::cli::import_writer();

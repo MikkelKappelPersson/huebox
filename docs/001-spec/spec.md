@@ -997,8 +997,14 @@ plus exit 1, never a rolled-back truth.
 - A terminal whose config holds no colours is never a push target (same rule
   as detection), reported on stderr.
 - Keys absent from the target config are updated-if-present; missing keys are
-  reported as "not carried by this config". Push never inserts keys — that
-  would break the line-level contract (open question 1).
+  reported as "not carried by this config", and the saver offers once to
+  insert them (decision 57): TUI y/n prompt, CLI only on a tty, else
+  report-only. A yes appends one line per missing key in slot order — flat
+  formats after the last colour line, TOML under the existing `[colors.*]`
+  table (created at end of file if absent) — and the report names the added
+  lines; a no keeps report-only. The Ghostty native-export path never asks
+  (a file of ours, all 22 keys by construction), and system paths never
+  reach an insert (decision 54 refuses them first).
 - The **in-place write** pushes through the resolved path — inline config,
   include, or a Ghostty `theme =` file — splicing the 22 slots with that
   format's own line-level writer.

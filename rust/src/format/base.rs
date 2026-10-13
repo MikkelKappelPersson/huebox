@@ -181,6 +181,35 @@ pub(crate) fn write_flat(text: &str, slots: &Slots, matcher: Matcher) -> String 
     out
 }
 
+/// Append `new_lines` after the last line `matcher` matches — or at the
+/// end of the file when no line matches — joining with `\n` plus one
+/// trailing newline, exactly as a changed [`write_flat`] write does.
+///
+/// The insert half of the line-level contract: every other byte is
+/// untouched, so callers compare first and write second as usual. Empty
+/// input means no lines at all, so the insert is the whole file.
+pub(crate) fn insert_after_last(text: &str, matcher: Matcher, new_lines: &[String]) -> String {
+    if new_lines.is_empty() {
+        return text.to_owned();
+    }
+    if text.is_empty() {
+        return new_lines.join("\n") + "\n";
+    }
+    let mut lines: Vec<String> = split_lines(text)
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    let at = lines
+        .iter()
+        .rposition(|line| matcher(line).is_some())
+        .map(|index| index + 1)
+        .unwrap_or(lines.len());
+    lines.splice(at..at, new_lines.iter().cloned());
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     //! Byte-parity pins for the two hex helpers: the `is_hex` (12) and
