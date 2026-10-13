@@ -428,7 +428,8 @@ config path is ambiguous between formats?
   (§10, I2). The code sample and the live diff are the two blocks whose
   text can be selected (§4.3.2), and a selection is painted in the theme's own
   `selection-background` / `selection-foreground` — the same pair the picker
-  marks a theme with.
+  marks a theme with. Drag-select waits for a selection model (decision 59);
+  mouse capture stays on.
 
 **How much of the palette the sample shows.** The sample is a sample, not a
 swatch grid: it paints what a zig lexer can actually tell apart, and the
@@ -864,6 +865,10 @@ Append-only. Newest last. One line per decision, with the reason.
 | 44 | The controls panel is titled `THEME`, not `palette / interface` | The box holds the theme's slots in every geometry — full, squeezed and thin — and `palette / interface` named its two grids, not the box. One title in `PANEL_TITLES`, so the stacked panels read the same |
 | 45 | Every bordered panel pads its content one cell left and right | The panel's padding is the only edge air — see decision 46. The air is horizontal only — vertical air would come 1:1 out of the widgets, so the row budget never moves for padding. Padding is the first thing spent when the window shrinks: panels pad iff the padded lay shows everything the unpadded one does (the same top, the same blocks, no block fewer rows), else they mount unpadded, else the bare stack stands. The `editor` box decides its own air independently: it pads iff the padded box mounts, else it keeps today's unpadded box rather than collapsing into a bare readout — and a tight readout never vetoes air in the panels below it. `HUEBOX_PANEL_PAD=0` opts out to touching borders |
 | 46 | Panel content carries no baked indent; the `editor` box no inner air; the `themes` button pads like a panel | Decision 45's air doubled the bare frame's two-column indent inside bordered panels (three columns left, one right) and the editor box's own inner cell (two right). The content rows now start at the content edge in every bordered panel — palette, interface, examples, diff, sample, the editor readout and its bars — and the one cell of panel padding is the only air on either side. The bare frame is untouched: it keeps its two-column indent (four for diff/sample), and the rungs that assume it take it as a parameter. The `editor` box's own inner air is 0 and its bars spend the old trailing space, so the gauges end one cell from the border one column wider; the `themes` button narrows by the same cell on each side so it reads as part of the same language. The box's air is reserved out of the info column's share by the allocator, so a padded box mounts wherever the unpadded one does and only the theme path truncates two columns sooner. The price is stated plainly: the panels stand two columns narrower than the indent era at every size, and the info column's path truncates two columns sooner wherever the `editor` box pads |
+| 57 | A push that would report missing keys offers once to insert them (TUI y/n prompt; CLI only on a tty, else report-only); a yes appends one line per missing key in slot order | Report-only left real gaps users fixed by hand; the offer is once per save and a no keeps today's behaviour exactly |
+| 58 | `list --porcelain` now: `name \t path \t mtime-epoch` per theme, same order as `list` | Small, stable, and script formats ossify fast — ship while the list shape is fresh |
+| 59 | Drag-select in sample/diff deferred; mouse capture stays on | No selection/clipboard model in the Ratatui shell; building one for readout widgets is cost without a workflow |
+| 60 | Unbound keys clear the status line in every overlay, overrides included | One rule everywhere (`apply_key` already promises it); the popup explains its own context |
 | 47 | Ghostty probes `~/Library/Application Support/com.mitchellh.ghostty/` after XDG, one table on both platforms | Upstream's macOS pair loads after XDG with override; without it a default mac install is invisible. Those files cannot exist on Linux, so one table serves both |
 | 48 | kitty gains `$XDG_CONFIG_DIRS/kitty/kitty.conf`; `~/.kitty.conf` stays as a huebox extra; `/etc` stops are read-only | Upstream order includes `XDG_CONFIG_DIRS` and a merged `/etc` default; huebox reads the system default last and never writes root-owned files. `~/.kitty.conf` is in no man page but an existing file must keep resolving |
 | 49 | Alacritty gains `/etc/alacritty/alacritty.toml` read-only; `~/.config/alacritty.toml` is the XDG spelling, not a stop | Upstream's fifth stop is the system default — read last, never pushed. The duplicate spelling exists because the loader keeps both; the spec now says so instead of listing it bare |
@@ -1200,9 +1205,14 @@ As built:
 ### 13.8 Open questions (§13)
 
 1. Should push insert keys the target config lacks, or stay report-only?
-   — **report-only so far** (decision 18): the config tells huebox which
-   keys it has, and huebox never invents a line. Still open whether a
-   future phase should offer to add them.
+   — **decided: offer once to insert, else report-only** (decision 57,
+   superseding the open half of decision 18). When a push would report
+   missing keys, the saver offers once to insert them — TUI: a y/n prompt
+   through the prompt seam; CLI: asked only when stdin is a tty, otherwise
+   report-only stands. A yes appends one line per missing key in slot
+   order (flat formats: after the last colour line; TOML: under the
+   existing `[colors.*]` table, created at end of file if absent), and the
+   report names the added lines. A no keeps today's behaviour exactly.
 2. Ghostty native theme-file export: default or opt-in? — **decided: the
    default wherever the config is organised by theme** (decision 26,
    superseding decision 22). The in-place path is not name-blind but it is
@@ -1219,6 +1229,8 @@ As built:
    0-7 `#101014 #a83232 #3f7a3f #a88a3f #3f6a8a #8a3f6a #3f8a8a #b0b0b8`,
    8-15 `#d0d0d8 #e06c6c #6cc06c #e0c06c #6c9ce0 #e06c9c #6cc0c0 #f0f0f8`.
 4. Machine-readable `list --porcelain` for scripting — now or later?
+   — **decided: now** (decision 58): one line per theme,
+   `name \t path \t mtime-epoch`, in the same order as `list`.
 5. Delete / rename commands, or is `rm` / `mv` enough for v1 of the library?
    — **decided: `rm` / `mv` for v1** (decision 17). The state file is only a
    pointer: a deleted or renamed theme warns once and drops `edit` back to

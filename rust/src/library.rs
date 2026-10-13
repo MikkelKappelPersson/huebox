@@ -30,7 +30,7 @@ pub mod providers;
 pub mod themes;
 
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 /// Canonical slot values: slot name → lowercase `#rrggbb`.
 pub type SlotMap = BTreeMap<String, String>;

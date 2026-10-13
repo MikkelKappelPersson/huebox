@@ -537,6 +537,10 @@ fn overrides_key(key: &str, st: &mut EditorState) {
         overrides_delete(st);
     } else if ["n", "N", "esc", "escape", "Q", "\x03", "t"].contains(&key) {
         overrides_keep(st);
+    } else {
+        // Anything unbound clears the status like every other overlay
+        // (decision 60) — the warning stays open, the line resets.
+        st.status.clear();
     }
 }
 

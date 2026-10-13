@@ -540,6 +540,20 @@ fn keep_leaves_the_file_and_says_shadowed() {
 }
 
 #[test]
+fn unbound_key_clears_status_but_keeps_the_warning() {
+    let (mut st, _) = overrides_state();
+    dirty_and_adjust(&mut st);
+    apply_key(SAVE, &mut st);
+    assert!(st.overrides.is_some());
+    st.status = "stale line".to_owned();
+    let index = st.overrides_index;
+    apply_key("z", &mut st); // unbound behind the warning
+    assert!(st.status.is_empty());
+    assert!(st.overrides.is_some());
+    assert_eq!(st.overrides_index, index);
+}
+
+#[test]
 fn enter_confirms_the_highlighted_choice() {
     let (mut st, deleted) = overrides_state();
     dirty_and_adjust(&mut st);

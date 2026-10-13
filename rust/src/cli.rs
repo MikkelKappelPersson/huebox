@@ -124,6 +124,9 @@ pub struct Cli {
     /// List supported formats and exit
     #[arg(long = "formats")]
     pub formats: bool,
+    /// Machine-readable theme list (`list` only): `name \t path \t mtime-epoch`
+    #[arg(long = "porcelain")]
+    pub porcelain: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +195,10 @@ pub fn run(
             ),
         );
     }
+    // `--porcelain` is a `list` output shape, not a global flag.
+    if cli.porcelain && action.as_deref() != Some("list") {
+        return fail2(err, "--porcelain needs list".to_owned());
+    }
 
     if cli.formats {
         for format in RealBackend::format_names() {
@@ -230,7 +237,7 @@ pub fn run(
             if name.is_some() {
                 return fail2(err, "list takes no theme name".to_owned());
             }
-            cmd_list(out)
+            cmd_list(out, cli.porcelain)
         }
         Some("new") => cmd_new(&cli, name.as_deref(), &spec, out, err, tty, driver),
         Some("import") => cmd_import(&cli, name.as_deref(), out, err),
@@ -1088,10 +1095,21 @@ fn cmd_use(
 }
 
 /// `list`: one line per theme, current marked, source and age shown.
-fn cmd_list(out: &mut dyn Write) -> i32 {
+fn cmd_list(out: &mut dyn Write, porcelain: bool) -> i32 {
     let rows = themes::list_themes();
     if rows.is_empty() {
-        let _ = writeln!(out, "  no themes yet - create one with: huebox new <name>");
+        // Porcelain prints data lines only: no hint, no header.
+        if !porcelain {
+            let _ = writeln!(out, "  no themes yet - create one with: huebox new <name>");
+        }
+        return 0;
+    }
+    // Machine shape (decision 58): `name \t path \t mtime-epoch`, same
+    // order as the human list (`list_themes` sorts by name).
+    if porcelain {
+        for (name, path, mtime) in &rows {
+            let _ = writeln!(out, "{}\t{}\t{}", name, path.display(), *mtime as i64);
+        }
         return 0;
     }
     let current = themes::current();
@@ -1398,6 +1416,61 @@ mod tests {
         assert!(push_lines(&bare("alacritty")).is_empty());
         // Anything else unreloaded still owes it.
         assert_eq!(push_lines(&bare("ghostty")), vec![RELOAD_HINT.to_owned()]);
+    }
+
+    #[test]
+    fn list_porcelain_prints_name_path_epoch() {
+        use crate::library::testutil::{lock_env, temp_dir};
+        let home = temp_dir("cli-porcelain");
+        let root = home.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        home.write("huebox/themes/ember.toml", "background = \"#101014\"\n");
+        home.write("huebox/themes/dusk.toml", "background = \"#0a0a13\"\n");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec!["huebox".into(), "list".into(), "--porcelain".into()],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+        assert!(err.is_empty());
+        let text = String::from_utf8(out).unwrap();
+        let mut rows = text.lines();
+        // Sorted by name, `name \t path \t mtime-epoch`, no hint line.
+        let first = rows.next().unwrap();
+        let parts: Vec<&str> = first.split('\t').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "dusk");
+        assert!(parts[1].ends_with("huebox/themes/dusk.toml"));
+        assert!(parts[2].parse::<i64>().is_ok());
+        let second = rows.next().unwrap();
+        assert!(second.starts_with("ember\t"));
+        assert!(rows.next().is_none());
+    }
+
+    #[test]
+    fn porcelain_outside_list_is_a_usage_error() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec![
+                "huebox".into(),
+                "use".into(),
+                "ember".into(),
+                "--porcelain".into(),
+            ],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 2);
+        assert!(String::from_utf8(err)
+            .unwrap()
+            .contains("--porcelain needs list"));
     }
 
     fn cli(argv: &[&str]) -> Cli {
