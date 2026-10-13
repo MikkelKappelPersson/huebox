@@ -1112,8 +1112,9 @@ pub struct PushOptions {
 /// Either way a theme's colours never land in another theme's file.
 ///
 /// Three rules the terminal side does not negotiate: a config with no
-/// colours is never a target; keys the target does not carry are reported,
-/// never inserted; every target is tried even when an earlier one failed.
+/// colours is never a target; keys the target does not carry are reported
+/// (and, through [`push_confirm`], offered once for insert); every target
+/// is tried even when an earlier one failed.
 ///
 /// Truth-then-push lives here as a shape, not a sequence: this function
 /// takes *slots only* — it never reads or writes a theme file, so the
@@ -1131,6 +1132,54 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
     opts: &PushOptions,
     backend: &R,
     proc_root: &Path,
+) -> Result<PushResult, ThemeError> {
+    push_confirm::<F, R>(slots, opts, backend, proc_root, None)
+}
+
+/// The one y/n the saver offers when an in-place target reports missing
+/// keys: which target, how many keys, and where they would land.
+fn insert_prompt(found: &str, target: &Path, missing: &[&str]) -> String {
+    format!(
+        "  {found}: insert {} missing key(s) ({}) into {}? [y/N] ",
+        missing.len(),
+        missing.join(", "),
+        target.display()
+    )
+}
+
+/// The report line for the lines an insert added: which target, how many
+/// keys, and the keys themselves.
+fn inserted_line(found: &str, target: &Path, added: &[String]) -> String {
+    format!(
+        "{found}: inserted {} missing key(s) into {}: {}",
+        added.len(),
+        target.display(),
+        added.join(", ")
+    )
+}
+
+/// [`push_with`] with an offer to insert missing keys (decision 57).
+///
+/// When an in-place push would report keys as missing, `confirm` is
+/// asked once per call — the first target with missing keys names the
+/// prompt, and the answer stands for every later target too. A yes
+/// appends one line per missing key the format can spell (flat formats
+/// after the last colour line, TOML under its `[colors.*]` table) and the
+/// report names the added lines; a no keeps the report-only behaviour
+/// exactly. `None` never asks: that is [`push`]/[`push_with`].
+///
+/// Four things never change: the offer fires only when keys are actually
+/// missing (a no-op push asks nothing and writes nothing); the Ghostty
+/// native-export path is untouched (a file of ours, all 22 keys by
+/// construction); system paths never reach an insert (`resolve_for_push`
+/// refuses them first); a failed insert reports like a failed write,
+/// truth already saved and never rolled back.
+pub fn push_confirm<F: FormatStub, R: ReloadBackend>(
+    slots: &SlotMap,
+    opts: &PushOptions,
+    backend: &R,
+    proc_root: &Path,
+    mut confirm: Option<&mut dyn FnMut(&str) -> bool>,
 ) -> Result<PushResult, ThemeError> {
     if opts.no_push {
         return Ok(PushResult::empty());
@@ -1160,6 +1209,8 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
     let mut pushed: Vec<(String, PathBuf)> = Vec::new();
     let mut failed = false;
     let mut overrides = None;
+    let mut asked = false;
+    let mut agreed = false;
 
     for wanted in &names {
         // Push-mode resolution (decision 54): /etc candidates are skipped and
@@ -1286,10 +1337,40 @@ pub fn push_with<F: FormatStub, R: ReloadBackend>(
             .copied()
             .collect();
         if !missing.is_empty() {
-            lines.push(format!(
-                "{found}: not carried by this config: {}",
-                missing.join(", ")
-            ));
+            // Decision 57: one offer per call to insert what the target
+            // lacks — the first missing target names the prompt, and the
+            // answer stands for every later one. A yes appends the lines
+            // and names them; anything else keeps the report-only line.
+            let mut added: Vec<String> = Vec::new();
+            if let Some(ask) = confirm.as_deref_mut() {
+                if !asked {
+                    asked = true;
+                    agreed = ask(&insert_prompt(&found, &target, &missing));
+                }
+                if agreed {
+                    match F::insert_missing(&found, &target, slots) {
+                        Ok(inserted) => added = inserted,
+                        Err(problem) => {
+                            lines.push(format!("{found}: {}: {problem}", target.display()));
+                            failed = true;
+                        }
+                    }
+                }
+            }
+            if !added.is_empty() {
+                lines.push(inserted_line(&found, &target, &added));
+            }
+            let still: Vec<&str> = missing
+                .iter()
+                .filter(|slot| !added.iter().any(|key| key == *slot))
+                .copied()
+                .collect();
+            if !still.is_empty() {
+                lines.push(format!(
+                    "{found}: not carried by this config: {}",
+                    still.join(", ")
+                ));
+            }
         }
     }
 
@@ -1897,6 +1978,16 @@ mod tests {
                 "Denied",
             ))
         }
+        fn insert_missing(
+            _fmt: &str,
+            _path: &Path,
+            _slots: &SlotMap,
+        ) -> std::io::Result<Vec<String>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Denied",
+            ))
+        }
         fn color_line(fmt: &str, line: &str) -> bool {
             Mem::color_line(fmt, line)
         }
@@ -1922,6 +2013,69 @@ mod tests {
         assert_eq!(load("ember").unwrap().0, edited);
     }
 
+    /// Splice works, insert denied: the insert-failure shape.
+    #[derive(Clone, Copy)]
+    struct FailInsert;
+
+    impl FormatStub for FailInsert {
+        fn format_names() -> &'static [&'static str] {
+            Mem::format_names()
+        }
+        fn default_paths(fmt: &str) -> Vec<String> {
+            Mem::default_paths(fmt)
+        }
+        fn env_table(fmt: &str) -> &'static [(&'static str, &'static str)] {
+            Mem::env_table(fmt)
+        }
+        fn read(fmt: &str, path: &Path) -> SlotMap {
+            Mem::read(fmt, path)
+        }
+        fn write(fmt: &str, path: &Path, slots: &SlotMap) -> std::io::Result<()> {
+            Mem::write(fmt, path, slots)
+        }
+        fn insert_missing(
+            _fmt: &str,
+            _path: &Path,
+            _slots: &SlotMap,
+        ) -> std::io::Result<Vec<String>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Denied",
+            ))
+        }
+        fn color_line(fmt: &str, line: &str) -> bool {
+            Mem::color_line(fmt, line)
+        }
+    }
+
+    #[test]
+    fn insert_failure_reports_like_write_failure() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<FailInsert, SystemReloader>(
+            &full_slots(),
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        // Present keys still land; the denied insert is a report plus
+        // `failed`, and the missing keys stay reported as missing.
+        assert!(result.failed);
+        assert!(result.lines.iter().any(|line| line.contains("Denied")));
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|line| line.contains("not carried by this config")),
+            "{:?}",
+            result.lines
+        );
+        assert!(!std::fs::read_to_string(&kitty).unwrap().contains("color2"));
+    }
+
     #[test]
     fn missing_keys_reported_never_inserted() {
         let home = Home::setup();
@@ -1938,6 +2092,206 @@ mod tests {
         assert_eq!(after.lines().count(), kitty_text().lines().count());
         assert!(!after.contains("color2")); // no key invented
         assert!(after.contains("background            #010203"));
+    }
+
+    fn confirm_yes(calls: &std::cell::RefCell<Vec<String>>) -> impl FnMut(&str) -> bool + '_ {
+        move |label: &str| {
+            calls.borrow_mut().push(label.to_owned());
+            true
+        }
+    }
+
+    fn confirm_no(calls: &std::cell::RefCell<Vec<String>>) -> impl FnMut(&str) -> bool + '_ {
+        move |label: &str| {
+            calls.borrow_mut().push(label.to_owned());
+            false
+        }
+    }
+
+    #[test]
+    fn insert_offer_yes_appends_in_slot_order_and_reports() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let before = std::fs::read_to_string(&kitty).unwrap();
+        // Present keys keep the file's values (a no-op splice); gaps take
+        // known fills, so the added lines are pinned exactly.
+        let mut slots = read_terminal::<Mem>("kitty", &kitty);
+        for (slot, value) in full_slots() {
+            slots.entry(slot).or_insert(value);
+        }
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &slots,
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "asked once");
+        assert!(calls.borrow()[0].contains("[y/N]"), "{:?}", calls.borrow());
+        let report = result.lines.join("\n");
+        assert!(report.contains("inserted 13 missing key(s)"), "{report}");
+        assert!(report.contains("palette-2"), "{report}");
+        // kitty carries no cursor text colour: still reported, never invented.
+        assert!(
+            report.contains("not carried by this config: cursor-text"),
+            "{report}"
+        );
+        let after = std::fs::read_to_string(&kitty).unwrap();
+        assert!(after.starts_with(&before), "other bytes untouched");
+        let added: Vec<String> = after
+            .lines()
+            .skip(before.lines().count())
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            added,
+            (2..15)
+                .map(|i| format!("color{i} #{i:02x}{i:02x}{i:02x}"))
+                .collect::<Vec<_>>()
+        );
+        // The added lines read back: a yes heals the gap it names.
+        let reread = read_terminal::<Mem>("kitty", &kitty);
+        assert_eq!(reread["palette-2"], "#020202");
+        assert!(!reread.contains_key("cursor-text"));
+    }
+
+    #[test]
+    fn insert_offer_no_keeps_report_only() {
+        let home = Home::setup();
+        let kitty = home.kitty();
+        let before = std::fs::read_to_string(&kitty).unwrap();
+        let mut slots = read_terminal::<Mem>("kitty", &kitty);
+        for (slot, value) in full_slots() {
+            slots.entry(slot).or_insert(value);
+        }
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &slots,
+            &push_opts("kitty", &kitty),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_no(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "asked once");
+        let report = result.lines.join("\n");
+        assert!(!report.contains("inserted"), "{report}");
+        assert!(report.contains("not carried by this config:"), "{report}");
+        assert!(report.contains("palette-2"), "{report}");
+        assert_eq!(std::fs::read_to_string(&kitty).unwrap(), before);
+    }
+
+    #[test]
+    fn insert_offer_fires_only_when_keys_are_missing() {
+        let home = Home::setup();
+        // The fixture carries all 22: nothing missing, nothing asked.
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &push_opts("ghostty", &home.config),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert!(calls.borrow().is_empty());
+        assert!(
+            result.lines.iter().all(|line| !line.contains("carried")),
+            "{:?}",
+            result.lines
+        );
+    }
+
+    #[test]
+    fn insert_offer_asks_once_across_targets() {
+        let dir = temp_dir("themes-insert-once");
+        let root = dir.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        let full = full_slots();
+        let ghostty = dir.write(
+            "ghostty/config.ghostty",
+            "font-size = 12\npalette = 0=#0a0a13\nbackground = #0f0f1a\n",
+        );
+        let kitty = dir.write("kitty/kitty.conf", &kitty_text());
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full,
+            &PushOptions::default(),
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert_eq!(calls.borrow().len(), 1, "one offer per save");
+        let report = result.lines.join("\n");
+        assert!(
+            report.contains("ghostty: inserted 20 missing key(s)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("kitty: inserted 13 missing key(s)"),
+            "{report}"
+        );
+        assert!(std::fs::read_to_string(&ghostty)
+            .unwrap()
+            .contains("palette = 1=#010101"));
+        assert!(std::fs::read_to_string(&kitty)
+            .unwrap()
+            .contains("color2 #020202"));
+    }
+
+    #[test]
+    fn insert_offer_native_export_never_asks() {
+        let home = Home::setup();
+        // The export is a file of ours, all 22 keys by construction.
+        let (opts, _) = native_opts(&home, &home.config, "ember");
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &opts,
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(!result.failed);
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn insert_offer_system_path_refuses_without_asking() {
+        let home = Home::setup();
+        let opts = PushOptions {
+            to: vec!["kitty".to_owned()],
+            path: Some(PathBuf::from("/etc/kitty/kitty.conf")),
+            ..PushOptions::default()
+        };
+        let calls: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let result = push_confirm::<Mem, SystemReloader>(
+            &full_slots(),
+            &opts,
+            &SystemReloader,
+            Path::new(PROC_DEFAULT),
+            Some(&mut confirm_yes(&calls)),
+        )
+        .unwrap();
+        assert!(result.failed);
+        assert!(calls.borrow().is_empty(), "never insert into a system path");
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|line| line.contains("refusing to push to system path")),
+            "{:?}",
+            result.lines
+        );
+        let _ = home;
     }
 
     #[test]

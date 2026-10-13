@@ -306,6 +306,90 @@ pub(crate) fn read_text(text: &str) -> BTreeMap<String, String> {
     slots
 }
 
+/// The `(table, key)` an inserted slot is spelled as: the canonical
+/// spelling the round-trip fixtures use — file keywords under
+/// `[colors.primary]` / `[colors.cursor]` / `[colors.selection]`, quoted
+/// numbers under `[colors.normal]` — or `None` for a name no table
+/// carries (no canonical slot reaches there; the filter keeps it total).
+fn insert_slot(slot: &str) -> Option<(&'static str, String)> {
+    Some(match slot {
+        "background" => ("colors.primary", "background".to_owned()),
+        "foreground" => ("colors.primary", "foreground".to_owned()),
+        "cursor-text" => ("colors.cursor", "text".to_owned()),
+        "cursor-color" => ("colors.cursor", "cursor".to_owned()),
+        "selection-background" => ("colors.selection", "background".to_owned()),
+        "selection-foreground" => ("colors.selection", "foreground".to_owned()),
+        _ => (
+            "colors.normal",
+            format!("\"{}\"", slot.strip_prefix("palette-")?),
+        ),
+    })
+}
+
+/// Append one line per missing slot under its `[colors.*]` table.
+///
+/// `missing` arrives in canonical order; rows join the end of the
+/// section their table already opens, or a table created at end of file
+/// when no header names it — tables created in first-appearance order,
+/// each behind one blank line unless the file already ends on one.
+/// Values are quoted, like every value the writer keeps.
+pub(crate) fn insert_text(text: &str, missing: &[(&str, &str)]) -> String {
+    if missing.is_empty() {
+        return text.to_owned();
+    }
+    let mut tables: Vec<(&str, Vec<(String, &str)>)> = Vec::new();
+    for (slot, hex) in missing {
+        let Some((table, key)) = insert_slot(slot) else {
+            continue;
+        };
+        match tables.iter_mut().find(|(name, _)| *name == table) {
+            Some((_, rows)) => rows.push((key, hex)),
+            None => tables.push((table, vec![(key, hex)])),
+        }
+    }
+    if tables.is_empty() {
+        return text.to_owned();
+    }
+    let mut lines: Vec<String> = if text.is_empty() {
+        Vec::new()
+    } else {
+        split_lines(text)
+            .iter()
+            .map(|line| line.to_string())
+            .collect()
+    };
+    for (table, rows) in &tables {
+        let rows: Vec<String> = rows
+            .iter()
+            .map(|(key, hex)| format!("{key} = \"{hex}\""))
+            .collect();
+        match lines
+            .iter()
+            .rposition(|line| match_header(line).as_deref() == Some(*table))
+        {
+            Some(head) => {
+                let end = lines
+                    .iter()
+                    .skip(head + 1)
+                    .position(|line| match_header(line).is_some())
+                    .map(|offset| head + 1 + offset)
+                    .unwrap_or(lines.len());
+                lines.splice(end..end, rows);
+            }
+            None => {
+                if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push(format!("[{table}]"));
+                lines.extend(rows);
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
 /// Replace each colour's value token, keeping quotes and spacing intact —
 /// or return the input untouched when nothing changed (§6.2 rule 4).
 ///

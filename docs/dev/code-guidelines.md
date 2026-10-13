@@ -72,7 +72,7 @@ No cycles.
 
 ## Coding Notes
 
-- **Line-level writes only.** Never re-serialise a terminal config; only colour tokens are replaced — the one exception is the overrides delete, which removes whole colour lines and leaves every other byte identical. Compare first, write second: a no-op write is byte-identical and never opens the file.
+- **Line-level writes only.** Never re-serialise a terminal config; only colour tokens are replaced — the two exceptions are the overrides delete, which removes whole colour lines and leaves every other byte identical, and the missing-key insert (decision 57), which appends one line per added key after the last colour line (flat) or under its `[colors.*]` table (TOML) and leaves every other byte identical. Compare first, write second: a no-op write is byte-identical and never opens the file.
 - **Theme files are ours; configs are theirs.** `themes/` may be rewritten freely (canonical layout, via `.tmp` + rename, never partially written); terminal configs follow line-level discipline. A theme's colours never land in a file that belongs to another theme.
 - **Truth first, never rollback.** A save writes the theme file and only then pushes; a failed push is a report plus exit 1, and the theme file stays as written. Ctrl+A is the one sanctioned bypass: an explicit preview push of a dirty buffer, truth untouched by construction. In direct mode the config is the truth, so Ctrl+A saves there — there is nothing to preview past the file.
 - **Errors as values on user paths.** Fallible file and parse work returns `Result`, never panics — `cli` carries zero bare `unwrap`, and every failure surfaces as `huebox: ` plus an exit code.

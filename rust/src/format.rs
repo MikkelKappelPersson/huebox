@@ -15,6 +15,9 @@
 //! and `base` modules are private. [`FORMAT_NAMES`] lists the registry in
 //! probe order; [`lookup`] exposes each format's static data (`defaults`
 //! candidate paths, `env` overrides) for huebox-lib's detection pass.
+//! [`insert_missing`] appends one line per absent slot through the same
+//! facade: flat formats grow after the last colour line, TOML under its
+//! `[colors.*]` table.
 //!
 //! # Write contract (001 spec §6.2)
 //!
@@ -139,6 +142,30 @@ pub fn read(format: &str, text: &str) -> BTreeMap<String, String> {
 /// through [`apply_write`] to learn whether a write is owed.
 pub fn write(format: &str, text: &str, slots: &Slots) -> String {
     (lookup(format).write)(text, slots)
+}
+
+/// Append one line per slot `text` lacks, in canonical order, and return
+/// the new text — byte-identical when nothing is missing.
+///
+/// Flat formats grow after the last colour line; TOML rows join the end
+/// of the section their `[colors.*]` table opens, or a table created at
+/// end of file when no header names it. Slots the format cannot spell
+/// (kitty carries no cursor text colour) are left out: the push keeps
+/// reporting those, never inventing a key.
+///
+/// Panics on an unknown name, like [`read`] / [`write`].
+pub fn insert_missing(format: &str, text: &str, slots: &Slots) -> String {
+    let present = read(format, text);
+    let missing: Vec<(&str, &str)> = slots
+        .iter()
+        .filter(|(name, _)| !present.contains_key(*name))
+        .collect();
+    match format {
+        "ghostty" => ghostty::insert_text(text, &missing),
+        "kitty" => kitty::insert_text(text, &missing),
+        "alacritty" => alacritty::insert_text(text, &missing),
+        unknown => panic!("huebox-format: unknown format {unknown:?}"),
+    }
 }
 
 /// Compare first, write second (§6.2 rule 4): [`None`] when `new` is

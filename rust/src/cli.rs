@@ -19,7 +19,7 @@
 //! lookup (which would panic on an unknown name).
 
 use std::cell::RefCell;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -241,7 +241,7 @@ pub fn run(
         }
         Some("new") => cmd_new(&cli, name.as_deref(), &spec, out, err, tty, driver),
         Some("import") => cmd_import(&cli, name.as_deref(), out, err),
-        Some("use") => cmd_use(&cli, name.as_deref(), &spec, out, err),
+        Some("use") => cmd_use(&cli, name.as_deref(), &spec, out, err, tty),
         Some(_) => cmd_view(
             &cli,
             name.as_deref(),
@@ -335,6 +335,12 @@ fn push_lines(result: &themes::PushResult) -> Vec<String> {
         lines.push(RELOAD_HINT.to_owned());
     }
     lines
+}
+
+/// A y/n answer: `y`/`yes`, case-insensitive — the same word the theme
+/// overwrite prompt takes, so one yes means yes everywhere.
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// `ghostty, kitty` — the format names a status line names.
@@ -740,8 +746,27 @@ pub fn run_editor(
                 report.borrow_mut().push(NO_PUSH_LINE.to_owned());
                 return Ok(WriteOutcome::status(&format!("saved {theme} (truth only)")));
             }
-            let result = themes::push::<RealBackend>(&slots, &push_options(&spec, Some(theme)))
-                .map_err(|error| error.0)?;
+            let result = {
+                // The TUI asks through its own suspending prompter — the
+                // prompt seam, same as hex and name entry — and only when
+                // stdin is a real tty, so a headless driver never blocks.
+                // Ctrl+A previews report-only: the saver alone offers.
+                let mut ask_insert = crate::app::suspending_prompter();
+                let mut offer = |label: &str| -> bool {
+                    if !std::io::stdin().is_terminal() {
+                        return false;
+                    }
+                    is_yes(ask_insert(label).as_deref().unwrap_or(""))
+                };
+                themes::push_confirm::<RealBackend, themes::SystemReloader>(
+                    &slots,
+                    &push_options(&spec, Some(theme)),
+                    &themes::SystemReloader,
+                    Path::new(themes::PROC_DEFAULT),
+                    Some(&mut offer),
+                )
+                .map_err(|error| error.0)?
+            };
             report.borrow_mut().extend(push_lines(&result));
             if result.failed {
                 *failed.borrow_mut() = true;
@@ -1045,12 +1070,19 @@ fn cmd_import(cli: &Cli, name: Option<&str>, out: &mut dyn Write, err: &mut dyn 
 }
 
 /// `use <name>`: make it current, then push it live.
+///
+/// `tty` gates the insert offer (decision 57): on a terminal a push that
+/// would report missing keys asks once whether to insert them, off one
+/// the report-only behaviour stands — and a non-tty stdin never asks even
+/// when the session is otherwise interactive, so a piped answer can never
+/// hang the command.
 fn cmd_use(
     _cli: &Cli,
     name: Option<&str>,
     spec: &PushSpec,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    tty: bool,
 ) -> i32 {
     if let Some(problem) = name_problem(name, "use") {
         return fail(err, problem);
@@ -1080,9 +1112,31 @@ fn cmd_use(
     for warning in &warnings {
         warn(err, warning);
     }
-    let result = match themes::push::<RealBackend>(&slots, &push_options(spec, Some(name))) {
-        Ok(result) => result,
-        Err(error) => return fail(err, error.0),
+    let result = {
+        // The prompt goes to stderr, where the push report already lives;
+        // stdout stays script-clean. Borrowed by the closure for the call
+        // only, so the report loop below reuses `err` afterwards.
+        let mut ask_insert = |label: &str| -> bool {
+            if !std::io::stdin().is_terminal() {
+                return false;
+            }
+            match crate::app::read_prompt_line(label, &mut std::io::stdin().lock(), &mut *err) {
+                Some(answer) => is_yes(&answer),
+                None => false,
+            }
+        };
+        let confirm: Option<&mut dyn FnMut(&str) -> bool> =
+            if tty { Some(&mut ask_insert) } else { None };
+        match themes::push_confirm::<RealBackend, themes::SystemReloader>(
+            &slots,
+            &push_options(spec, Some(name)),
+            &themes::SystemReloader,
+            Path::new(themes::PROC_DEFAULT),
+            confirm,
+        ) {
+            Ok(result) => result,
+            Err(error) => return fail(err, error.0),
+        }
     };
     for line in push_lines(&result) {
         warn(err, &line);
