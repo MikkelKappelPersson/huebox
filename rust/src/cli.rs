@@ -199,6 +199,12 @@ pub fn run(
     if cli.porcelain && action.as_deref() != Some("list") {
         return fail2(err, "--porcelain needs list".to_owned());
     }
+    if cli.porcelain && cli.formats {
+        return fail2(
+            err,
+            "--porcelain cannot be combined with --formats".to_owned(),
+        );
+    }
 
     if cli.formats {
         for format in RealBackend::format_names() {
@@ -1503,6 +1509,18 @@ mod tests {
         let second = rows.next().unwrap();
         assert!(second.starts_with("ember\t"));
         assert!(rows.next().is_none());
+        // Epoch correctness, not just shape: the third field is the
+        // file's own mtime (tolerance covers a second boundary).
+        let ember = home.path().join("huebox/themes/ember.toml");
+        let actual = std::fs::metadata(&ember)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let printed: i64 = second.split('\t').nth(2).unwrap().parse().unwrap();
+        assert!((printed - actual).abs() <= 2);
     }
 
     #[test]
@@ -1525,6 +1543,48 @@ mod tests {
         assert!(String::from_utf8(err)
             .unwrap()
             .contains("--porcelain needs list"));
+    }
+
+    #[test]
+    fn list_porcelain_empty_library_prints_nothing() {
+        use crate::library::testutil::{lock_env, temp_dir};
+        let home = temp_dir("cli-porcelain-empty");
+        let root = home.root();
+        let _guard = lock_env(&[("XDG_CONFIG_HOME", root.as_str()), ("HOME", root.as_str())]);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec!["huebox".into(), "list".into(), "--porcelain".into()],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+        assert!(out.is_empty());
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn porcelain_with_formats_is_rejected() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            vec![
+                "huebox".into(),
+                "list".into(),
+                "--formats".into(),
+                "--porcelain".into(),
+            ],
+            &mut out,
+            &mut err,
+            false,
+            None,
+        );
+        assert_eq!(code, 2);
+        assert!(String::from_utf8(err)
+            .unwrap()
+            .contains("--porcelain cannot be combined with --formats"));
     }
 
     fn cli(argv: &[&str]) -> Cli {
