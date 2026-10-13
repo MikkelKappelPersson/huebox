@@ -1,36 +1,39 @@
-![HUEBOX](assets/huebox-header-transparent.png)
+<p align="center">
+  <img src="assets/huebox-header-transparent.png" alt="huebox" />
+</p>
 
-[![crates.io](https://img.shields.io/crates/v/huebox)](https://crates.io/crates/huebox) [![License](https://img.shields.io/github/license/MikkelKappelPersson/huebox)](LICENSE)
+<p align="center">
+  <a href="#install">Install</a> · <a href="#-use">Use</a> · <a href="#-themes">Themes</a>
+</p>
 
-A terminal theme editor with live preview — repaint your terminal without leaving it.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-666666?labelColor=333333" alt="MIT license" /></a>
+  <a href="https://github.com/MikkelKappelPersson/huebox/releases/latest"><img src="https://img.shields.io/github/v/release/MikkelKappelPersson/huebox?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
+  <a href="https://github.com/MikkelKappelPersson/huebox/stargazers"><img src="https://img.shields.io/github/stars/MikkelKappelPersson/huebox?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
+  <a href="https://crates.io/crates/huebox"><img src="https://img.shields.io/crates/v/huebox?label=crates&labelColor=333333&color=666666" alt="crates.io version" /></a>
+  <a href="https://pypi.org/p/huebox"><img src="https://img.shields.io/pypi/v/huebox?label=pypi&labelColor=333333&color=666666" alt="PyPI version" /></a>
+  <a href="https://aur.archlinux.org/packages/huebox"><img src="https://img.shields.io/aur/version/huebox?label=aur&labelColor=333333&color=666666" alt="AUR version" /></a>
+</p>
+
+**A terminal theme editor with live preview — repaint your terminal without leaving it.**
 
 `huebox` shows you the colours your terminal is actually using, and lets you change them from a keyboard-driven interface — no hex codes, no hand-editing, no restarting.
 
-## 📦 Install
+## Install
 
-Grab the prebuilt binary for your platform from the [latest release](https://github.com/MikkelKappelPersson/huebox/releases/latest) (Linux x86_64 + aarch64, macOS Apple Silicon + Intel) — unpack, put `huebox` on your `PATH`, done. One static binary, no runtime dependencies.
-
-Or install from source:
-
-```sh
-cargo install huebox
+```bash
+curl -fsSL https://mikkelkappelpersson.github.io/huebox/install.sh | sh
 ```
 
-The command lands in `~/.cargo/bin`. If your shell cannot find `huebox` afterwards, add that directory to your `PATH` (e.g. at the end of `~/.bashrc` or `~/.zshrc`) and reload the shell:
+or `yay -S huebox` · `brew install mikkelkappelpersson/huebox/huebox` · `uv tool install huebox` · `cargo binstall huebox` · [binaries](https://github.com/MikkelKappelPersson/huebox/releases)
 
-```sh
-export PATH="$HOME/.cargo/bin:$PATH"
+then edit what you are working on:
+
+```bash
+huebox
 ```
 
-To use it in the terminal you already have open, reload the config instead of restarting it:
-
-```sh
-source ~/.bashrc
-```
-
-Package managers: `yay -S huebox` (Arch, binary), `brew install mikkelkappelpersson/huebox/huebox` (macOS/Linux, binary), `uv tool install huebox` (Linux x86_64, binary wheel).
-
-One static binary, no runtime dependencies. Or run it uninstalled from this checkout: `cargo build --release --manifest-path rust/Cargo.toml`, then `rust/target/release/huebox`.
+pick a slot with the arrows, nudge it into place, `Ctrl+S` and your terminal changes — no hex codes, no hand-editing, no restarting. Building from source? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🚀 Use
 
