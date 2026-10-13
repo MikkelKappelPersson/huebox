@@ -205,6 +205,38 @@ fn import_popup_lists_and_previews() {
     assert!(body.contains("preview"), "{body:?}");
 }
 
+/// The import dialog stands inside the frame at the size floor.
+#[test]
+fn import_popup_at_floor_fits() {
+    let mut shell = shell();
+    shell.import_open = true;
+    let buffer = shell.snapshot(40, 12);
+    let layout = shell.popup.clone().expect("import dialog");
+    assert!(layout.ox + layout.w + 2 <= shell.cols);
+    assert!(layout.oy + shell.popup_lines.len() + 2 <= shell.rows);
+    let body: String = (0..12)
+        .map(|y| row_text(&buffer, y, 40))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(body.contains("Ember"), "{body:?}");
+}
+
+/// The picker windows a long library at the size floor, counter and all.
+#[test]
+fn themes_picker_at_floor_windows() {
+    let mut shell = shell();
+    shell.state.overlay = Some((0..34).map(|i| format!("theme-{i:02}")).collect());
+    let buffer = shell.snapshot(40, 12);
+    let layout = shell.popup.clone().expect("themes dialog");
+    assert!(layout.ox + layout.w + 2 <= shell.cols);
+    assert!(layout.oy + shell.popup_lines.len() + 2 <= shell.rows);
+    let body: String = (0..12)
+        .map(|y| row_text(&buffer, y, 40))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(body.contains("1-4 of 34"), "{body:?}");
+}
+
 /// Prompt seam with a fake prompter: hex entry writes, cancel keeps.
 #[test]
 fn prompt_seam_writes_and_cancels() {
