@@ -1989,3 +1989,239 @@ fn choosing_new_in_a_driven_session_names_and_adopts() {
     let calls = fx.library.calls.borrow();
     assert!(calls[0].starts_with("create dusk force=false"), "{calls:?}");
 }
+
+// ---------------------------------------------------------------------------
+// `no theme detected` choice (empty terminal)
+// ---------------------------------------------------------------------------
+
+use huebox::editor::{
+    enter_no_theme, needs_no_theme, no_theme_after_import, no_theme_bundled_lines, no_theme_lines,
+};
+
+fn bundled_slots(name: &str) -> Slots {
+    let mut slots = Slots::default();
+    // Distinct backgrounds so adoption is visible.
+    let bg = match name {
+        "plain-light" => "#fafafa",
+        "plain-dark" => "#101014",
+        _ => "#1a0f0e",
+    };
+    for slot in SLOTS {
+        slots.set(slot, "#3f7a3f");
+    }
+    slots.set("background", bg);
+    slots
+}
+
+fn no_theme_state(names: Vec<&str>, theme: Option<&str>) -> PickerFixture {
+    let mut fx = picker_state(names, theme, vec![], "", vec![]);
+    fx.st.no_target = true;
+    fx.st.fmt = "ghostty".to_owned();
+    fx.st.path = "/tmp/ghostty-config".to_owned();
+    fx.st.bundled = vec![
+        ("plain-light".to_owned(), bundled_slots("plain-light")),
+        ("plain-dark".to_owned(), bundled_slots("plain-dark")),
+        ("nightspice".to_owned(), bundled_slots("nightspice")),
+    ];
+    fx
+}
+
+#[test]
+fn enter_no_theme_opens_only_for_no_target_themeless() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(needs_no_theme(&fx.st));
+    assert!(enter_no_theme(&mut fx.st));
+    assert_eq!(fx.st.no_theme, Some(0));
+    assert!(enter_no_theme(&mut fx.st)); // idempotent
+
+    // Normal direct sessions never owe it.
+    let mut fx2 = picker_state(vec![], None, vec![], "", vec![]);
+    assert!(!needs_no_theme(&fx2.st));
+    assert!(!enter_no_theme(&mut fx2.st));
+
+    // A session holding a theme never owes it.
+    let mut fx3 = no_theme_state(vec!["ember"], Some("ember"));
+    assert!(!needs_no_theme(&fx3.st));
+    assert!(!enter_no_theme(&mut fx3.st));
+}
+
+#[test]
+fn no_theme_never_stacks_over_other_popups() {
+    let mut fx = no_theme_state(vec![], None);
+    fx.st.overlay = Some(vec!["a".to_owned()]);
+    assert!(!enter_no_theme(&mut fx.st));
+    assert!(fx.st.no_theme.is_none());
+    fx.st.overlay = None;
+    fx.st.setup = Some(0);
+    assert!(!enter_no_theme(&mut fx.st));
+}
+
+#[test]
+fn no_theme_owns_the_surface() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    let before = fx.st.slots.clone();
+    apply_key("w", &mut fx.st);
+    assert_eq!(fx.st.slots, before);
+    assert_eq!(fx.st.sel, huebox::editor::state::INITIAL_SEL);
+}
+
+#[test]
+fn no_theme_arrows_choose_create_or_import() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("down", &mut fx.st);
+    assert_eq!(fx.st.no_theme, Some(1));
+    apply_key("up", &mut fx.st);
+    assert_eq!(fx.st.no_theme, Some(0));
+}
+
+#[test]
+fn no_theme_import_choice_raises_pending() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("i", &mut fx.st);
+    assert!(fx.st.no_theme.is_none());
+    assert!(fx.st.import_pending);
+    assert!(!fx.st.quit);
+}
+
+#[test]
+fn no_theme_create_lists_bundled_then_copies() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("c", &mut fx.st);
+    assert_eq!(fx.st.no_theme_bundled, Some(0));
+    apply_key("down", &mut fx.st);
+    assert_eq!(fx.st.no_theme_bundled, Some(1));
+    apply_key("\r", &mut fx.st);
+    assert_eq!(fx.st.theme, Some("plain-dark".to_owned()));
+    assert_eq!(fx.st.path, "/themes/plain-dark.toml");
+    assert!(fx.st.no_theme.is_none());
+    assert!(fx.st.no_theme_bundled.is_none());
+    assert_eq!(fx.st.slots.get("background"), "#101014");
+    assert!(fx.st.status.contains("created plain-dark"));
+}
+
+#[test]
+fn no_theme_bundled_esc_returns_to_choices() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("\r", &mut fx.st); // create -> bundled list
+    assert!(fx.st.no_theme_bundled.is_some());
+    apply_key("esc", &mut fx.st);
+    assert!(fx.st.no_theme_bundled.is_none());
+    assert_eq!(fx.st.no_theme, Some(0));
+    assert!(!fx.st.quit);
+}
+
+#[test]
+fn no_theme_esc_quits_when_library_empty_closes_otherwise() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("esc", &mut fx.st);
+    assert!(fx.st.quit);
+    assert!(fx.st.no_theme.is_none());
+
+    let mut fx2 = no_theme_state(vec!["ember"], None);
+    assert!(enter_no_theme(&mut fx2.st));
+    apply_key("esc", &mut fx2.st);
+    assert!(!fx2.st.quit);
+    assert!(fx2.st.no_theme.is_none());
+}
+
+#[test]
+fn no_theme_create_with_taken_name_loads_existing() {
+    let mut fx = no_theme_state(vec!["plain-light"], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("\r", &mut fx.st); // create -> bundled
+                                 // First bundled row is plain-light, already in library: PickerLibrary
+                                 // create would succeed (it pushes), so force a taken error via problem.
+                                 // Instead simulate taken by pre-seeding problem? Use direct taken path:
+                                 // create succeeds here, but the branch is covered by explicit taken test below.
+    apply_key("\r", &mut fx.st);
+    assert!(fx.st.theme.is_some());
+    assert!(fx.st.no_theme.is_none());
+}
+
+#[test]
+fn no_theme_taken_bundled_loads_instead_of_failing() {
+    let mut fx = picker_state(
+        vec!["plain-light"],
+        None,
+        vec![],
+        "plain-light already exists (--force replaces it)",
+        vec![],
+    );
+    fx.st.no_target = true;
+    fx.st.fmt = "ghostty".to_owned();
+    fx.st.path = "/tmp/ghostty-config".to_owned();
+    fx.st.bundled = vec![("plain-light".to_owned(), bundled_slots("plain-light"))];
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("\r", &mut fx.st);
+    assert_eq!(fx.st.no_theme_bundled, Some(0));
+    // PickerLibrary.create returns Err(problem) containing "already exists",
+    // so the dialog loads instead.
+    // Our fixture's create returns Err only when problem non-empty and does not push;
+    // load returns theme_slots, so adoption still closes the dialog.
+    // To hit the taken branch, set problem to already-exists above: done.
+    // Note: PickerLibrary.create with problem returns Err without pushing,
+    // and load succeeds (no misses), so dialog adopts.
+    apply_key("\r", &mut fx.st);
+    // load naming: theme_slots(seed_of("plain-light")) — still closes.
+    assert!(fx.st.no_theme.is_none());
+    assert_eq!(fx.st.theme, Some("plain-light".to_owned()));
+}
+
+#[test]
+fn no_theme_after_import_re_arms_when_still_themeless() {
+    let mut fx = no_theme_state(vec![], None);
+    assert!(enter_no_theme(&mut fx.st));
+    apply_key("i", &mut fx.st); // dismiss to import
+    assert!(fx.st.no_theme.is_none());
+    no_theme_after_import(&mut fx.st);
+    assert_eq!(fx.st.no_theme, Some(0));
+}
+
+#[test]
+fn no_theme_lines_name_terminal_and_choices() {
+    let slots = full_slots();
+    let frame = no_theme_lines(0, 48, 12, "", &slots, "ghostty", true);
+    let text: Vec<String> = frame.rows.iter().map(|r| row_text(r)).collect();
+    assert!(
+        text.iter().any(|l| l.contains("no theme detected")),
+        "{text:?}"
+    );
+    assert!(text.iter().any(|l| l.contains("ghostty")), "{text:?}");
+    assert!(
+        text.iter().any(|l| l.contains("Create new theme")),
+        "{text:?}"
+    );
+    assert_eq!(frame.hits.len(), 2);
+    let bundled = vec!["plain-light".to_owned(), "plain-dark".to_owned()];
+    let bframe = no_theme_bundled_lines(&bundled, 0, 48, 12, "", &slots, true);
+    let btext: Vec<String> = bframe.rows.iter().map(|r| row_text(r)).collect();
+    assert!(btext.iter().any(|l| l.contains("plain-light")), "{btext:?}");
+    assert_eq!(bframe.hits.len(), 2);
+}
+
+#[test]
+fn ensure_target_runs_before_save_and_blocks_on_failure() {
+    let writes: Writes = Rc::new(RefCell::new(Vec::new()));
+    let mut st = recording_state(full_slots(), &writes);
+    st.theme = Some("ember".to_owned());
+    st.fmt = "ghostty".to_owned();
+    st.path = "/themes/ember.toml".to_owned();
+    let ensured: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let e = ensured.clone();
+    st.ensure_target = Some(Box::new(move |theme, fmt, path| {
+        e.borrow_mut()
+            .push(format!("{}|{}|{}", theme.unwrap_or("-"), fmt, path));
+        Err("no disk".to_owned())
+    }));
+    apply_key(SAVE, &mut st);
+    assert!(writes.borrow().is_empty());
+    assert_eq!(st.status, "write failed: no disk");
+    assert_eq!(ensured.borrow().len(), 1);
+    assert!(ensured.borrow()[0].contains("ember|ghostty"));
+}

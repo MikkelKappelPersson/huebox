@@ -478,13 +478,13 @@ pub fn abandon(st: &mut ImportState) {
 
 /// Whether the import popup may open over this editor state.
 ///
-/// Popups never stack: the first-run choice, the picker and the overrides
-/// warning each own the surface while up, and a second `i` while any of
-/// them is up is a no-op. The shell also checks the import is not already
-/// open (`is_open`); opening is otherwise never blocked, not even by a
-/// dirty buffer.
+/// Popups never stack: the `no theme detected` choice, the first-run
+/// choice, the picker and the overrides warning each own the surface while
+/// up, and a second `i` while any of them is up is a no-op. The shell also
+/// checks the import is not already open (`is_open`); opening is otherwise
+/// never blocked, not even by a dirty buffer.
 pub fn import_may_open(st: &EditorState) -> bool {
-    st.setup.is_none() && st.overlay.is_none() && st.overrides.is_none()
+    st.no_theme.is_none() && st.setup.is_none() && st.overlay.is_none() && st.overrides.is_none()
 }
 
 /// One keypress against the import popup.

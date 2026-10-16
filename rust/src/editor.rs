@@ -42,7 +42,9 @@ pub mod state;
 
 pub use crate::render::frame::{editor_hints, slot_at, Hit};
 pub use dialogs::{
-    overrides_hits, overrides_lines, setup_hits, setup_lines, theme_hits, theme_lines, DialogFrame,
+    no_theme_bundled_hits, no_theme_bundled_lines, no_theme_hits, no_theme_lines, overrides_hits,
+    overrides_lines, setup_hits, setup_lines, theme_hits, theme_lines, DialogFrame,
+    NO_THEME_BUNDLED_HINTS, NO_THEME_CHOICES, NO_THEME_HINTS, NO_THEME_KEYS, NO_THEME_LABELS,
     OVERRIDES_CHOICES, OVERRIDES_HINTS, OVERRIDES_KEYS, OVERRIDES_LABELS, SETUP_CHOICES,
     SETUP_HINTS, SETUP_KEYS, SETUP_LABELS, SETUP_NAME_HINTS, SETUP_NAME_MAX, THEME_HINTS,
 };
@@ -55,12 +57,14 @@ pub use import::{
 };
 pub use keys::{apply_key, apply_state, save_state, setup_after_import, NEW_THEME_LABEL};
 pub use seams::{
-    ApplyFn, BackupFn, DeleteFn, ImportLibrary, ImportWriter, Library, OverridesReport, PromptFn,
-    WriteFn, WriteOutcome,
+    ApplyFn, BackupFn, DeleteFn, EnsureTargetFn, ImportLibrary, ImportWriter, Library,
+    OverridesReport, PromptFn, WriteFn, WriteOutcome,
 };
 pub use state::{
-    adjust_of, click_overrides, click_setup, click_slot, click_theme, enter_setup, head_label,
-    needs_setup, session_path, slot_index, slot_name, top_subject, EditorState, OverridesState,
+    adjust_of, click_no_theme, click_no_theme_bundled, click_overrides, click_setup, click_slot,
+    click_theme, enter_no_theme, enter_setup, head_label, needs_no_theme, needs_setup,
+    no_theme_after_import, session_path, slot_index, slot_name, top_subject, EditorState,
+    OverridesState,
 };
 pub use state::{
     is_hex, normalize_hex, report_session, SessionReport, APPLY_KEY, ARROWS, DIRTY_MARK,

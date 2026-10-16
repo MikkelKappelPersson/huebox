@@ -70,6 +70,15 @@ pub type DeleteFn = Box<dyn FnMut(&str) -> Result<String, String>>;
 /// `backup_made`. Best-effort: `false` never blocks a save.
 pub type BackupFn = Box<dyn FnMut(&str) -> bool>;
 
+/// Ensure the terminal config exists before a save or apply.
+///
+/// `ensure(theme, fmt, path)`: creates parent dirs plus an empty file
+/// when missing; for Ghostty with a theme it appends the `theme =`
+/// pointer when the file holds no colours, then the existing save/push
+/// path runs. `Ok(())` proceeds; `Err(msg)` fails the save/apply with
+/// `write failed: {msg}` / `apply failed: {msg}`, buffer untouched.
+pub type EnsureTargetFn = Box<dyn FnMut(Option<&str>, &str, &str) -> Result<(), String>>;
+
 /// One line of input: `prompt_hex` and `prompt_name` share the pattern.
 ///
 /// `None` cancels with the buffer and the library exactly as they were.

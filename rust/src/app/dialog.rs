@@ -38,6 +38,8 @@ pub const IMPORT_HINTS: [(&str, &str); 6] = [
 ];
 
 /// Dialog content widths, mirroring the `*Screen.DIALOG_W` clamps.
+pub const NO_THEME_DIALOG_W: usize = 48;
+/// Dialog content widths, mirroring the `*Screen.DIALOG_W` clamps.
 pub const SETUP_DIALOG_W: usize = 44;
 /// Dialog content widths, mirroring the `*Screen.DIALOG_W` clamps.
 pub const THEMES_DIALOG_W: usize = 44;
@@ -551,6 +553,15 @@ pub fn setup_pairs(naming: bool) -> &'static [(&'static str, &'static str)] {
         &SETUP_NAME_HINTS
     } else {
         &SETUP_HINTS
+    }
+}
+
+/// The footer pairs for a `no theme detected` dialog: bundled keys while picking.
+pub fn no_theme_pairs(picking: bool) -> &'static [(&'static str, &'static str)] {
+    if picking {
+        &crate::editor::NO_THEME_BUNDLED_HINTS
+    } else {
+        &crate::editor::NO_THEME_HINTS
     }
 }
 

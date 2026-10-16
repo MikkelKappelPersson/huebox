@@ -12,7 +12,9 @@ use crate::core::Slots;
 use crate::render::grid::{grid_geometry, Grid};
 use crate::render::palette::SLOTS;
 
-use crate::editor::seams::{ApplyFn, BackupFn, DeleteFn, Library, PromptFn, WriteFn};
+use crate::editor::seams::{
+    ApplyFn, BackupFn, DeleteFn, EnsureTargetFn, Library, PromptFn, WriteFn,
+};
 
 /// The slot selected on open and after a theme switch (`palette-5`).
 pub const INITIAL_SEL: usize = 5;
@@ -124,6 +126,18 @@ pub struct EditorState {
     pub overrides: Option<OverridesState>,
     /// Warning selection (`1` = keep: the safe default).
     pub overrides_index: usize,
+    /// No-target session: the terminal holds no colours, so the save/apply
+    /// path ensures the config before the existing push runs.
+    pub no_target: bool,
+    /// `no theme detected` choice while up (`None` closes it).
+    pub no_theme: Option<usize>,
+    /// Bundled picker cursor while listing bundled themes (`None`: choices).
+    pub no_theme_bundled: Option<usize>,
+    /// Bundled themes preloaded by the composition root: `(name, slots)`.
+    /// Data, not a seam — the bundle is static, so tests set it directly.
+    pub bundled: Vec<(String, Slots)>,
+    /// Ensure-target seam behind save/apply in no-target sessions.
+    pub ensure_target: Option<EnsureTargetFn>,
     /// The frame's shape, refreshed every frame.
     pub grid: Grid,
 }
@@ -163,6 +177,11 @@ impl EditorState {
             import_pending: false,
             overrides: None,
             overrides_index: 1,
+            no_target: false,
+            no_theme: None,
+            no_theme_bundled: None,
+            bundled: Vec::new(),
+            ensure_target: None,
             grid: grid_geometry(FALLBACK_COLS, "  "),
         }
     }
@@ -346,10 +365,11 @@ pub fn needs_setup(st: &EditorState) -> bool {
 
 /// Put the first-run choice up, when the library is empty.
 ///
-/// Returns whether it opened. Never over an open choice, picker or
-/// overrides warning; idempotent while the choice is up.
+/// Returns whether it opened. Never over an open no-theme choice, picker
+/// or overrides warning; idempotent while the choice is up.
 pub fn enter_setup(st: &mut EditorState) -> bool {
-    if st.setup.is_some() || st.overlay.is_some() || st.overrides.is_some() {
+    if st.setup.is_some() || st.no_theme.is_some() || st.overlay.is_some() || st.overrides.is_some()
+    {
         return st.setup.is_some();
     }
     if !needs_setup(st) {
@@ -394,6 +414,65 @@ pub fn click_setup(st: &mut EditorState, row: usize) {
 pub fn click_overrides(st: &mut EditorState, row: usize) {
     if st.overrides.is_some() && row < crate::editor::dialogs::OVERRIDES_CHOICES.len() {
         st.overrides_index = row;
+        crate::editor::keys::apply_key("\r", st);
+    }
+}
+
+/// Whether the `no theme detected` dialog is owed: a no-target session
+/// whose buffer holds no library theme yet.
+///
+/// Normal direct sessions (`no_target` false) never owe it — a `theme`
+/// of `None` there is the legacy direct mode, not an empty terminal.
+pub fn needs_no_theme(st: &EditorState) -> bool {
+    st.no_target && st.theme.is_none()
+}
+
+/// Put the `no theme detected` choice up, when a no-target session owes it.
+///
+/// Returns whether it opened. Never over an open no-theme choice, setup,
+/// picker or overrides warning; idempotent while the choice is up.
+pub fn enter_no_theme(st: &mut EditorState) -> bool {
+    if st.no_theme.is_some() || st.setup.is_some() || st.overlay.is_some() || st.overrides.is_some()
+    {
+        return st.no_theme.is_some();
+    }
+    if !needs_no_theme(st) {
+        return false;
+    }
+    st.no_theme = Some(0);
+    st.no_theme_bundled = None;
+    st.status.clear();
+    true
+}
+
+/// Re-arm the `no theme detected` dialog after the import popup closes
+/// still themeless.
+///
+/// The shell calls this when an import lands nothing in a no-target
+/// session: a session that grew a theme stays in the editor, where `t`
+/// opens it.
+pub fn no_theme_after_import(st: &mut EditorState) {
+    if st.no_theme.is_none() && needs_no_theme(st) {
+        enter_no_theme(st);
+    }
+}
+
+/// Click a `no theme detected` choice row: choose through the one key surface.
+pub fn click_no_theme(st: &mut EditorState, row: usize) {
+    if st.no_theme.is_some()
+        && st.no_theme_bundled.is_none()
+        && row < crate::editor::dialogs::NO_THEME_CHOICES.len()
+    {
+        st.no_theme = Some(row);
+        crate::editor::keys::apply_key("\r", st);
+    }
+}
+
+/// Click a bundled theme row: move the cursor there then confirm through
+/// the one key surface, so a click and Enter cannot diverge.
+pub fn click_no_theme_bundled(st: &mut EditorState, row: usize) {
+    if st.no_theme.is_some() && st.no_theme_bundled.is_some() && row < st.bundled.len() {
+        st.no_theme_bundled = Some(row);
         crate::editor::keys::apply_key("\r", st);
     }
 }

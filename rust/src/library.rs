@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 
 pub mod backend;
+pub mod bundled;
 pub mod detect;
 pub mod format;
 pub mod providers;

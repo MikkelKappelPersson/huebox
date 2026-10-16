@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 use crate::core::Slots;
 use crate::editor::import::ThemeId;
 use crate::editor::{
-    head_label, overrides_lines, session_path, setup_lines, theme_lines, top_subject, EditorState,
-    ImportState, ImportWriter,
+    head_label, no_theme_bundled_lines, no_theme_lines, overrides_lines, session_path, setup_lines,
+    theme_lines, top_subject, EditorState, ImportState, ImportWriter,
 };
 use crate::render::floor::backdrop;
 use crate::render::frame::{self, editor_hints, FrameOpts, Hit};
@@ -53,9 +53,10 @@ use crate::app::cells::{hex_color, render_rows};
 use crate::app::debug;
 use crate::app::dialog::{
     apply_import_thumb, clamp_width, dialog_block, dim_buffer, import_body, import_column_height,
-    import_count_text, import_cursor_y, import_preview, import_scrollbar, overrides_pairs,
-    popup_rect, setup_pairs, themes_pairs, IMPORT_DIALOG_MAX_H, IMPORT_DIALOG_W, IMPORT_HINTS,
-    IMPORT_LEFT_W, OVERRIDES_DIALOG_W, SETUP_DIALOG_W, THEMES_DIALOG_MAX_H, THEMES_DIALOG_W,
+    import_count_text, import_cursor_y, import_preview, import_scrollbar, no_theme_pairs,
+    overrides_pairs, popup_rect, setup_pairs, themes_pairs, IMPORT_DIALOG_MAX_H, IMPORT_DIALOG_W,
+    IMPORT_HINTS, IMPORT_LEFT_W, NO_THEME_DIALOG_W, OVERRIDES_DIALOG_W, SETUP_DIALOG_W,
+    THEMES_DIALOG_MAX_H, THEMES_DIALOG_W,
 };
 use crate::app::footer::{bar_line_single, bar_lines, fold_footer};
 use crate::app::panel::{
@@ -69,6 +70,8 @@ use crate::app::router::{route_key, Outcome, Screen};
 /// Which dialog the cached layout belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupKind {
+    /// Empty terminal choice.
+    NoTheme,
     /// First-run choice.
     Setup,
     /// Theme picker.
@@ -312,6 +315,8 @@ impl Shell {
     pub fn screen(&self) -> Screen {
         if self.import_open {
             Screen::Import
+        } else if self.state.no_theme.is_some() {
+            Screen::NoTheme
         } else if self.state.setup.is_some() {
             Screen::Setup
         } else if self.state.overrides.is_some() {
@@ -1206,6 +1211,55 @@ impl Shell {
         };
         let (kind, dlg_w, content, hits, ids, pairs): DialogBuild = match self.screen() {
             Screen::Editor => return,
+            Screen::NoTheme => {
+                let picking = self.state.no_theme_bundled.is_some();
+                let pairs = no_theme_pairs(picking).to_vec();
+                let dlg_w = clamp_width(NO_THEME_DIALOG_W, cols);
+                let budget = rows.saturating_sub(2 + bar_height(&pairs)).max(1);
+                if picking {
+                    let names: Vec<String> = self
+                        .state
+                        .bundled
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    let frame = no_theme_bundled_lines(
+                        &names,
+                        self.state.no_theme_bundled.unwrap_or(0),
+                        dlg_w,
+                        budget,
+                        &status,
+                        &slots,
+                        false,
+                    );
+                    (
+                        PopupKind::NoTheme,
+                        dlg_w,
+                        frame.rows,
+                        frame.hits,
+                        vec![],
+                        pairs,
+                    )
+                } else {
+                    let frame = no_theme_lines(
+                        self.state.no_theme.unwrap_or(0),
+                        dlg_w,
+                        budget,
+                        &status,
+                        &slots,
+                        &self.state.fmt,
+                        false,
+                    );
+                    (
+                        PopupKind::NoTheme,
+                        dlg_w,
+                        frame.rows,
+                        frame.hits,
+                        vec![],
+                        pairs,
+                    )
+                }
+            }
             Screen::Setup => {
                 let pairs = setup_pairs(self.state.setup_name.is_some()).to_vec();
                 let dlg_w = clamp_width(SETUP_DIALOG_W, cols);

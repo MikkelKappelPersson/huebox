@@ -26,12 +26,12 @@ use std::rc::Rc;
 use crate::app::Shell;
 use crate::core::Slots;
 use crate::editor::{
-    enter_setup, report_session, ApplyFn, BackupFn, DeleteFn, EditorState, ImportLibrary,
-    ImportWriter, Library, PromptFn, WriteFn, WriteOutcome,
+    enter_no_theme, enter_setup, report_session, ApplyFn, BackupFn, DeleteFn, EditorState,
+    EnsureTargetFn, ImportLibrary, ImportWriter, Library, PromptFn, WriteFn, WriteOutcome,
 };
 use crate::library::backend::RealBackend;
 use crate::library::format::{unknown_format, FormatStub};
-use crate::library::{detect, providers, themes, SlotMap, SLOTS};
+use crate::library::{bundled, detect, providers, themes, SlotMap, SLOTS};
 use crate::render::{banner, chrome, Row};
 use clap::Parser;
 
@@ -46,6 +46,9 @@ pub struct Target {
     pub path: PathBuf,
     /// Resolved colours.
     pub slots: SlotMap,
+    /// Empty-terminal session: no config holds colours, so the dialog
+    /// owns the surface and the save path ensures the config first.
+    pub no_target: bool,
 }
 
 /// Where a save pushes, from `--to` / `--format` / `--config` / `--no-push`.
@@ -386,6 +389,7 @@ fn theme_target(name: &str, err: &mut dyn Write) -> Option<Target> {
                 label: format!("theme {name}"),
                 path,
                 slots,
+                no_target: false,
             })
         }
         Err(error) => {
@@ -417,6 +421,27 @@ fn resolve_trio(
     (fmt, path, None)
 }
 
+/// Silent terminal attempt for `edit`: resolve + read, no error printed.
+/// `None` means the empty-terminal fallback owns the session, not an error.
+fn silent_terminal(fmt: Option<&str>, path: Option<&str>) -> Option<Target> {
+    let (fmt, path, error) = resolve_trio(fmt, path);
+    let (fmt, path) = match (fmt, path, error) {
+        (Some(fmt), Some(path), _) => (fmt, path),
+        _ => return None,
+    };
+    let slots = RealBackend::read(&fmt, &path);
+    if slots.is_empty() {
+        return None;
+    }
+    Some(Target {
+        theme: None,
+        label: fmt,
+        path,
+        slots,
+        no_target: false,
+    })
+}
+
 /// The v1 subject: the resolved terminal config and its colours.
 fn terminal_target(fmt: Option<&str>, path: Option<&str>, err: &mut dyn Write) -> Option<Target> {
     let (fmt, path, error) = resolve_trio(fmt, path);
@@ -441,10 +466,43 @@ fn terminal_target(fmt: Option<&str>, path: Option<&str>, err: &mut dyn Write) -
         label: fmt,
         path,
         slots,
+        no_target: false,
     })
 }
 
-/// `edit [name]`: a named theme, the current one, or direct mode.
+/// Direct-mode target for `edit` with no usable theme: explicit
+/// `--format`/`--config` resolve strictly; otherwise the probed terminal
+/// resolves strictly (empty means its own no-target popup, never another
+/// terminal's config); only unprobed fallback scans every terminal for
+/// colours before the empty-terminal fallback.
+fn edit_direct_target(cli: &Cli) -> Target {
+    if cli.format.is_some() || cli.config.is_some() {
+        if let Some(target) = silent_terminal(cli.format.as_deref(), cli.config.as_deref()) {
+            return target;
+        }
+        return no_target_fallback(cli);
+    }
+    let (detected, probed) = detect::detected::<RealBackend>();
+    if probed {
+        if let Some(target) = silent_terminal(Some(detected.as_str()), None) {
+            return target;
+        }
+        return Target {
+            theme: None,
+            label: detected.clone(),
+            path: detect::default_config_path(&detected),
+            slots: themes::ramp_slots(),
+            no_target: true,
+        };
+    }
+    if let Some(target) = silent_terminal(None, None) {
+        return target;
+    }
+    no_target_fallback(cli)
+}
+
+/// `edit [name]`: a named theme, the current one, direct mode, or the
+/// empty-terminal fallback (always opens, never errors).
 fn edit_target(cli: &Cli, name: Option<&str>, err: &mut dyn Write) -> Option<Target> {
     if let Some(name) = name {
         return theme_target(name, err);
@@ -458,7 +516,7 @@ fn edit_target(cli: &Cli, name: Option<&str>, err: &mut dyn Write) -> Option<Tar
                      (huebox use <name> to pick one)",
                 );
             }
-            terminal_target(cli.format.as_deref(), cli.config.as_deref(), err)
+            Some(edit_direct_target(cli))
         }
         Some(current) => {
             let missing = themes::theme_path(&current)
@@ -472,7 +530,7 @@ fn edit_target(cli: &Cli, name: Option<&str>, err: &mut dyn Write) -> Option<Tar
                          editing the terminal config directly"
                     ),
                 );
-                return terminal_target(cli.format.as_deref(), cli.config.as_deref(), err);
+                return Some(edit_direct_target(cli));
             }
             theme_target(&current, err)
         }
@@ -572,12 +630,14 @@ impl Library for CliLibrary {
 }
 
 /// Local dirs `provider` reads, in order: shipped first, user last.
+///
+/// Ghostty's shipped dir comes from `detect::ghostty_resources_dir`, so the
+/// macOS app-bundle path works without an env override — an unset
+/// `GHOSTTY_RESOURCES_DIR` still finds the bundled themes.
 pub fn provider_dirs(provider: &str) -> Vec<PathBuf> {
     if provider == "ghostty" {
-        let resources = std::env::var("GHOSTTY_RESOURCES_DIR")
-            .unwrap_or_else(|_| "/usr/share/ghostty".to_owned());
         return vec![
-            PathBuf::from(resources).join("themes"),
+            detect::ghostty_resources_dir().join("themes"),
             detect::ghostty_themes_dir(),
         ];
     }
@@ -610,6 +670,15 @@ impl CliImportLibrary {
 
 impl ImportLibrary for CliImportLibrary {
     fn entries(&self, provider: &str) -> Vec<(String, String)> {
+        if provider == "bundled" {
+            return bundled::list()
+                .into_iter()
+                .map(|name| {
+                    let path = format!("bundled:{name}");
+                    (name, path)
+                })
+                .collect();
+        }
         let (entries, file_notes) =
             match providers::list_themes::<RealBackend>(provider, Some(&provider_dirs(provider))) {
                 Ok(listing) => listing,
@@ -630,6 +699,14 @@ impl ImportLibrary for CliImportLibrary {
     }
 
     fn read(&self, provider: &str, path: &str) -> Option<Slots> {
+        if provider == "bundled" {
+            let name = path.strip_prefix("bundled:").unwrap_or(path);
+            let slots = bundled::read(name)?;
+            if slots.is_empty() {
+                return None;
+            }
+            return Some(to_slots(&slots));
+        }
         let slots = providers::read_theme::<RealBackend>(provider, Path::new(path)).ok()?;
         if slots.is_empty() {
             return None;
@@ -638,6 +715,9 @@ impl ImportLibrary for CliImportLibrary {
     }
 
     fn format_of(&self, provider: &str) -> String {
+        if provider == "bundled" {
+            return "bundled".to_owned();
+        }
         providers::known(provider)
             .map(|def| def.format.to_owned())
             .unwrap_or_else(|_| provider.to_owned())
@@ -651,6 +731,188 @@ pub fn import_writer() -> ImportWriter {
             .map(|_| ())
             .map_err(|error| error.0)
     })
+}
+
+/// Which terminal a no-target session belongs to: explicit `--format`
+/// wins, else the filename when `--config` names a known one, else the
+/// first known name in detect order (ghostty on an empty env).
+fn no_target_fmt(cli: &Cli) -> String {
+    if let Some(fmt) = cli.format.clone() {
+        return fmt;
+    }
+    if let Some(explicit) = cli.config.as_deref() {
+        let expanded = detect::expanduser(explicit);
+        if let Some(inferred) = detect::infer_format::<RealBackend>(Path::new(&expanded)) {
+            return inferred;
+        }
+    }
+    for name in detect::detect_order::<RealBackend>() {
+        if RealBackend::format_names().contains(&name.as_str()) {
+            return name;
+        }
+    }
+    "ghostty".to_owned()
+}
+
+/// Where a no-target save ensures: explicit `--config` wins (expanded),
+/// else the canonical default for the terminal.
+fn no_target_path(cli: &Cli, fmt: &str) -> PathBuf {
+    if let Some(explicit) = cli.config.as_deref() {
+        return PathBuf::from(detect::expanduser(explicit));
+    }
+    detect::default_config_path(fmt)
+}
+
+/// Fallback `Target` when no config holds colours: ramp buffer, terminal
+/// name known, config path known-or-default. Always opens, never errors.
+fn no_target_fallback(cli: &Cli) -> Target {
+    let fmt = no_target_fmt(cli);
+    let path = no_target_path(cli, &fmt);
+    Target {
+        theme: None,
+        label: fmt,
+        path,
+        slots: themes::ramp_slots(),
+        no_target: true,
+    }
+}
+
+/// Bundled themes preloaded for the `no theme detected` picker: data, not
+/// a seam — the bundle is static, so headless tests set the field directly.
+fn bundled_preload() -> Vec<(String, Slots)> {
+    bundled::list()
+        .into_iter()
+        .filter_map(|name| bundled::read(&name).map(|slots| (name, to_slots(&slots))))
+        .collect()
+}
+
+/// Populate an empty kitty/alacritty config with the theme's colours so
+/// the existing push finds something to splice. Ghostty needs no rows —
+/// the native export plus pointer is the push. Best-effort: a missing
+/// theme or a failed insert lets the push report instead.
+fn populate_empty_target(fmt: &str, path: &Path, theme: &str) {
+    if fmt == "ghostty" {
+        return;
+    }
+    if detect::config_holds_colours::<RealBackend>(fmt, path) {
+        return;
+    }
+    let Ok((slots, _)) = themes::load(theme) else {
+        return;
+    };
+    let _ = RealBackend::insert_missing(fmt, path, &slots);
+}
+
+/// Ensure the push target exists before a theme save/apply: when no
+/// resolved config holds colours, create the default (or explicit
+/// `--config`) file plus the Ghostty pointer (kitty/alacritty gain their
+/// rows via `populate_empty_target`), then the existing push path runs. A
+/// resolved target — colourless explicit file included — is ensured in
+/// place (pointer/rows appended when needed), never replaced by the
+/// default. Returns `Ok` when anything already holds colours.
+fn ensure_push_target(spec: &PushSpec, theme: &str) -> Result<(), String> {
+    // Explicit `--config`: ensure it in place (create + pointer when
+    // colourless), never the default. The file the user named is the file
+    // they mean, even when it holds no colours yet.
+    if let Some(explicit) = spec.path.clone() {
+        let expanded = detect::expanduser(&explicit.to_string_lossy());
+        let exp_path = PathBuf::from(expanded);
+        let fmt = spec
+            .fmt
+            .clone()
+            .or_else(|| spec.to.first().cloned())
+            .or_else(|| detect::infer_format::<RealBackend>(&exp_path))
+            .unwrap_or_else(|| {
+                detect::detect_order::<RealBackend>()
+                    .into_iter()
+                    .find(|n| RealBackend::format_names().contains(&n.as_str()))
+                    .unwrap_or_else(|| "ghostty".to_owned())
+            });
+        detect::ensure_config_file::<RealBackend>(&fmt, &exp_path, Some(theme)).map(|_| ())?;
+        populate_empty_target(&fmt, &exp_path, theme);
+        return Ok(());
+    }
+    // Named targets (`--to` / `--format`): any holding colours skips the
+    // ensure; otherwise the first wanted terminal gets the default file.
+    if !spec.to.is_empty() || spec.fmt.is_some() {
+        let mut wanted: Vec<String> = Vec::new();
+        for part in &spec.to {
+            for piece in part.split(',') {
+                let name = piece.trim().to_owned();
+                if !name.is_empty() && !wanted.contains(&name) {
+                    wanted.push(name);
+                }
+            }
+        }
+        if let Some(fmt) = spec.fmt.clone() {
+            if !wanted.contains(&fmt) {
+                wanted.push(fmt);
+            }
+        }
+        for fmt in &wanted {
+            let (found_fmt, found_path, _) =
+                detect::resolve_for_push::<RealBackend>(Some(fmt), None);
+            if let (Some(ff), Some(fp)) = (found_fmt, found_path) {
+                if !RealBackend::read(&ff, &fp).is_empty()
+                    || detect::config_holds_colours::<RealBackend>(&ff, &fp)
+                {
+                    return Ok(());
+                }
+            }
+        }
+        let fmt = wanted
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "ghostty".to_owned());
+        let path = detect::default_config_path(&fmt);
+        detect::ensure_config_file::<RealBackend>(&fmt, &path, Some(theme)).map(|_| ())?;
+        populate_empty_target(&fmt, &path, theme);
+        return Ok(());
+    }
+    // Every terminal (`--to`/`--format`/`--config` all empty): anything
+    // holding colours skips the ensure, else the detected terminal gets
+    // the default file.
+    let (fmt, path, _) = detect::resolve_for_push::<RealBackend>(None, None);
+    if fmt.is_some() && path.is_some() {
+        return Ok(());
+    }
+    let fmt = detect::detect_order::<RealBackend>()
+        .into_iter()
+        .find(|n| RealBackend::format_names().contains(&n.as_str()))
+        .unwrap_or_else(|| "ghostty".to_owned());
+    let path = detect::default_config_path(&fmt);
+    detect::ensure_config_file::<RealBackend>(&fmt, &path, Some(theme)).map(|_| ())?;
+    populate_empty_target(&fmt, &path, theme);
+    Ok(())
+}
+
+/// Ensure-target seam behind save/apply: direct sessions ensure the file
+/// the buffer writes (`state.path` is the terminal config there); theme
+/// sessions ensure the push target (never the theme file), then the
+/// existing save/push path runs. Refusals surface as write/apply
+/// failures; a `--no-push` truth-only session never touches the terminal.
+fn ensure_target_fn(spec: &PushSpec) -> EnsureTargetFn {
+    let spec = spec.clone();
+    Box::new(
+        move |theme: Option<&str>, fmt: &str, path: &str| -> Result<(), String> {
+            if spec.no_push && theme.is_some() {
+                return Ok(());
+            }
+            match theme {
+                None => {
+                    if fmt.is_empty() || path.is_empty() {
+                        return Ok(());
+                    }
+                    if !RealBackend::format_names().contains(&fmt) {
+                        return Ok(());
+                    }
+                    detect::ensure_config_file::<RealBackend>(fmt, Path::new(path), None)
+                        .map(|_| ())
+                }
+                Some(name) => ensure_push_target(&spec, name),
+            }
+        },
+    )
 }
 
 /// Pre-save snapshot: `<path>.huebox.bak`. Best-effort, never blocks a save.
@@ -707,10 +969,16 @@ pub fn run_editor(
     let notes: Rc<RefCell<Vec<String>>> = Rc::default();
     let failed: Rc<RefCell<bool>> = Rc::default();
     let direct_fmt = target.label.clone();
-    let label = spec
-        .fmt
-        .clone()
-        .unwrap_or_else(|| spec.to.first().cloned().unwrap_or_default());
+    let label = if target.no_target {
+        spec.fmt
+            .clone()
+            .or_else(|| spec.to.first().cloned())
+            .unwrap_or_else(|| target.label.clone())
+    } else {
+        spec.fmt
+            .clone()
+            .unwrap_or_else(|| spec.to.first().cloned().unwrap_or_default())
+    };
 
     let direct_fmt_write = direct_fmt.clone();
     let write = {
@@ -870,22 +1138,36 @@ pub fn run_editor(
     state.apply = Some(apply);
     state.delete_overrides = Some(delete_overrides);
     state.backup = Some(backup_fn());
+    state.ensure_target = Some(ensure_target_fn(spec));
     state.prompt_hex = Some(prompt_hex);
     state.prompt_name = Some(prompt_name);
     state.theme = target.theme.clone();
     state.fmt = label;
     state.path = target.path.to_string_lossy().into_owned();
     state.library = Some(Box::new(CliLibrary::shared(&notes)));
+    state.no_target = target.no_target;
+    state.bundled = bundled_preload();
     if target.theme.is_none() {
         state.backup_path = Some(target.path.to_string_lossy().into_owned());
     }
-    // An empty library opens on the first-run choice instead of an
-    // editor with nothing to save to — chosen before a colour key fires.
-    enter_setup(&mut state);
+    if target.no_target {
+        // Empty terminal: the `no theme detected` dialog owns the surface,
+        // with bundled create and import as the ways out.
+        enter_no_theme(&mut state);
+    } else {
+        // An empty library opens on the first-run choice instead of an
+        // editor with nothing to save to — chosen before a colour key fires.
+        enter_setup(&mut state);
+    }
 
-    let order: Vec<String> = providers::PROVIDER_NAMES
+    let order: Vec<String> = ["bundled"]
         .iter()
         .map(|name| name.to_string())
+        .chain(
+            providers::PROVIDER_NAMES
+                .iter()
+                .map(|name| name.to_string()),
+        )
         .collect();
     let import = crate::editor::ImportState::new(
         order,
@@ -1035,6 +1317,7 @@ fn cmd_new(
             label: format!("theme {name}"),
             path: theme_path.clone(),
             slots: loaded,
+            no_target: false,
         },
         spec,
         out,

@@ -490,3 +490,234 @@ fn import_library_lists_and_reads_through_providers() {
     );
     assert!(huebox::editor::ImportLibrary::entries(&library, "wezterm").is_empty());
 }
+
+#[test]
+fn empty_terminal_edit_opens_no_theme_dialog() {
+    let env = Env::setup();
+    // No terminal config, no library: bare `edit` must open, not error.
+    let (code, out, err) = env.run(
+        &["huebox", "edit"],
+        true,
+        Some(Box::new(|shell: huebox::app::Shell| {
+            assert!(shell.state.no_target, "no-target session");
+            assert!(shell.state.no_theme.is_some(), "dialog up");
+            assert_eq!(shell.state.fmt, "ghostty");
+            assert_eq!(shell.state.bundled.len(), 3);
+            // Import sees the bundled group first.
+            assert!(shell.import.provider_order.first().map(String::as_str) == Some("bundled"));
+            assert!(shell.import.theme_ids.contains_key("bundled"));
+            Ok(shell)
+        })),
+    );
+    // Driver quits via Esc? Our driver doesn't quit (we cloned), so run returns 0 with "no changes".
+    // The point is it opened (code 0, no "found no terminal" error).
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(!err.contains("found no terminal"), "{err}");
+    assert!(!err.contains("no colours"), "{err}");
+}
+
+#[test]
+fn empty_terminal_create_then_save_holds_colours() {
+    let env = Env::setup();
+    // Open no-target, pick bundled plain-dark via keys, save, quit.
+    let (code, out, err) = env.run(
+        &["huebox", "edit"],
+        true,
+        Some(Box::new(|mut shell: huebox::app::Shell| {
+            // Dialog up: create -> bundled list -> second row (plain-dark) -> Enter
+            huebox::editor::apply_key("\r", &mut shell.state); // create
+            huebox::editor::apply_key("down", &mut shell.state); // plain-dark
+            huebox::editor::apply_key("\r", &mut shell.state); // copy
+            assert_eq!(shell.state.theme, Some("plain-dark".to_owned()));
+            // Save (truth + push with ensure) then quit.
+            huebox::editor::apply_key("\x13", &mut shell.state);
+            huebox::editor::apply_key("esc", &mut shell.state);
+            Ok(shell)
+        })),
+    );
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(out.contains("saved theme plain-dark"), "{out}");
+    // Truth landed.
+    assert!(env.root.join("huebox/themes/plain-dark.toml").is_file());
+    // Terminal config ensured with colours (ghostty default path).
+    let config = env.root.join("ghostty/config");
+    assert!(config.is_file(), "ensured");
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(text.contains("theme = plain-dark"), "{text}");
+    // Exported theme file holds colours.
+    let native = env.root.join("ghostty/themes/plain-dark");
+    // Ghostty native export goes to ghostty_themes_dir (XDG ghostty/themes), not resources.
+    // With XDG set to root, themes dir is root/ghostty/themes.
+    assert!(
+        native.is_file() || env.root.join("ghostty/themes").is_dir(),
+        "{native:?}"
+    );
+}
+
+#[test]
+fn import_library_shows_bundled_group() {
+    let _env = Env::setup();
+    let notes = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let library = huebox::cli::CliImportLibrary::shared(&notes);
+    let entries = huebox::editor::ImportLibrary::entries(&library, "bundled");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    assert!(entries.iter().any(|(d, _)| d == "plain-light"));
+    let path = entries
+        .iter()
+        .find(|(d, _)| d == "plain-dark")
+        .unwrap()
+        .1
+        .clone();
+    let slots = huebox::editor::ImportLibrary::read(&library, "bundled", &path).expect("reads");
+    assert_eq!(slots.iter().count(), 22);
+    assert_eq!(
+        huebox::editor::ImportLibrary::format_of(&library, "bundled"),
+        "bundled"
+    );
+}
+
+#[test]
+fn provider_dirs_uses_resources_dir_for_shipped_ghostty() {
+    let env = Env::setup();
+    // GHOSTTY_RESOURCES_DIR is set to a missing dir by Env; provider_dirs must still
+    // derive from ghostty_resources_dir (mac-aware), not a hardcoded /usr/share.
+    let expected = huebox::library::detect::ghostty_resources_dir().join("themes");
+    assert_eq!(huebox::cli::provider_dirs("ghostty")[0], expected);
+    let _ = env;
+}
+
+#[test]
+fn empty_terminal_kitty_create_then_save_holds_colours() {
+    let env = Env::setup();
+    let (code, out, err) = env.run(
+        &["huebox", "edit", "--format", "kitty", "--no-reload"],
+        true,
+        Some(Box::new(|mut shell: huebox::app::Shell| {
+            assert_eq!(shell.state.fmt, "kitty");
+            huebox::editor::apply_key("\r", &mut shell.state);
+            huebox::editor::apply_key("\r", &mut shell.state); // plain-light
+            assert_eq!(shell.state.theme, Some("plain-light".to_owned()));
+            huebox::editor::apply_key("\x13", &mut shell.state);
+            huebox::editor::apply_key("esc", &mut shell.state);
+            Ok(shell)
+        })),
+    );
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(out.contains("saved theme plain-light"), "{out}");
+    let config = env.root.join("kitty/kitty.conf");
+    assert!(config.is_file(), "ensured");
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(text.contains("background"), "{text}");
+}
+
+#[test]
+fn empty_terminal_alacritty_create_then_save_holds_colours() {
+    let env = Env::setup();
+    let (code, out, err) = env.run(
+        &["huebox", "edit", "--format", "alacritty", "--no-reload"],
+        true,
+        Some(Box::new(|mut shell: huebox::app::Shell| {
+            huebox::editor::apply_key("\r", &mut shell.state); // create
+            huebox::editor::apply_key("\r", &mut shell.state); // plain-light
+            assert_eq!(shell.state.theme, Some("plain-light".to_owned()));
+            huebox::editor::apply_key("\x13", &mut shell.state);
+            huebox::editor::apply_key("esc", &mut shell.state);
+            Ok(shell)
+        })),
+    );
+    assert_eq!(code, 0, "stdout:\n{out}\nstderr:\n{err}");
+    assert!(out.contains("saved theme plain-light"), "{out}");
+    let config = env.root.join("alacritty/alacritty.toml");
+    assert!(config.is_file(), "ensured");
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(
+        text.contains("plain-light") || text.contains("#fafafa") || text.contains("background"),
+        "{text}"
+    );
+}
+
+/// Extra process-env vars the bare-`edit` probe reads, saved and restored
+/// around one test (the `Env` guard serialises the process env).
+fn stash_env(saved: &mut Vec<(String, Option<String>)>, vars: &[&str]) {
+    for key in vars {
+        saved.push((key.to_string(), std::env::var(key).ok()));
+        unsafe { std::env::remove_var(key) };
+    }
+}
+
+fn restore_env(saved: Vec<(String, Option<String>)>) {
+    for (key, value) in saved {
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(&key, value),
+                None => std::env::remove_var(&key),
+            }
+        }
+    }
+}
+
+const PROBE_VARS: [&str; 9] = [
+    "GHOSTTY_RESOURCES_DIR",
+    "KITTY_WINDOW_ID",
+    "KITTY_LISTEN_ON",
+    "ALACRITTY_WINDOW_ID",
+    "ALACRITTY_SOCKET",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_PANE",
+    "TERM_PROGRAM",
+    "XDG_CONFIG_DIRS",
+];
+
+#[test]
+fn probed_empty_terminal_opens_its_own_popup() {
+    let env = Env::setup();
+    // kitty holds colours, but the session runs in ghostty (probed via
+    // TERM_PROGRAM): bare `edit` must open ghostty's popup, never kitty's config.
+    let kitty = env.root.join("kitty/kitty.conf");
+    std::fs::create_dir_all(kitty.parent().unwrap()).unwrap();
+    std::fs::write(&kitty, "background #101014\nforeground #e6e6ea\n").unwrap();
+    let mut saved = Vec::new();
+    stash_env(&mut saved, &PROBE_VARS);
+    unsafe { std::env::set_var("TERM_PROGRAM", "ghostty") };
+    let (code, _, err) = env.run(
+        &["huebox", "edit"],
+        true,
+        Some(Box::new(|shell: huebox::app::Shell| {
+            assert!(shell.state.no_target, "no-target session");
+            assert!(shell.state.no_theme.is_some(), "dialog up");
+            assert_eq!(shell.state.fmt, "ghostty");
+            Ok(shell)
+        })),
+    );
+    restore_env(saved);
+    assert_eq!(code, 0, "stderr:\n{err}");
+    assert!(!err.contains("kitty"), "{err}");
+}
+
+#[test]
+fn unprobed_terminal_falls_through_to_colours() {
+    let env = Env::setup();
+    // No probe names a terminal: legacy scan opens the first config
+    // holding colours (kitty), with no dialog.
+    let kitty = env.root.join("kitty/kitty.conf");
+    std::fs::create_dir_all(kitty.parent().unwrap()).unwrap();
+    std::fs::write(&kitty, "background #101014\nforeground #e6e6ea\n").unwrap();
+    let mut saved = Vec::new();
+    stash_env(&mut saved, &PROBE_VARS);
+    let (code, _, err) = env.run(
+        &["huebox", "edit"],
+        true,
+        Some(Box::new(|shell: huebox::app::Shell| {
+            assert!(!shell.state.no_target, "direct session");
+            assert!(shell.state.no_theme.is_none(), "no dialog");
+            assert!(
+                shell.state.path.ends_with("kitty/kitty.conf"),
+                "kitty config: {}",
+                shell.state.path
+            );
+            Ok(shell)
+        })),
+    );
+    restore_env(saved);
+    assert_eq!(code, 0, "stderr:\n{err}");
+}

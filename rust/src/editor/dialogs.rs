@@ -1,5 +1,5 @@
-//! The three small popups as pure cell rows: themes, first-run setup,
-//! Ghostty overrides warning.
+//! The small popups as pure cell rows: themes, first-run setup,
+//! `no theme detected`, Ghostty overrides warning.
 //!
 //! Rust port of `theme_lines` / `setup_lines` / `overrides_lines` in
 //! `huebox/editor.py`. Where the Python builds ANSI strings, these build
@@ -52,6 +52,24 @@ pub const SETUP_NAME_HINTS: [(&str, &str); 3] =
 /// digits, `-` and `_`, 64 max) — the editor never imports themes, so the
 /// number is pinned here and the writer still has the last word.
 pub const SETUP_NAME_MAX: usize = 64;
+
+/// Empty terminal: the two ways out when no config holds colours.
+pub const NO_THEME_CHOICES: [&str; 2] = ["create", "import"];
+/// Choice labels.
+pub const NO_THEME_LABELS: [&str; 2] = ["Create new theme", "Import themes"];
+/// Each choice's direct spelling.
+pub const NO_THEME_KEYS: [&str; 2] = ["c", "i"];
+/// The choice footer.
+pub const NO_THEME_HINTS: [(&str, &str); 5] = [
+    ("arrows", "move"),
+    ("Enter", "choose"),
+    ("c", "create"),
+    ("i", "import"),
+    ("Esc", "quit"),
+];
+/// The footer while picking a bundled theme.
+pub const NO_THEME_BUNDLED_HINTS: [(&str, &str); 3] =
+    [("arrows", "move"), ("Enter", "use"), ("Esc", "back")];
 
 /// Ghostty overrides: `delete` removes the shadowing lines so the theme
 /// shows, `keep` leaves them. Index 1 (`keep`) is the safe default.
@@ -347,6 +365,186 @@ pub fn setup_lines(
 /// Every setup row as `Hit`s whose `slot` is the choice index.
 pub fn setup_hits(index: usize, cols: usize, rows: usize, status: &str, slots: &Slots) -> Vec<Hit> {
     setup_lines(index, cols, rows, status, slots, None, true).hits
+}
+
+/// One `no theme detected` row: `> label (key)`, the selected choice marked.
+fn no_theme_row(choice: usize, selected: bool, slots: &Slots) -> Row {
+    let mut row = plain("  ");
+    if selected {
+        row.extend(chrome_bold(">", "foreground", slots));
+        row.extend(plain(" "));
+    } else {
+        row.extend(plain("  "));
+    }
+    let mut text = if selected {
+        chrome_bold(
+            &format!("{}  ({})", NO_THEME_LABELS[choice], NO_THEME_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    } else {
+        chrome(
+            &format!("{}  ({})", NO_THEME_LABELS[choice], NO_THEME_KEYS[choice]),
+            "foreground",
+            slots,
+        )
+    };
+    row.append(&mut text);
+    row
+}
+
+/// The empty-terminal choice as a frame of rows: create or import.
+///
+/// `fmt` names the detected terminal in the subtitle, so the dialog says
+/// which config a save will ensure. Nothing else differs from the
+/// first-run shape: two choices, one footer, same dimmed-modal rule.
+#[allow(clippy::too_many_arguments)]
+pub fn no_theme_lines(
+    index: usize,
+    cols: usize,
+    rows: usize,
+    status: &str,
+    slots: &Slots,
+    fmt: &str,
+    footer: bool,
+) -> DialogFrame {
+    let index = index.min(NO_THEME_CHOICES.len() - 1);
+    let subtitle = if fmt.is_empty() {
+        "no theme detected - pick one to start".to_owned()
+    } else {
+        format!("no theme detected for {fmt} - pick one to start")
+    };
+    let mut out = vec![
+        header_row("no theme detected", slots),
+        vec![],
+        {
+            let mut row = plain("  ");
+            row.extend(chrome(&subtitle, CHROME_MUTED, slots));
+            row
+        },
+        vec![],
+    ];
+    let mut hits = Vec::new();
+    for (row, _) in NO_THEME_CHOICES.iter().enumerate() {
+        hits.push(Hit {
+            y: out.len(),
+            x0: 2,
+            x1: cols.saturating_sub(1),
+            slot: row,
+        });
+        out.push(no_theme_row(row, row == index, slots));
+    }
+    out.push(vec![]);
+    let footer_rows = if footer {
+        footer_rows(&NO_THEME_HINTS, cols, status, slots)
+    } else {
+        vec![]
+    };
+    out.extend(footer_rows.iter().cloned());
+    DialogFrame {
+        rows: trim_keep_footer(out, &footer_rows, rows, cols),
+        hits,
+    }
+}
+
+/// Every `no theme detected` row as `Hit`s whose `slot` is the choice index.
+pub fn no_theme_hits(
+    index: usize,
+    cols: usize,
+    rows: usize,
+    status: &str,
+    slots: &Slots,
+    fmt: &str,
+) -> Vec<Hit> {
+    no_theme_lines(index, cols, rows, status, slots, fmt, true).hits
+}
+
+/// One bundled row: `> name`, the selected theme marked.
+fn no_theme_bundled_row(name: &str, selected: bool, slots: &Slots) -> Row {
+    let mut row = plain("  ");
+    if selected {
+        row.extend(chrome_bold(">", "foreground", slots));
+        row.extend(plain(" "));
+    } else {
+        row.extend(plain("  "));
+    }
+    let mut text = if selected {
+        chrome_bold(name, "foreground", slots)
+    } else {
+        chrome(name, "foreground", slots)
+    };
+    row.append(&mut text);
+    row
+}
+
+/// The bundled picker as a frame of rows: the three shipped themes.
+///
+/// Enter copies the highlighted one into the library; Esc returns to the
+/// two choices. Same window, same marks, same footer rule as the theme
+/// picker.
+pub fn no_theme_bundled_lines(
+    names: &[String],
+    index: usize,
+    cols: usize,
+    rows: usize,
+    status: &str,
+    slots: &Slots,
+    footer: bool,
+) -> DialogFrame {
+    let mut out = vec![
+        header_row("create new", slots),
+        vec![],
+        {
+            let mut row = plain("  ");
+            row.extend(chrome(
+                "pick a bundled theme - Enter copies it",
+                CHROME_MUTED,
+                slots,
+            ));
+            row
+        },
+        vec![],
+    ];
+    let mut hits = Vec::new();
+    if names.is_empty() {
+        let mut row = plain("  ");
+        row.extend(chrome("no bundled themes", CHROME_MUTED, slots));
+        out.push(row);
+    } else {
+        let index = index.min(names.len() - 1);
+        for (row, name) in names.iter().enumerate() {
+            hits.push(Hit {
+                y: out.len(),
+                x0: 2,
+                x1: cols.saturating_sub(1),
+                slot: row,
+            });
+            out.push(no_theme_bundled_row(name, row == index, slots));
+        }
+    }
+    out.push(vec![]);
+    let footer_rows = if footer {
+        footer_rows(&NO_THEME_BUNDLED_HINTS, cols, status, slots)
+    } else {
+        vec![]
+    };
+    out.extend(footer_rows.iter().cloned());
+    DialogFrame {
+        rows: trim_keep_footer(out, &footer_rows, rows, cols),
+        hits,
+    }
+}
+
+/// Every bundled row as `Hit`s whose `slot` is the bundled index.
+pub fn no_theme_bundled_hits(
+    names: &[String],
+    index: usize,
+    cols: usize,
+    rows: usize,
+    status: &str,
+    slots: &Slots,
+) -> Vec<Hit> {
+    no_theme_bundled_lines(names, index, cols, rows, status, slots, true).hits
 }
 
 /// One overrides row: `> label (key)`, the selected choice marked.

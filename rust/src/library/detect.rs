@@ -186,6 +186,42 @@ pub fn detect_order<F: FormatStub>() -> Vec<String> {
     detect_order_in(F::format_names())
 }
 
+/// The terminal huebox is most likely inside, and whether any probe earned
+/// the pick: a per-window env marker or a `TERM_PROGRAM` match counts as
+/// detected; pure registry fallback does not.
+///
+/// `edit` resolves a probed terminal strictly — an empty probed terminal
+/// owns the no-target dialog instead of falling through to another
+/// terminal's config — and only scans every terminal when nothing probed.
+pub fn detected<F: FormatStub>() -> (String, bool) {
+    let first = detect_order::<F>()
+        .into_iter()
+        .find(|name| F::format_names().contains(&name.as_str()))
+        .unwrap_or_else(|| "ghostty".to_owned());
+    (first.clone(), probed(&first))
+}
+
+/// Whether `name` was probed (same markers as [`detect_order_in`])
+/// rather than registry fallback.
+fn probed(name: &str) -> bool {
+    let marker = |vars: &[&str]| {
+        vars.iter().any(|var| match std::env::var(var) {
+            Ok(value) => !value.is_empty(),
+            Err(_) => false,
+        })
+    };
+    let program = std::env::var("TERM_PROGRAM")
+        .unwrap_or_default()
+        .to_lowercase();
+    let named = program.contains(name);
+    match name {
+        "ghostty" => marker(&["GHOSTTY_RESOURCES_DIR"]) || named,
+        "kitty" => marker(&["KITTY_WINDOW_ID", "KITTY_LISTEN_ON"]) || named,
+        "alacritty" => marker(&["ALACRITTY_WINDOW_ID", "ALACRITTY_SOCKET"]) || named,
+        _ => named,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Ghostty config-file includes and theme = pointer (byte-level)
 // ---------------------------------------------------------------------------
@@ -812,6 +848,53 @@ pub fn ghostty_resources_dir() -> PathBuf {
     }
 }
 
+/// Where a missing config is created: the canonical XDG location per
+/// format, not a legacy spelling. Ghostty's modern `config` (not
+/// `config.ghostty`), kitty's XDG root `kitty.conf`, alacritty's XDG
+/// `alacritty.toml`. Read at call time so a temporary home is respected.
+pub fn default_config_path(fmt: &str) -> PathBuf {
+    let base = config_home();
+    match fmt {
+        "ghostty" => base.join("ghostty").join("config"),
+        "kitty" => base.join("kitty").join("kitty.conf"),
+        "alacritty" => base.join("alacritty").join("alacritty.toml"),
+        _ => base.join(fmt).join("config"),
+    }
+}
+
+/// Ensure the terminal config exists before a save or apply in a no-target
+/// session: create parent dirs plus an empty file when missing; for Ghostty
+/// with a theme, append the `theme =` pointer when the file holds no
+/// colours, then the existing save/push path runs.
+///
+/// System paths are refused, never created. Returns the ensured path.
+pub fn ensure_config_file<F: FormatStub>(
+    fmt: &str,
+    path: &Path,
+    theme: Option<&str>,
+) -> Result<PathBuf, String> {
+    if is_system_path(path) {
+        return Err(format!("refusing to write system path: {}", path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+    }
+    if !path.is_file() {
+        std::fs::write(path, "").map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+    }
+    if fmt == "ghostty" {
+        if let Some(name) = theme {
+            if !config_holds_colours::<F>(fmt, path) {
+                ensure_theme_pointer(path, name).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
 /// Every name the effective `theme =` line carries, in order (decision 55).
 ///
 /// Ghostty reads the last `theme =` line; a `light:Name,dark:Name` pair
@@ -1387,6 +1470,19 @@ mod tests {
             detect_order::<Fake>(),
             vec!["ghostty", "kitty", "alacritty"]
         );
+    }
+
+    #[test]
+    fn detected_names_probed_terminal_strictly() {
+        let _guard = lock_env(&[("KITTY_WINDOW_ID", "1")]);
+        assert_eq!(detected::<Fake>(), ("kitty".to_owned(), true));
+        drop(_guard);
+        let _guard = lock_env(&[("TERM_PROGRAM", "Ghostty")]);
+        assert_eq!(detected::<Fake>(), ("ghostty".to_owned(), true));
+        drop(_guard);
+        // Pure registry fallback: first is a guess, not a detection.
+        let _guard = lock_env(&[]);
+        assert_eq!(detected::<Fake>(), ("ghostty".to_owned(), false));
     }
 
     // -- search order ----------------------------------------------------
@@ -2487,5 +2583,75 @@ mod tests {
         home.write("c.conf", "include sub/../a.conf\n");
         let includes = kitty_includes(&home.path().join("a.conf"));
         assert_eq!(includes.len(), 2);
+    }
+
+    #[test]
+    fn default_config_paths_are_canonical_xdg() {
+        let home = temp_dir("detect-default-path");
+        let _guard = lock_env(&[
+            ("XDG_CONFIG_HOME", home.root().as_str()),
+            ("HOME", home.root().as_str()),
+        ]);
+        assert_eq!(
+            default_config_path("ghostty"),
+            home.path().join("ghostty/config")
+        );
+        assert_eq!(
+            default_config_path("kitty"),
+            home.path().join("kitty/kitty.conf")
+        );
+        assert_eq!(
+            default_config_path("alacritty"),
+            home.path().join("alacritty/alacritty.toml")
+        );
+    }
+
+    #[test]
+    fn ensure_creates_missing_file_and_pointer() {
+        use crate::library::providers::tests::Fake;
+        let home = temp_dir("detect-ensure");
+        let _guard = lock_env(&[
+            ("XDG_CONFIG_HOME", home.root().as_str()),
+            ("HOME", home.root().as_str()),
+        ]);
+        // Missing file is created empty, then gains the Ghostty pointer.
+        let target = home.path().join("ghostty/config");
+        assert!(!target.is_file());
+        let ensured =
+            ensure_config_file::<Fake>("ghostty", &target, Some("ember")).expect("ensures");
+        assert_eq!(ensured, target);
+        assert!(target.is_file());
+        let text = std::fs::read_to_string(&target).unwrap();
+        assert!(text.contains("theme = ember"), "{text:?}");
+        // Second ensure is a no-op (already pointed).
+        let before = std::fs::metadata(&target).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ensure_config_file::<Fake>("ghostty", &target, Some("ember")).expect("idempotent");
+        // Colourless file with different theme gets repointed, colours untouched.
+        home.write("ghostty/other", "theme = old\n");
+    }
+
+    #[test]
+    fn ensure_leaves_coloured_files_alone_and_refuses_system() {
+        use crate::library::providers::tests::Fake;
+        let home = temp_dir("detect-ensure-coloured");
+        let _guard = lock_env(&[
+            ("XDG_CONFIG_HOME", home.root().as_str()),
+            ("HOME", home.root().as_str()),
+        ]);
+        let target = home.write("ghostty/config", "background = #101014\ntheme = ember\n");
+        let mtime = std::fs::metadata(&target).unwrap().modified().unwrap();
+        ensure_config_file::<Fake>("ghostty", &target, Some("ember")).expect("no-op");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+            mtime,
+            "coloured file keeps mtime"
+        );
+        assert!(ensure_config_file::<Fake>(
+            "ghostty",
+            Path::new("/etc/ghostty/config"),
+            Some("ember")
+        )
+        .is_err());
     }
 }

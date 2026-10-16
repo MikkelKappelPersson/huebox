@@ -2,14 +2,15 @@
 //!
 //! Pure apart from disk and prompts: the injected `write` fires on Ctrl+S
 //! (the first save also snapshots `<path>.huebox.bak` through the
-//! injected backup seam), the injected `apply` fires on Ctrl+A, and
-//! `prompt_hex` / `prompt_name` answer one line each — so the key surface
-//! itself is testable without a terminal. Sets `st.quit` when the session
-//! is done: a clean Esc (or Ctrl+C) quits at once, a dirty one arms and
-//! takes a second press. An open first-run choice takes the whole surface
-//! first, an open overrides warning before that, and an open picker before
-//! the editor — so quitting and colour edits cannot happen behind any of
-//! them.
+//! injected backup seam, and the injected `ensure_target` ensures the
+//! terminal config first in no-target sessions), the injected `apply`
+//! fires on Ctrl+A, and `prompt_hex` / `prompt_name` answer one line each
+//! — so the key surface itself is testable without a terminal. Sets
+//! `st.quit` when the session is done: a clean Esc (or Ctrl+C) quits at
+//! once, a dirty one arms and takes a second press. An open `no theme
+//! detected` choice takes the whole surface first, then the first-run
+//! choice, the Ghostty warning, and the picker before the editor — so
+//! quitting and colour edits cannot happen behind any of them.
 
 use crate::core::{hex_to_rgb, hsv_to_rgb, rgb_to_hex, rgb_to_hsv, step_hsv};
 use crate::render::grid::move_slot;
@@ -29,6 +30,10 @@ pub const NEW_THEME_LABEL: &str = "  new theme name: ";
 /// `esc`, `\x13`, `\r`, …); anything unbound disarms a pending discard
 /// and clears the status, and nothing else.
 pub fn apply_key(key: &str, st: &mut EditorState) {
+    if st.no_theme.is_some() {
+        no_theme_key(key, st);
+        return;
+    }
     if st.setup.is_some() {
         setup_key(key, st);
         return;
@@ -113,7 +118,14 @@ pub fn save_state(st: &mut EditorState) {
         }
     }
     let theme = st.theme.clone();
+    let fmt = st.fmt.clone();
     let path = st.path.clone();
+    if let Some(ensure) = st.ensure_target.as_mut() {
+        if let Err(error) = ensure(theme.as_deref(), &fmt, &path) {
+            st.status = format!("write failed: {error}");
+            return;
+        }
+    }
     let slots = st.slots.clone();
     match (st.write)(theme.as_deref(), &path, &slots) {
         Err(error) => {
@@ -141,12 +153,19 @@ pub fn save_state(st: &mut EditorState) {
 /// push reporting Ghostty overrides arms the delete-or-keep popup; the
 /// buffer stays dirty either way.
 pub fn apply_state(st: &mut EditorState) {
+    let theme = st.theme.clone();
+    let fmt = st.fmt.clone();
+    let path = st.path.clone();
+    if let Some(ensure) = st.ensure_target.as_mut() {
+        if let Err(error) = ensure(theme.as_deref(), &fmt, &path) {
+            st.status = format!("apply failed: {error}");
+            return;
+        }
+    }
     let Some(apply) = &mut st.apply else {
         st.status = "nothing to apply".to_owned();
         return;
     };
-    let theme = st.theme.clone();
-    let path = st.path.clone();
     let slots = st.slots.clone();
     match apply(theme.as_deref(), &path, &slots) {
         Err(error) => {
@@ -690,5 +709,145 @@ fn setup_key(key: &str, st: &mut EditorState) {
 pub fn setup_after_import(st: &mut EditorState) {
     if st.setup.is_none() && needs_setup(st) {
         enter_setup(st);
+    }
+}
+
+// --------------------------------------------------------------------------
+// the `no theme detected` choice
+// --------------------------------------------------------------------------
+
+/// Choose on the `no theme detected` dialog: create lists bundled themes,
+/// import raises a pending import for the shell.
+///
+/// Import closes the choice and raises `import_pending` — the popup is the
+/// compositor's, so the state only asks for it, the same split the `i` key
+/// keeps. Create opens the inline bundled list instead of a prompt, so the
+/// theme is picked in the popup and the terminal is never handed back.
+fn no_theme_confirm(st: &mut EditorState) {
+    use crate::editor::dialogs::NO_THEME_CHOICES;
+    let choices = NO_THEME_CHOICES;
+    let at = st.no_theme.unwrap_or(0).min(choices.len() - 1);
+    if choices[at] == "import" {
+        st.no_theme = None;
+        st.no_theme_bundled = None;
+        st.import_pending = true;
+        st.status.clear();
+        return;
+    }
+    if st.bundled.is_empty() {
+        st.status = "no bundled themes".to_owned();
+        return;
+    }
+    st.no_theme_bundled = Some(0);
+    st.status.clear();
+}
+
+/// Enter on the bundled list: copy the highlighted bundle into the library
+/// and load it into the buffer.
+///
+/// No prompts — the name arrives picked, so this is the prompt-free half of
+/// `create_theme`: a taken name loads the existing theme instead of
+/// failing, and only a loaded theme adopts and closes. A refusal from the
+/// library stays in the list with the reason on the status line.
+fn no_theme_create(st: &mut EditorState) {
+    let at = st.no_theme_bundled.unwrap_or(0);
+    let Some((name, slots)) = st.bundled.get(at).cloned() else {
+        st.status = "no bundled themes".to_owned();
+        return;
+    };
+    let Some(library) = &st.library else {
+        st.status = "no theme library in this session".to_owned();
+        return;
+    };
+    match library.create(&name, &slots, false) {
+        Ok(path) => {
+            adopt(st, &name, &slots, &path);
+            st.created = Some(name.clone());
+            st.no_theme = None;
+            st.no_theme_bundled = None;
+            st.status = format!("created {name} - current now");
+        }
+        Err(problem) if problem.contains("already exists") => match library.load(&name) {
+            Some((loaded, path)) => {
+                adopt(st, &name, &loaded, &path);
+                st.no_theme = None;
+                st.no_theme_bundled = None;
+                st.status = format!("{name} already in library - current now");
+            }
+            None => {
+                st.status = problem;
+            }
+        },
+        Err(problem) => {
+            st.status = problem;
+        }
+    }
+}
+
+/// Quit or close the `no theme detected` dialog.
+///
+/// Closing quits the session when the library is still empty — there is no
+/// editor behind the choice to return to — and otherwise puts the editor
+/// back, where `t` opens the library.
+fn no_theme_quit(st: &mut EditorState) {
+    let empty = match &st.library {
+        None => true,
+        Some(library) => library.names().is_empty(),
+    };
+    st.no_theme = None;
+    st.no_theme_bundled = None;
+    if empty {
+        st.quit = true;
+    }
+    st.status.clear();
+}
+
+/// Keys while picking a bundled theme: a three-row list, typed nowhere.
+///
+/// Arrows move, Enter copies, Esc backs out to the two choices. Everything
+/// else is swallowed: the list has no cursor to move and no edit to guard.
+fn no_theme_bundled_key(key: &str, st: &mut EditorState) {
+    let len = st.bundled.len();
+    st.status.clear();
+    if key == "up" || key == "left" {
+        st.no_theme_bundled = Some(st.no_theme_bundled.unwrap_or(0).saturating_sub(1));
+    } else if key == "down" || key == "right" {
+        st.no_theme_bundled =
+            Some((st.no_theme_bundled.unwrap_or(0) + 1).min(len.saturating_sub(1)));
+    } else if ENTER_KEYS.contains(&key) {
+        no_theme_create(st);
+    } else if key == "esc" || key == "escape" {
+        st.no_theme_bundled = None;
+    }
+}
+
+/// Keys while the `no theme detected` choice is up: it owns the surface.
+///
+/// Nothing else can fire — no colour changes, no save, no picker, no quit
+/// behind the choice — so a key meant for the editor cannot do damage
+/// before the session has a theme. While picking (the bundled list), keys
+/// go to the list instead.
+fn no_theme_key(key: &str, st: &mut EditorState) {
+    use crate::editor::dialogs::NO_THEME_CHOICES;
+    st.armed = false;
+    if st.no_theme_bundled.is_some() {
+        no_theme_bundled_key(key, st);
+        return;
+    }
+    st.status.clear();
+    if key == "up" || key == "left" {
+        st.no_theme = Some(st.no_theme.unwrap_or(0).saturating_sub(1));
+    } else if key == "down" || key == "right" {
+        st.no_theme = Some((st.no_theme.unwrap_or(0) + 1).min(NO_THEME_CHOICES.len() - 1));
+    } else if ENTER_KEYS.contains(&key) {
+        no_theme_confirm(st);
+    } else if key == "c" || key == "C" {
+        st.no_theme = Some(0);
+        no_theme_confirm(st);
+    } else if key == "i" || key == "I" {
+        st.no_theme = Some(1);
+        no_theme_confirm(st);
+    } else if QUIT_KEYS.contains(&key) {
+        no_theme_quit(st);
     }
 }

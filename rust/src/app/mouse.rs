@@ -26,7 +26,8 @@
 //! stored geometry drifts from the paint.
 
 use crate::editor::{
-    click_overrides, click_setup, click_slot, click_theme, slot_at, wheel as import_wheel,
+    click_no_theme, click_no_theme_bundled, click_overrides, click_setup, click_slot, click_theme,
+    slot_at, wheel as import_wheel,
 };
 
 use crate::app::router::{route_key, settle, Outcome, Screen};
@@ -36,7 +37,9 @@ use crate::app::shell::{PopupKind, Shell};
 pub fn click_at(shell: &mut Shell, x: usize, y: usize) -> Outcome {
     match shell.screen() {
         Screen::Import => click_import(shell, x, y),
-        Screen::Setup | Screen::Themes | Screen::Overrides => click_dialog(shell, x, y),
+        Screen::NoTheme | Screen::Setup | Screen::Themes | Screen::Overrides => {
+            click_dialog(shell, x, y)
+        }
         Screen::Editor => click_editor(shell, x, y),
     }
 }
@@ -151,6 +154,13 @@ fn click_dialog(shell: &mut Shell, x: usize, y: usize) -> Outcome {
         return Outcome::Continue; // border/chrome: selects nothing
     };
     match layout.kind {
+        PopupKind::NoTheme => {
+            if shell.state.no_theme_bundled.is_some() {
+                click_no_theme_bundled(&mut shell.state, target);
+            } else {
+                click_no_theme(&mut shell.state, target);
+            }
+        }
         PopupKind::Setup => click_setup(&mut shell.state, target),
         PopupKind::Themes => click_theme(&mut shell.state, target),
         PopupKind::Overrides => click_overrides(&mut shell.state, target),
@@ -184,7 +194,7 @@ pub fn wheel(shell: &mut Shell, delta: i32) -> Outcome {
             import_wheel(&mut shell.import, delta);
             Outcome::Continue
         }
-        Screen::Themes => {
+        Screen::Themes | Screen::NoTheme => {
             let key = if delta > 0 { "down" } else { "up" };
             route_key(shell, key)
         }

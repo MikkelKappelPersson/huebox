@@ -14,8 +14,8 @@
 //! the import popup after dismiss so modals never stack).
 
 use crate::editor::{
-    apply_key, confirm_import, handle_key, import_may_open, open_import, setup_after_import,
-    ConfirmOutcome,
+    apply_key, confirm_import, handle_key, import_may_open, no_theme_after_import, open_import,
+    setup_after_import, ConfirmOutcome,
 };
 
 use crate::app::shell::Shell;
@@ -34,6 +34,8 @@ pub enum Outcome {
 pub enum Screen {
     /// The import popup (`is_open` interlock).
     Import,
+    /// The empty-terminal choice (`no_theme.is_some()`).
+    NoTheme,
     /// The first-run choice (`setup.is_some()`).
     Setup,
     /// The Ghostty warning (`overrides.is_some()`).
@@ -44,8 +46,9 @@ pub enum Screen {
     Editor,
 }
 
-/// Post-input routing shared by keys and clicks: quit exits, and a setup
-/// import choice opens the import popup after dismiss — never stacked.
+/// Post-input routing shared by keys and clicks: quit exits, and a
+/// no-theme/setup import choice opens the import popup after dismiss —
+/// never stacked.
 pub fn settle(shell: &mut Shell) -> Outcome {
     if shell.state.quit {
         return Outcome::Quit;
@@ -85,6 +88,12 @@ pub fn route_key(shell: &mut Shell, key: &str) -> Outcome {
             return settle(shell);
         }
     }
+    if shell.state.no_theme.is_some() {
+        // The empty-terminal popup owns the surface: every key goes to the
+        // one key surface, which routes outcomes from the state.
+        apply_key(key, &mut shell.state);
+        return settle(shell);
+    }
     if shell.state.setup.is_some() {
         // The first-run popup owns the surface: every key goes to the one
         // key surface, which routes outcomes from the state.
@@ -123,11 +132,12 @@ fn import_key(shell: &mut Shell, key: &str) -> Outcome {
         "close" => {
             // Abandoned (Esc/`i`/Ctrl+C): buffer and status untouched.
             // `handle_key` already closed the state; the shell drops the
-            // interlock and re-arms the first-run choice when the library
-            // is still empty — a library that landed themes stays in the
-            // editor, where `t` opens them.
+            // interlock and re-arms the empty-terminal or first-run choice
+            // when the session is still themeless — a session that landed
+            // themes stays in the editor, where `t` opens them.
             shell.import_open = false;
             shell.import_scroll = None;
+            no_theme_after_import(&mut shell.state);
             setup_after_import(&mut shell.state);
             Outcome::Continue
         }
@@ -169,8 +179,27 @@ fn confirm_popup(shell: &mut Shell) -> Outcome {
         shell.state.status = outcome.status;
     }
     shell.import_notes.extend(outcome.notes);
+    // Empty-terminal sessions load the first landed theme: the dialog
+    // closes only when the buffer holds a library theme.
+    if shell.state.theme.is_none() && !outcome.imported.is_empty() {
+        if let Some(library) = shell.state.library.as_ref() {
+            let first = outcome.imported[0].clone();
+            if let Some((slots, path)) = library.load(&first) {
+                shell.state.slots = slots.clone();
+                shell.state.saved = slots;
+                shell.state.present = [true; 22];
+                shell.state.undo.clear();
+                shell.state.sel = crate::editor::INITIAL_SEL;
+                shell.state.armed = false;
+                shell.state.theme = Some(first);
+                shell.state.path = path;
+                shell.state.backup_path = None;
+            }
+        }
+    }
     shell.import_open = false;
     shell.import_scroll = None;
+    no_theme_after_import(&mut shell.state);
     setup_after_import(&mut shell.state);
     Outcome::Continue
 }
