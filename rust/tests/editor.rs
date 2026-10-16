@@ -2021,7 +2021,7 @@ fn no_theme_state(names: Vec<&str>, theme: Option<&str>) -> PickerFixture {
     fx.st.bundled = vec![
         ("plain-light".to_owned(), bundled_slots("plain-light")),
         ("plain-dark".to_owned(), bundled_slots("plain-dark")),
-        ("nightspice".to_owned(), bundled_slots("nightspice")),
+        ("Nightspice".to_owned(), bundled_slots("Nightspice")),
     ];
     fx
 }

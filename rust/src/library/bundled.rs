@@ -1,7 +1,7 @@
 //! Bundled themes: shipped inside the binary, read-only.
 //!
 //! Three canonical huebox themes (`plain-light`, `plain-dark`,
-//! `nightspice`) embedded via `include_str!`. Each file is the golden
+//! `Nightspice`) embedded via `include_str!`. Each file is the golden
 //! copy for tests: it parses to 22 slots and round-trips byte-identical
 //! through [`crate::library::themes::save_with`] with the pinned clock.
 //!
@@ -12,17 +12,17 @@
 use crate::library::SlotMap;
 
 /// Bundled theme names in list order.
-pub const NAMES: [&str; 3] = ["plain-light", "plain-dark", "nightspice"];
+pub const NAMES: [&str; 3] = ["plain-light", "plain-dark", "Nightspice"];
 
 const PLAIN_LIGHT: &str = include_str!("../bundled/plain-light.toml");
 const PLAIN_DARK: &str = include_str!("../bundled/plain-dark.toml");
-const NIGHTSPICE: &str = include_str!("../bundled/nightspice.toml");
+const NIGHTSPICE: &str = include_str!("../bundled/Nightspice.toml");
 
 fn text_of(name: &str) -> Option<&'static str> {
     match name {
         "plain-light" => Some(PLAIN_LIGHT),
         "plain-dark" => Some(PLAIN_DARK),
-        "nightspice" => Some(NIGHTSPICE),
+        "Nightspice" => Some(NIGHTSPICE),
         _ => None,
     }
 }
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn three_themes_parse_to_22_slots() {
         let _guard = lock_env(&[]);
-        assert_eq!(list(), vec!["plain-light", "plain-dark", "nightspice"]);
+        assert_eq!(list(), vec!["plain-light", "plain-dark", "Nightspice"]);
         for name in list() {
             let slots = read(&name).expect("bundled reads");
             assert_eq!(slots.len(), 22, "{name}");
@@ -146,12 +146,12 @@ mod tests {
         let _guard = lock_env(&[]);
         let light = read("plain-light").unwrap();
         let dark = read("plain-dark").unwrap();
-        let spice = read("nightspice").unwrap();
+        let spice = read("Nightspice").unwrap();
         // Light background is bright, dark ones are not.
         assert_ne!(light["background"], dark["background"]);
         assert_ne!(light["foreground"], dark["foreground"]);
         assert_ne!(spice["background"], dark["background"]);
-        // Accent carryover: nightspice cursor differs from the plains.
+        // Accent carryover: Nightspice cursor differs from the plains.
         let mut plain_cursors = BTreeMap::new();
         plain_cursors.insert("light", light["cursor-color"].clone());
         plain_cursors.insert("dark", dark["cursor-color"].clone());

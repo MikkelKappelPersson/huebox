@@ -24,7 +24,7 @@ A first launch from a terminal with no config file holding colours exits with `f
 
 ## 4. Bundled themes
 
-Decision: bundled inside the binary for now. Source files live at `rust/src/bundled/plain-light.toml`, `plain-dark.toml`, `nightspice.toml`, embedded with `include_str!`. Each file is a canonical huebox theme (22 slots) and doubles as the golden copy for tests.
+Decision: bundled inside the binary for now. Source files live at `rust/src/bundled/plain-light.toml`, `plain-dark.toml`, `Nightspice.toml`, embedded with `include_str!`. Each file is a canonical huebox theme (22 slots) and doubles as the golden copy for tests.
 
 `library::bundled::{list, read}` exposes them. The import popup gains a `huebox bundled` group backed by this seam, read-only. Create and import both copy through the existing `themes::create` facade, so `~/.config/huebox/themes/` stays the truth. Nothing ever writes back into the bundle.
 
