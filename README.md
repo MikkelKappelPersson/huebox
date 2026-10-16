@@ -15,7 +15,7 @@
   <a href="https://aur.archlinux.org/packages/huebox"><img src="https://img.shields.io/aur/version/huebox?label=aur&labelColor=333333&color=666666" alt="AUR version" /></a>
 </p>
 
-**A terminal theme editor with live preview — repaint your terminal without leaving it.**
+**A blazing-fast terminal theme editor written in Rust — repaint your terminal without leaving it.**
 
 `huebox` shows you the colours your terminal is actually using, and lets you change them from a keyboard-driven interface — no hex codes, no hand-editing, no restarting.
 
