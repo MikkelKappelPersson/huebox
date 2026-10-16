@@ -238,6 +238,48 @@ fn cursor_walks_open_groups_and_clamps() {
 }
 
 #[test]
+fn arrows_open_the_next_group_at_the_boundary() {
+    let (lib, _) = FakeImport::new();
+    let mut lib = lib;
+    lib.entries.insert(
+        "ghostty".to_owned(),
+        vec![
+            ("Alpha".to_owned(), "/a".to_owned()),
+            ("Beta".to_owned(), "/b".to_owned()),
+        ],
+    );
+    lib.entries.insert(
+        "kitty".to_owned(),
+        vec![("Gamma".to_owned(), "/g".to_owned())],
+    );
+    lib.formats
+        .insert("ghostty".to_owned(), "ghostty".to_owned());
+    lib.formats.insert("kitty".to_owned(), "kitty".to_owned());
+    let mut st = open_state(lib, vec!["ghostty", "kitty"]);
+    assert!(!st.expanded.contains("kitty"), "second group starts shut");
+    move_down(&mut st);
+    assert_eq!(cursor_id(&st).unwrap().1, "Beta");
+    // Down off the last open row opens the next group and lands on it.
+    move_down(&mut st);
+    assert!(st.expanded.contains("kitty"));
+    assert_eq!(
+        cursor_id(&st).unwrap(),
+        ("kitty".to_owned(), "Gamma".to_owned())
+    );
+    move_down(&mut st); // clamp past the last provider, no wrap
+    assert_eq!(
+        cursor_id(&st).unwrap(),
+        ("kitty".to_owned(), "Gamma".to_owned())
+    );
+    // Up off the first row of a later group opens the previous one.
+    move_up(&mut st);
+    assert_eq!(
+        cursor_id(&st).unwrap(),
+        ("ghostty".to_owned(), "Beta".to_owned())
+    );
+}
+
+#[test]
 fn wheel_moves_the_highlight() {
     let mut st = open_state(two_provider_lib(), vec!["ghostty"]);
     wheel(&mut st, 1);

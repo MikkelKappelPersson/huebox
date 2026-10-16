@@ -250,7 +250,10 @@ fn place(st: &mut ImportState, flat: usize) {
     st.cursor = (rows[flat].0.clone(), rows[flat].1);
 }
 
-/// Walk `delta` visible rows; clamps at both ends (no wrap).
+/// Walk `delta` visible rows; at either end the next group in order
+/// opens and the cursor lands on its boundary row (first going down,
+/// last going up) — a shut group stays shut only until the cursor
+/// reaches for it. Past the last provider the cursor clamps (no wrap).
 ///
 /// A cursor standing nowhere (closed/empty group) jumps to the nearer end
 /// in the direction of travel.
@@ -263,8 +266,65 @@ fn step(st: &mut ImportState, delta: i32) {
         place(st, if delta > 0 { 0 } else { usize::MAX });
         return;
     };
-    let pos = rows.iter().position(|(_, _, id)| *id == here).unwrap_or(0) as i32;
-    place(st, (pos + delta).max(0) as usize);
+    let pos = rows.iter().position(|(_, _, id)| *id == here).unwrap_or(0);
+    if delta > 0 && pos + 1 >= rows.len() && !enter_next(st) {
+        place(st, usize::MAX);
+    } else if delta < 0 && pos == 0 && !enter_prev(st) {
+        place(st, 0);
+    } else {
+        place(st, (pos as i32 + delta).max(0) as usize);
+    }
+}
+
+/// Open the next provider in order and park on its first row.
+///
+/// Only fires at the end of the visible list, so the next provider is
+/// always a shut one (an open one's rows would follow) — `false` means
+/// there is no next provider and the cursor clamps.
+fn enter_next(st: &mut ImportState) -> bool {
+    let Some(at) = st
+        .provider_order
+        .iter()
+        .position(|name| *name == st.cursor.0)
+    else {
+        return false;
+    };
+    let Some(next) = st.provider_order.get(at + 1).cloned() else {
+        return false;
+    };
+    if st.theme_ids.get(&next).map(Vec::len).unwrap_or(0) == 0 {
+        return false;
+    }
+    st.expanded.insert(next.clone());
+    st.cursor = (next, 0);
+    true
+}
+
+/// Open the previous provider in order and park on its last row.
+///
+/// Mirrors [`enter_next`] at the head of the visible list.
+fn enter_prev(st: &mut ImportState) -> bool {
+    let Some(at) = st
+        .provider_order
+        .iter()
+        .position(|name| *name == st.cursor.0)
+    else {
+        return false;
+    };
+    let Some(prev) = at
+        .checked_sub(1)
+        .and_then(|i| st.provider_order.get(i))
+        .cloned()
+    else {
+        return false;
+    };
+    let len = st.theme_ids.get(&prev).map(Vec::len).unwrap_or(0);
+    if len == 0 {
+        return false;
+    }
+    st.expanded.insert(prev.clone());
+    st.cursor = (prev, len - 1);
+    true
 }
 
 /// One theme up, across open groups (collapsed skipped).
